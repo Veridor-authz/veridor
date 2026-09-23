@@ -1,0 +1,125 @@
+# `veridor run` as a Job. The Job's exit code is the gate: exit 0 completes it,
+# any other exit fails it. There is no wrapper script and no `|| true`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: veridor-gate
+spec:
+  # Never retried. A retry turns an intermittent finding, or a probe the target
+  # answered once, into a pass: the gate would report the luckiest attempt.
+  backoffLimit: 0
+  activeDeadlineSeconds: 600
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      serviceAccountName: default
+      # Veridor talks HTTP to the target and nothing else. It never calls the
+      # Kubernetes API, so the pod gets no token.
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: veridor
+          # A placeholder: no image is published yet. Build one from the
+          # repository's Dockerfile and set it with `images:` in your overlay.
+          image: ghcr.io/veridor-authz/veridor:0.1.0
+          imagePullPolicy: IfNotPresent
+          command:
+            - veridor
+          # The target comes from target.base_url in veridor.json. To pass it
+          # on the command line instead, append "--base-url", "<url>".
+          # --wait-for-target: wait up to 60 s for the target's port to accept
+          # a TCP connection before the first request. A Job started as soon
+          # as a rollout completes can start before the Service routes to the
+          # pod that just turned Ready (measured with an Argo CD PostSync
+          # hook); without the wait those probes are refused and the gate
+          # exits 3. It never changes a verdict. "0" turns it off.
+          args:
+            - run
+            - --config
+            - /config/veridor.json
+            - --output-dir
+            - /work/.veridor
+            - --fail-on
+            - new+confirmed
+            - --require-complete
+            - --wait-for-target
+            - "60"
+          # Credentials come only from Secrets, one env entry per ${NAME} the
+          # configuration references. optional: true is deliberate: a missing
+          # Secret or key leaves the variable unset and Veridor refuses the
+          # configuration at once (exit 2, naming the variable). Marked
+          # required, the pod would sit in CreateContainerConfigError until
+          # activeDeadlineSeconds instead. Either way the Job fails.
+          env:
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: VERIDOR_OWNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: veridor-gate-credentials
+                  key: owner-token
+                  optional: true
+            - name: VERIDOR_OUTSIDER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: veridor-gate-credentials
+                  key: outsider-token
+                  optional: true
+            - name: VERIDOR_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: veridor-gate-credentials
+                  key: admin-token
+                  optional: true
+          # The tail of the log becomes the termination message when the
+          # container fails, so `kubectl describe` shows why without --logs.
+          terminationMessagePolicy: FallbackToLogsOnError
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            capabilities:
+              drop:
+                - ALL
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: work
+              mountPath: /work
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: config
+          configMap:
+            name: veridor-gate-config
+            items:
+              - key: veridor.json
+                path: veridor.json
+        - name: work
+          emptyDir:
+            sizeLimit: 128Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

@@ -1,0 +1,71 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Veridor Demo API",
+    "version": "1.0.0",
+    "description": "Route inventory for fixtures/veridor.demo.json. Two operations have a cross-identity denial asserted; three deliberately do not."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/api/invoices": {
+      "get": {
+        "operationId": "listInvoices",
+        "summary": "List invoices visible to the caller",
+        "responses": {
+          "200": {"description": "invoice collection"},
+          "401": {"description": "unauthenticated"}
+        }
+      }
+    },
+    "/api/invoices/{id}": {
+      "get": {
+        "operationId": "getInvoice",
+        "summary": "Read one invoice",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "invoice"},
+          "401": {"description": "unauthenticated"},
+          "404": {"description": "not found, or not the caller's invoice"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteInvoice",
+        "summary": "Delete one invoice",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "204": {"description": "deleted"},
+          "401": {"description": "unauthenticated"},
+          "404": {"description": "not found, or not the caller's invoice"}
+        }
+      }
+    },
+    "/api/admin/audit": {
+      "get": {
+        "operationId": "readAuditLog",
+        "summary": "Read the administrator audit log",
+        "responses": {
+          "200": {"description": "audit entries"},
+          "403": {"description": "not an administrator"}
+        }
+      }
+    },
+    "/api/admin/audit/export": {
+      "post": {
+        "operationId": "exportAuditLog",
+        "summary": "Export the administrator audit log",
+        "responses": {
+          "202": {"description": "export accepted"},
+          "403": {"description": "not an administrator"}
+        }
+      }
+    }
+  }
+}

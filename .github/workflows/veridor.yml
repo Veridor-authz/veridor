@@ -1,0 +1,566 @@
+name: CI
+
+# What runs on every pull request and every push to main. Every job states what
+# it proves:
+#
+#   tests            both test tiers on every Python pyproject claims, and macOS
+#   installed-package the suite against the INSTALLED wheel, not the checkout
+#   action-e2e       `uses: ./` against the demo API: vulnerable exits 1, fixed 0
+#   lint             actionlint, shellcheck, helm lint + helm template
+#   kubernetes-e2e   the veridor-gate chart on kind, with Argo CD and Rollouts
+#   gitlab-job-e2e   the GitLab and Azure YAML against the platforms' published
+#                    schemas, then the GitLab job script against the demo API
+#                    (with its three controls, which must fail)
+#   image            the release Dockerfile, built and run as the gate; a
+#                    start and a run compile nothing from source (with two
+#                    controls)
+#   detection-baseline  every published advisory in fixtures/pairs/: Veridor must
+#                    find each one on the vulnerable build and pass on its
+#                    fix. 1.12 GB of images and files, every run
+#
+# Every action is pinned to a full commit SHA (tests/test_workflows.py refuses
+# anything else), checkouts keep no credential, and the one job that needs to
+# write -- the SARIF upload, on a manual run only -- is the only one granted it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Every run step runs as `bash --noprofile --norc -eo pipefail`. With no shell
+# set, GitHub runs `bash -e`, where a pipeline exits with its last command's
+# status: release.yml's `release_check.py versions | tee` passed a tag that
+# did not match the tree. tests/test_workflows.py holds every run step to it.
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  tests:
+    # Every interpreter `requires-python` claims, not just the one this was
+    # developed on: tests/test_release_files.py holds the classifiers and this
+    # matrix to each other. helm, kubectl and shellcheck are installed and
+    # REQUIRED, so the chart, Kustomize and shellcheck tests fail here instead
+    # of skipping.
+    name: Tests (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.11", "3.12", "3.13"]
+        include:
+          - os: macos-latest
+            python-version: "3.12"
+    env:
+      VERIDOR_REQUIRE_HELM: "1"
+      VERIDOR_REQUIRE_KUBECTL: "1"
+      VERIDOR_REQUIRE_SHELLCHECK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install helm v4.2.2 (sha256-checked)
+        run: bash .github/scripts/install-helm.sh
+      - name: Install shellcheck 0.11.0 (sha256-checked)
+        run: bash .github/scripts/install-shellcheck.sh
+      - name: Install kubectl v1.34.1 (sha256-checked)
+        run: bash .github/scripts/install-kubectl.sh
+      - name: Fast tier
+        run: python scripts/run_tests.py --tier fast
+      # Four worker processes taking whole test classes from one queue;
+      # run_tests.py fails unless together they started exactly the serial
+      # selection. The tier mostly waits on sleeps, subprocesses and sockets,
+      # so four suit these runners' 2 to 4 vCPUs (SLOW_TIER_JOBS in
+      # tests/test_workflows.py says which has how many).
+      - name: Slow tier
+        run: python scripts/run_tests.py --tier slow --jobs 4
+      - name: End-to-end validation
+        if: runner.os == 'Linux' && matrix.python-version == '3.12'
+        run: python scripts/e2e_validation.py
+
+  installed-package:
+    # `pip install .` then running the suite used to import src/ anyway: every
+    # test module put the checkout first on sys.path. VERIDOR_TEST_AGAINST
+    # (tests/source_path.py) now decides, and this job proves which one ran.
+    # The same pinned tools as the tests job, and required: its chart and
+    # shellcheck tests would otherwise skip, or run against whatever version
+    # the runner image ships.
+    name: Installed package (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    env:
+      VERIDOR_REQUIRE_HELM: "1"
+      VERIDOR_REQUIRE_KUBECTL: "1"
+      VERIDOR_REQUIRE_SHELLCHECK: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install helm v4.2.2 (sha256-checked)
+        run: bash .github/scripts/install-helm.sh
+      - name: Install shellcheck 0.11.0 (sha256-checked)
+        run: bash .github/scripts/install-shellcheck.sh
+      - name: Install kubectl v1.34.1 (sha256-checked)
+        run: bash .github/scripts/install-kubectl.sh
+      - name: Build the sdist, the wheel and the zipapp
+        run: |
+          python -m pip install --require-hashes --only-binary=:all: -r .github/requirements/build.txt
+          python -m build --no-isolation --outdir dist .
+          python scripts/build_zipapp.py --output-dir dist
+          python scripts/build_zipapp.py --output-dir "$RUNNER_TEMP/zipapp-again"
+          cmp dist/veridor-*.pyz "$RUNNER_TEMP"/zipapp-again/veridor-*.pyz
+          python scripts/release_check.py dist dist --require-zipapp
+      - name: Install the wheel into a fresh virtual environment
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --no-index --no-deps dist/*.whl
+      - name: Prove which veridor the suite will import
+        run: |
+          venv="$RUNNER_TEMP/venv"
+          installed="$(VERIDOR_TEST_AGAINST=installed "$venv/bin/python" tests/source_path.py)"
+          echo "$installed"
+          case "$installed" in
+            *"$venv/lib/python"*"/site-packages/veridor") ;;
+            *) echo "::error::VERIDOR_TEST_AGAINST=installed did not resolve into the venv"; exit 1 ;;
+          esac
+          # Control: without the switch the same interpreter imports src/.
+          source="$("$venv/bin/python" tests/source_path.py)"
+          echo "$source"
+          case "$source" in
+            *"$GITHUB_WORKSPACE/src/veridor") ;;
+            *) echo "::error::the control did not resolve to src/, so the check above proves nothing"; exit 1 ;;
+          esac
+      - name: Run the installed CLI from an empty directory
+        run: |
+          venv="$RUNNER_TEMP/venv"
+          expected="veridor $(python scripts/release_check.py versions | sed -n 's/^version=//p')"
+          empty="$(mktemp -d)"
+          cd "$empty"
+          for got in "$("$venv/bin/python" -I -m veridor --version)" "$("$venv/bin/veridor" --version)" \
+              "$(python "$GITHUB_WORKSPACE"/dist/veridor-*.pyz --version)"; do
+            echo "$got"
+            [[ "$got" == "$expected" ]] || { echo "::error::expected '$expected', got '$got'"; exit 1; }
+          done
+      - name: Fast tier against the installed package
+        env:
+          VERIDOR_TEST_AGAINST: installed
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/run_tests.py --tier fast'
+      - name: Slow tier against the installed package
+        env:
+          VERIDOR_TEST_AGAINST: installed
+        run: '"$RUNNER_TEMP/venv/bin/python" scripts/run_tests.py --tier slow --jobs 4'
+
+  action-e2e:
+    # The Action itself, through `uses: ./`, the way a consumer calls it. The
+    # vulnerable run must fail its step with exit-code 1; the fixed one must
+    # pass with 0. Configured for Linux and macOS runners.
+    name: Action end to end (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Start the demo API, vulnerable on 8765 and fixed on 8766
+        run: |
+          nohup python scripts/demo_server.py --vulnerable --port 8765 > "$RUNNER_TEMP/demo-vulnerable.log" 2>&1 &
+          nohup python scripts/demo_server.py --port 8766 > "$RUNNER_TEMP/demo-fixed.log" 2>&1 &
+          python - <<'PY'
+          import socket, time
+          deadline = time.monotonic() + 30
+          for port in (8765, 8766):
+              while True:
+                  try:
+                      socket.create_connection(("127.0.0.1", port), timeout=1).close()
+                      break
+                  except OSError:
+                      if time.monotonic() > deadline:
+                          raise SystemExit(f"demo server on {port} did not start")
+                      time.sleep(0.2)
+          PY
+      - name: Gate against the vulnerable API (expected to fail)
+        id: vulnerable
+        continue-on-error: true
+        uses: ./
+        with:
+          config: fixtures/veridor.demo.json
+          base-url: http://127.0.0.1:8765
+          sarif: veridor-vulnerable.sarif
+          output-dir: .veridor-vulnerable
+      - name: Gate against the fixed API
+        id: fixed
+        uses: ./
+        with:
+          config: fixtures/veridor.demo.json
+          base-url: http://127.0.0.1:8766
+          sarif: veridor-fixed.sarif
+          output-dir: .veridor-fixed
+      - name: Assert what a workflow sees
+        env:
+          VULNERABLE_OUTCOME: ${{ steps.vulnerable.outcome }}
+          VULNERABLE_EXIT: ${{ steps.vulnerable.outputs.exit-code }}
+          VULNERABLE_FINDINGS: ${{ steps.vulnerable.outputs.findings-vulnerable }}
+          VULNERABLE_REASONS: ${{ steps.vulnerable.outputs.gate-reasons }}
+          VULNERABLE_SARIF: ${{ steps.vulnerable.outputs.sarif }}
+          VULNERABLE_JUNIT: ${{ steps.vulnerable.outputs.junit }}
+          FIXED_OUTCOME: ${{ steps.fixed.outcome }}
+          FIXED_EXIT: ${{ steps.fixed.outputs.exit-code }}
+        run: |
+          failures=0
+          check() {
+            if [[ "$2" == "$3" ]]; then echo "ok   $1 = $2"; else echo "::error::$1 is '$2', expected '$3'"; failures=$((failures + 1)); fi
+          }
+          check "vulnerable outcome" "$VULNERABLE_OUTCOME" failure
+          check "vulnerable exit-code" "$VULNERABLE_EXIT" 1
+          check "vulnerable findings-vulnerable" "$VULNERABLE_FINDINGS" 1
+          check "vulnerable gate reason" "$(python -c 'import json, os; print(",".join(r["code"] for r in json.loads(os.environ["VULNERABLE_REASONS"])))')" findings
+          check "vulnerable sarif exists" "$(test -s "$VULNERABLE_SARIF" && echo yes)" yes
+          check "vulnerable junit exists" "$(test -s "$VULNERABLE_JUNIT" && echo yes)" yes
+          check "fixed outcome" "$FIXED_OUTCOME" success
+          check "fixed exit-code" "$FIXED_EXIT" 0
+          exit "$failures"
+      - name: Upload the vulnerable run's SARIF to code scanning
+        # Only on a manual run. On each push this posted the demo's bug to the
+        # Security tab as an open error at fixtures/veridor.demo.json, which
+        # teaches maintainers to dismiss the one category this project cares
+        # about. To check that GitHub accepts the upload, dispatch this workflow
+        # on a branch other than main.
+        if: >-
+          ${{ always() && runner.os == 'Linux' && steps.vulnerable.outputs.sarif != '' &&
+          github.event_name == 'workflow_dispatch' }}
+        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+        with:
+          sarif_file: ${{ steps.vulnerable.outputs.sarif }}
+          category: veridor
+
+  lint:
+    # scripts/secrets_audit.py is deliberately not here. It is a review tool
+    # without an allowlist: this tree's credential-shaped test fixtures
+    # (SSN-shaped strings, user:secret@ URLs) make it exit 1 on a clean clone,
+    # so as a gate it would fail every run.
+    name: Lint workflows, shell and the Helm chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install shellcheck 0.11.0 (sha256-checked)
+        run: bash .github/scripts/install-shellcheck.sh
+      - name: Install actionlint 1.7.12 (sha256-checked)
+        run: |
+          set -euo pipefail
+          archive=actionlint_1.7.12_linux_amd64.tar.gz
+          curl -fsSL -o "$RUNNER_TEMP/$archive" "https://github.com/rhysd/actionlint/releases/download/v1.7.12/$archive"
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: actionlint (runs shellcheck on every run block)
+        run: actionlint -color
+      - name: shellcheck the repository's shell scripts
+        run: |
+          shopt -s globstar nullglob
+          scripts=(scripts/*.sh scripts/pre-push deploy/**/*.sh .github/scripts/*.sh)
+          echo "shellcheck ${#scripts[@]} files"
+          (( ${#scripts[@]} > 0 ))
+          shellcheck "${scripts[@]}"
+      - name: Install helm v4.2.2 (sha256-checked)
+        run: bash .github/scripts/install-helm.sh
+      - name: helm lint and helm template (template runs the chart's refusals; lint does not)
+        run: |
+          set -euo pipefail
+          chart=deploy/helm/veridor-gate
+          helm lint "$chart" -f "$chart/ci/argocd-values.yaml"
+          helm template gate "$chart" -f "$chart/ci/argocd-values.yaml" > /dev/null
+          # Control: without the ci values the chart must refuse to render.
+          if helm template gate "$chart" > /dev/null 2>&1; then
+            echo "::error::helm template rendered the chart with no values; its refusals are not running"
+            exit 1
+          fi
+
+  kubernetes-e2e:
+    # The scenarios in two groups, one kind cluster each, in parallel. The
+    # last complete run of the whole script took about 31 minutes on one
+    # machine, against this job's 30 and before this job's own cluster,
+    # Argo CD install and image build. In the next, the helm scenario alone
+    # took 21 (2026-09-25), 20 of them in a settle loop that waited out its
+    # timeout on every leg (fixed since, not yet re-timed); the argocd and
+    # kustomize scenarios took 6.5 to 7.7 together in 5 runs. helm runs
+    # alone, the rest together; as of 2026-11-04 neither group has run on GitHub. Every group
+    # installs Argo CD and Rollouts. tests/test_helm_chart.py holds the
+    # groups to the script's scenario list: each scenario in exactly one.
+    name: Kubernetes end to end (${{ matrix.scenarios }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenarios:
+          - helm
+          - plain argocd rollouts psa kustomize wait
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install helm v4.2.2 (sha256-checked)
+        run: bash .github/scripts/install-helm.sh
+      - uses: helm/kind-action@06c1ae10762d3b9c1644e7fe69596ae519e015a2 # v1.15.0
+        with:
+          cluster_name: veridor-e2e
+      - name: The script's negative control (must end in MISMATCH rows and exit 1)
+        # gate.failOn=none on every vulnerable leg, expectations unchanged.
+        # Documented as ending in exit 1 and run nowhere before this step, so
+        # CI never showed the 0-mismatch table below can fail. One scenario,
+        # in the group that holds plain, is enough to show that.
+        if: contains(matrix.scenarios, 'plain')
+        env:
+          KUBE_CONTEXT: kind-veridor-e2e
+          E2E_SCENARIOS: plain
+          E2E_CONTROL: gate-passes-wrongly
+        run: |
+          status=0
+          bash scripts/e2e_kubernetes.sh > "$RUNNER_TEMP/control.log" 2>&1 || status=$?
+          tail -n 20 "$RUNNER_TEMP/control.log"
+          if [[ "$status" != 1 ]] || ! grep -Eq '^[0-9]+ row\(s\), [1-9][0-9]* mismatch\(es\)\..*CONTROL=gate-passes-wrongly$' "$RUNNER_TEMP/control.log"; then
+            cat "$RUNNER_TEMP/control.log"
+            echo "::error::E2E_CONTROL=gate-passes-wrongly ended in exit $status without the mismatch rows it must produce: a script that cannot fail proves nothing by passing"
+            exit 1
+          fi
+      - name: scripts/e2e_kubernetes.sh
+        env:
+          KUBE_CONTEXT: kind-veridor-e2e
+          E2E_SCENARIOS: ${{ matrix.scenarios }}
+        run: bash scripts/e2e_kubernetes.sh
+
+  detection-baseline:
+    # With release.yml's own detection-baseline, the only jobs that run
+    # Veridor against software someone else wrote, with a vulnerability
+    # someone else published.
+    # Everything else in this file -- and every test in the suite -- proves
+    # Veridor behaves correctly against a target this project wrote to have
+    # the bug. That is a weaker claim: a synthetic target cannot drift from
+    # the oracle, and real software differs in headers, encodings, pagination
+    # and status semantics.
+    #
+    # fixtures/pairs/ names a published advisory, an image, and the two tags
+    # either side of the fix. Each pair passes only when the verdict FLIPS, and
+    # four further assertions stop the flip being hollow: the endpoint must
+    # survive the fix (not "green because gone"), the owner's control probe
+    # must still reach the marker, the evidence grade must be the one the pair
+    # declares, and every patched denial must have reached a credential the
+    # run proved live. 9 pairs in 7 applications, 63 assertions. Datasette's is
+    # built from its published wheels (fixtures/pairs/recipes/); the rest pull.
+    #
+    # Every pair, on every pull request and every push to main; release.yml
+    # runs every pair again against the built wheel before PyPI publishes.
+    # There is no lighter subset. The twelve images and the built pair's base
+    # and files are 1.12 GB compressed for linux/amd64, each counted once
+    # (scripts/pair_sizes.py, read from the registries and PyPI on 2026-09-27). The pairs that once made a subset worth
+    # having, Jellyfin and wger, were replaced by LubeLogger and Bugsink: the
+    # same bug shape, a cross-user read, in the same languages (.NET and
+    # Python), at 0.22 and 0.31 GB against 1.43 and 0.74. A pair too large for
+    # this job is replaced the same way, not skipped, and a fixture carrying
+    # the old "heavy" key is refused. The set keeps both halves of the oracle,
+    # a status-only pair and marker pairs (tests/test_workflows.py): of two
+    # breakages of detection measured on the eight registry pairs on
+    # 2026-09-27, the status oracle blind to an undeclared 200 failed the
+    # status-only pair (and, run alone, the Datasette pair), and a matched
+    # marker read as absent failed all seven marker pairs, LubeLogger, Bugsink
+    # and Ghost included.
+    #
+    # --pull pulls each image, and a built pair's base, by digest, four at a
+    # time; every pulled image runs as image:tag@digest, pinned in the fixture. A local tag that no longer
+    # names the pinned build exits 2.
+    #
+    # Without this job `scripts/patched_pairs.py` would be referenced only by a
+    # test that checks its configs parse, and the evidence that Veridor still
+    # catches a real advisory's bug would depend on someone remembering to ask.
+    name: Detection baseline (published advisories, real builds)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: scripts/patched_pairs.py --pull
+        run: python3 scripts/patched_pairs.py --pull
+
+  gitlab-job-e2e:
+    # scripts/e2e_gitlab_job.sh runs the GitLab component's own rendered job
+    # script in docker against the demo API. It needs IMAGE (built here from
+    # the Dockerfile), SAST_SCHEMA (GitLab's report schema 15.2.5, fetched by a
+    # commit-pinned URL and sha256-checked) and PYTHON_WITH_JSONSCHEMA (a venv
+    # from hash-pinned wheels). The pip row installs a wheel built here with
+    # the hash-pinned build tools, in the Dockerfile's digest-pinned base, so
+    # nothing it runs is resolved at run time. The same venv and fetch check
+    # the shipped GitLab and Azure YAML against those platforms' schemas.
+    name: GitLab component (schemas, and the job script end to end)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: A Python with jsonschema and PyYAML, from hash-pinned wheels
+        run: |
+          python -m venv "$RUNNER_TEMP/schema-venv"
+          "$RUNNER_TEMP/schema-venv/bin/python" -m pip install --require-hashes --only-binary=:all: \
+            -r .github/requirements/schema-check.txt
+          echo "PYTHON_WITH_JSONSCHEMA=$RUNNER_TEMP/schema-venv/bin/python" >> "$GITHUB_ENV"
+      - name: Fetch the published schemas (commit-pinned URLs, sha256-checked)
+        run: |
+          bash .github/scripts/fetch-schemas.sh "$RUNNER_TEMP/schemas"
+          echo "SAST_SCHEMA=$RUNNER_TEMP/schemas/sast-report-format.json" >> "$GITHUB_ENV"
+      - name: The shipped GitLab and Azure YAML against the platforms' schemas
+        run: |
+          "$PYTHON_WITH_JSONSCHEMA" tests/ci_validate.py schemas \
+            --gitlab-schema "$RUNNER_TEMP/schemas/gitlab-ci.json" \
+            --azure-schema "$RUNNER_TEMP/schemas/azure-pipelines.json"
+      - name: Build the image and the wheel the job runs
+        run: |
+          docker build --tag veridor:gitlab-e2e .
+          echo "IMAGE=veridor:gitlab-e2e" >> "$GITHUB_ENV"
+          python -m pip install --require-hashes --only-binary=:all: -r .github/requirements/build.txt
+          python -m build --no-isolation --wheel --outdir "$RUNNER_TEMP/dist" .
+          wheels=("$RUNNER_TEMP"/dist/veridor-*-py3-none-any.whl)
+          [[ ${#wheels[@]} == 1 && -f "${wheels[0]}" ]] || { echo "::error::expected one wheel, found ${wheels[*]}"; exit 1; }
+          echo "E2E_WHEEL=${wheels[0]}" >> "$GITHUB_ENV"
+          # The pip row's Python image: the Dockerfile's own digest-pinned base.
+          base="$(sed -n 's/^FROM \(python:3\.12-alpine@sha256:[0-9a-f]\{64\}\) AS build$/\1/p' Dockerfile)"
+          [[ -n "$base" ]] || { echo "::error::no digest-pinned python:3.12-alpine base in the Dockerfile"; exit 1; }
+          echo "E2E_PYTHON_IMAGE=$base" >> "$GITHUB_ENV"
+      - name: The script's three controls (each must end in exit 1)
+        run: |
+          for control in report-path-typo proxy-kept no-term-trap; do
+            status=0
+            E2E_CONTROL="$control" bash scripts/e2e_gitlab_job.sh > "$RUNNER_TEMP/control-$control.log" 2>&1 || status=$?
+            tail -n 2 "$RUNNER_TEMP/control-$control.log"
+            if [[ "$status" != 1 ]]; then
+              cat "$RUNNER_TEMP/control-$control.log"
+              echo "::error::E2E_CONTROL=$control ended in exit $status, expected 1: a script that cannot fail proves nothing by passing"
+              exit 1
+            fi
+          done
+      - name: scripts/e2e_gitlab_job.sh
+        run: bash scripts/e2e_gitlab_job.sh
+
+  image:
+    name: Release image (linux/amd64) as the gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same digest-pinned builder the release uses (release.yml, image job).
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:v0.32.2@sha256:28a898719c18a33f4e8000685287fa36fd0dd9560c6440227d3a732d79bb41d8
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: veridor:ci
+      - name: Run the image
+        run: |
+          set -euo pipefail
+          docker run --rm veridor:ci --version
+          [[ "$(docker run --rm --entrypoint id veridor:ci -u)" == 10001 ]]
+      # The image's user cannot write bytecode, so a module the build did not
+      # compile is compiled every time it is imported. Before the Dockerfile
+      # compiled the CLI's imports, the only bytecode was a side effect of
+      # running pip: moving one ENV line made 109 modules compile on every
+      # start, and the image, workflow and CI-config tests still passed. While
+      # this checked `--version` alone, every `run` compiled two codecs from
+      # source and it passed (both measured). It now checks `--version` and a
+      # `run` of the demo config against the vulnerable demo.
+      - name: Starting and running the image compile nothing from source (and without the build's warm step they would)
+        run: |
+          python3 scripts/image_bytecode_check.py veridor:ci
+          # Controls: the same Dockerfile with the warm step replaced by `true`
+          # (nothing compiled; --version fails), and by the step as it was,
+          # `import veridor.cli` alone (--version passes; the run fails). The
+          # check must fail on each image, or its pass above proves nothing.
+          warm='env -u PYTHONDONTWRITEBYTECODE python -c "import veridor.cli, veridor.capsule, veridor.mutation, veridor.sequence, veridor.web, encodings.idna, encodings.utf_16_be, encodings.utf_16_le, importlib.resources; [f.read_bytes() for f in importlib.resources.files(veridor.web).iterdir() if f.is_file()]"'
+          for control in cold cli-only; do
+            replacement=true
+            if [[ "$control" == cli-only ]]; then
+              replacement='env -u PYTHONDONTWRITEBYTECODE python -c "import veridor.cli"'
+            fi
+            python3 - "$warm" "$replacement" "$RUNNER_TEMP/Dockerfile.$control" <<'PY'
+          import sys
+          from pathlib import Path
+          text = Path("Dockerfile").read_text(encoding="utf-8")
+          if text.count(sys.argv[1]) != 1:
+              sys.exit("::error::the control cannot apply: the warm step is not in the Dockerfile exactly once")
+          Path(sys.argv[3]).write_text(text.replace(sys.argv[1], sys.argv[2]), encoding="utf-8")
+          PY
+            docker buildx build --load --platform linux/amd64 --tag "veridor:ci-$control" \
+              --file "$RUNNER_TEMP/Dockerfile.$control" .
+            rc=0
+            python3 scripts/image_bytecode_check.py "veridor:ci-$control" || rc=$?
+            if [[ "$rc" != 1 ]]; then
+              echo "::error::the check exited $rc on the $control control image, expected 1"
+              exit 1
+            fi
+          done
+      - name: The image gates the demo API (vulnerable exits 1, fixed exits 0)
+        run: |
+          # No -e: a gate exit of 1 is the expected result for one of the two.
+          set +e -uo pipefail
+          docker network create veridor-ci || exit 1
+          trap 'docker rm -f demo-vulnerable demo-fixed > /dev/null 2>&1; docker network rm veridor-ci > /dev/null 2>&1' EXIT
+          failures=0
+          for mode in vulnerable fixed; do
+            server=(/demo/demo_server.py --host 0.0.0.0 --port 8765)
+            expected=0
+            if [[ "$mode" == vulnerable ]]; then server+=(--vulnerable); expected=1; fi
+            docker run -d --name "demo-$mode" --network veridor-ci --network-alias "demo-$mode" \
+              -v "$PWD/scripts/demo_server.py:/demo/demo_server.py:ro" --entrypoint python3 veridor:ci \
+              "${server[@]}" || exit 1
+            sleep 3
+            docker run --rm --network veridor-ci -v "$PWD/fixtures/veridor.demo.json:/config/veridor.json:ro" \
+              veridor:ci run --config /config/veridor.json --base-url "http://demo-$mode:8765" \
+              --require-complete --output-dir /tmp/veridor
+            code=$?
+            echo "$mode: exit $code (expected $expected)"
+            [[ "$code" == "$expected" ]] || failures=$((failures + 1))
+          done
+          exit "$failures"

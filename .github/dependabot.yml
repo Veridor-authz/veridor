@@ -1,0 +1,51 @@
+# Pinned SHAs and digests only stay safe if something proposes the updates.
+# Every `uses:` here is pinned to a commit SHA with a `# vX.Y.Z` comment, which
+# Dependabot keeps in step; the root Dockerfile pins its base image by digest.
+# Not covered by any entry below, and bumped by hand:
+# - images passed as action inputs (the image jobs' binfmt, BuildKit builder
+#   and SBOM scanner);
+# - the digest release.yml's pypi job pulls for
+#   ghcr.io/pypa/gh-action-pypi-publish, the container that action runs by a
+#   tag named after its SHA. When this file's github-actions entry moves that
+#   SHA, the job's pin and verify steps must name the new tag and its digest,
+#   and tests/test_workflows.py fails until they do and the digest is recorded
+#   for the new SHA in its PUBLISH_DIGEST. It cannot ask the registry: the
+#   digest is only as right as the read that resolved it;
+# - the tool and schema digests in .github/scripts and the lint job;
+# - the GitLab component's python_image default (templates/veridor.yml), the
+#   Dockerfile's digest-pinned python:3.12-alpine base. Dependabot's docker
+#   entry bumps the Dockerfile only, and tests/test_ci_configs.py fails that
+#   bump until the component names the same digest;
+# - the Debian python:3.12-slim digest scripts/e2e_gitlab_job.sh runs its
+#   dash and bash rows in (E2E_DEBIAN_PYTHON_IMAGE's default).
+# Not pinned at all:
+# - ghcr.io/ossf/scorecard-action:v2.4.4, which ossf/scorecard-action runs by
+#   that tag and the runner pulls before any step of the job runs
+#   (tests/test_workflows.py, SCORECARD);
+# - deploy/kind/Dockerfile's base, FROM python:3.12-slim, a moving tag. It
+#   builds the kind demo image, which is not released
+#   (tests/test_workflows.py, dependabot_docker_problems).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: /deploy/kind
+    schedule:
+      interval: weekly
+  - package-ecosystem: pip
+    directory: /.github/requirements
+    schedule:
+      interval: weekly
+    groups:
+      build-and-schema-tools:
+        patterns: ["*"]

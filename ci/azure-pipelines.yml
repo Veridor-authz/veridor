@@ -1,0 +1,212 @@
+# Veridor authorization regression gate -- Azure DevOps Pipelines template.
+#
+# STATUS: UNTESTED ON A REAL AZURE AGENT. Nothing here has run in Azure
+# Pipelines. ci/README.md lists what was checked instead (this file against
+# Azure's published YAML schema, the veridor command line against the real CLI
+# parser, the exit-code branches, the shell with shellcheck) and what was not.
+#
+# NOT YET PUBLISHED. The PyPI package, container image and zipapp named below
+# do not exist until Veridor's first release (0.1.0).
+#
+# THE PYPI NAME IS UNCLAIMED. Nobody has registered `veridor` on PyPI, so
+# anyone can, and can publish the version named below. A pip line naming it would
+# install whatever is there and run it with the credentials this pipeline maps.
+# So the install step below names a wheel path that does not exist, and stops the
+# job there (pip exits 1 before it looks at any index). Build a wheel from the
+# repository and put its path in that step.
+#
+# INSTALL -- pick one; pip on a wheel path is the active one below.
+#   1. pip (active): UsePythonVersion, then pip on that wheel path. Once the
+#      first release is on the repository's Releases page and the name is no
+#      longer unclaimed,
+#      the line can name `veridor==0.1.0` instead.
+#   2. Container image: Azure's container jobs require an image without an
+#      ENTRYPOINT whose user can run groupadd, and the Veridor image has an
+#      ENTRYPOINT and runs as uid 10001. Use `docker run --rm --entrypoint ""
+#      -u "$(id -u):$(id -g)" -v "$PWD:/work" -w /work ghcr.io/veridor-authz/veridor:0.1.0
+#      veridor run ...` from a bash step instead, passing each credential with -e.
+#   3. zipapp: download veridor-0.1.0.pyz from the release, verify it with the
+#      `gh attestation verify` command in SECURITY.md (pinned to release.yml
+#      at the tag), and run `python veridor-0.1.0.pyz run ...` in place of
+#      `veridor run ...`. SHA256SUMS alone detects a damaged download, not a
+#      substituted one.
+#
+# CREDENTIALS. Define each ${VERIDOR_*} reference in the Veridor configuration
+# as a secret pipeline variable, and list exactly those under the gate step's
+# `env:`. Azure does not export secret variables to scripts unless they are
+# mapped there. A mapped variable that was never defined reaches the script as
+# its literal macro text, `$(NAME)`, not as an empty string, so the step
+# refuses (exit 2) any VERIDOR_* variable whose value still reads `$(...)`.
+# Pull request builds from forks do not receive secrets by default; Veridor
+# refuses an empty credential with exit 2 rather than probing without it.
+#
+# WHO CHOOSES THE TARGET. Veridor sends every mapped credential to the base URL
+# (VERIDOR_BASE_URL, or target.base_url in VERIDOR_CONFIG). Whoever may set
+# that value decides where the owner, other-tenant and admin tokens go. So it,
+# and every setting that can weaken the gate (fail-on, the exit-3 switch, the
+# configuration), is a variable in this file, changed by a commit. They used
+# to be runtime parameters, which anyone allowed to queue a run can set: their
+# own host as the base URL, or failOn none. Azure documents that a variable in
+# the YAML `variables:` block cannot be overridden at queue time and outranks
+# a queue-time variable of the same name. Do not turn them back into
+# parameters, and do not define them in the pipeline settings as settable at
+# queue time. A name this file does not define is different: Azure's
+# documentation says the UI and the Runs API let a user add one when queueing
+# a run, unless the organization or project turns on "Limit variables that can
+# be set at queue time". HTTP_PROXY added that way sends every credential to a
+# proxy, and PIP_INDEX_URL picks what the install step runs. Turn that setting
+# on wherever someone who may queue a run must not read the credentials.
+#
+# EXIT CODES, and the step result each one gives. The step exits with
+# Veridor's own code:
+#   0   Succeeded nothing the fail-on policy gates on was found; a finding it
+#                 does not gate on still gives 0
+#   1   Failed    the gate failed on a finding
+#   2   Failed    refused: configuration, credential, path or coverage error
+#   3   Failed    no gating finding, but something went unmeasured. Only when
+#                 VERIDOR_ALLOW_UNMEASURED below is true does the step report
+#                 SucceededWithIssues (task.complete) and exit 0 instead.
+#   70  Failed    Veridor crashed (a bug in Veridor, never a finding)
+#   130 / 143  Failed  interrupted by SIGINT / SIGTERM; teardown ran first
+#   anything else  Failed
+# PublishTestResults runs with failTaskOnFailedTests: false, so the report
+# cannot give the gate a second, different verdict.
+#
+# REPORTS. JUnit goes to the Tests tab. The Markdown summary is attached to the
+# run summary. SARIF is published in a build artifact named CodeAnalysisLogs,
+# the name the SARIF SAST Scans Tab extension looks for.
+
+trigger:
+  branches:
+    include:
+      - main
+pr:
+  branches:
+    include:
+      - main
+
+# Fixed in this file, not runtime parameters: see WHO CHOOSES THE TARGET
+# above. Azure exports each one to the gate step's shell under the same name.
+variables:
+  VERIDOR_CONFIG: veridor.json
+  # Overrides target.base_url; empty uses the configuration's own.
+  VERIDOR_BASE_URL: ""
+  # Findings that fail the gate: new+confirmed, new, confirmed, any or none.
+  VERIDOR_FAIL_ON: new+confirmed
+  # "true" reports exit 3 as SucceededWithIssues instead of failing the step.
+  VERIDOR_ALLOW_UNMEASURED: "false"
+
+pool:
+  vmImage: ubuntu-latest
+
+stages:
+  - stage: authz
+    displayName: Authorization regression
+    jobs:
+      - job: veridor
+        displayName: Veridor gate
+        cancelTimeoutInMinutes: 2
+        steps:
+          - checkout: self
+
+          - task: UsePythonVersion@0
+            displayName: Use Python 3.12
+            inputs:
+              versionSpec: "3.12"
+              addToPath: true
+
+          - bash: |
+              set -e
+              # Stops the job until you put a wheel's path here: see the note at the top.
+              python -m pip install --quiet --disable-pip-version-check "./REPLACE_WITH_THE_PATH_OF_A_VERIDOR_WHEEL.whl"
+              veridor --version
+            displayName: Install Veridor
+
+          - bash: |
+              set -e
+              out="$VERIDOR_OUTPUT_DIR"
+              mkdir -p "$out"
+
+              # shellcheck disable=SC2016 # sed matches the macro text literally
+              unresolved="$(env | sed -n 's/^\(VERIDOR_[A-Z0-9_]*\)=\$(.*)$/\1/p')"
+              if [ -n "$unresolved" ]; then
+                echo "##vso[task.logissue type=error]veridor-gate: exit 2: REFUSED. These variables are mapped in env: but not defined, so Azure passed their macro text through literally: $unresolved. Define them as secret variables, or remove them from env:. Nothing was sent to the target."
+                exit 2
+              fi
+              case "$VERIDOR_ALLOW_UNMEASURED" in
+                True | true | False | false) ;;
+                *)
+                  echo "##vso[task.logissue type=error]veridor-gate: exit 2: REFUSED. VERIDOR_ALLOW_UNMEASURED is '$VERIDOR_ALLOW_UNMEASURED', not true or false."
+                  exit 2
+                  ;;
+              esac
+
+              set --
+              if [ -n "$VERIDOR_BASE_URL" ]; then set -- "$@" --base-url "$VERIDOR_BASE_URL"; fi
+
+              # Cancelling the run signals the shell as well as veridor; the trap
+              # keeps this shell alive until veridor's teardown is done.
+              trap 'echo "veridor-gate: SIGTERM received; waiting for veridor to finish its teardown."' TERM
+
+              status=0
+              veridor run \
+                --config "$VERIDOR_CONFIG" \
+                --output-dir "$out" \
+                --fail-on "$VERIDOR_FAIL_ON" \
+                --require-complete \
+                --json "$out/veridor-run.json" \
+                --report "junit=$out/veridor-junit.xml" \
+                --report "sarif=$out/veridor.sarif" \
+                --report "markdown=$out/veridor-summary.md" \
+                "$@" || status=$?
+
+              if [ -f "$out/veridor-summary.md" ]; then
+                echo "##vso[task.uploadsummary]$out/veridor-summary.md"
+              fi
+              case "$status" in
+                0) echo "veridor-gate: exit 0: PASS. Nothing that --fail-on $VERIDOR_FAIL_ON gates on was found. A finding it does not gate on also exits 0. The summary above, the Tests tab and the run summary list everything measured." ;;
+                1) echo "##vso[task.logissue type=error]veridor-gate: exit 1: FAIL. The gate failed on a finding; see the Tests tab and the run summary." ;;
+                2) echo "##vso[task.logissue type=error]veridor-gate: exit 2: REFUSED. A configuration, credential, path or coverage error; the veridor: line in the log names it. Not a finding and not a pass." ;;
+                3)
+                  case "$VERIDOR_ALLOW_UNMEASURED" in
+                    True | true)
+                      echo "##vso[task.logissue type=warning]veridor-gate: exit 3: INCOMPLETE, reported as SucceededWithIssues because VERIDOR_ALLOW_UNMEASURED is true. No gating finding, but something went unmeasured. This is not a pass."
+                      echo "##vso[task.complete result=SucceededWithIssues;]veridor exit 3"
+                      exit 0
+                      ;;
+                  esac
+                  echo "##vso[task.logissue type=error]veridor-gate: exit 3: INCOMPLETE, failing the step. No gating finding, but something the gate needs went unmeasured. Set VERIDOR_ALLOW_UNMEASURED to true in azure-pipelines.yml to report it as SucceededWithIssues instead."
+                  ;;
+                70) echo "##vso[task.logissue type=error]veridor-gate: exit 70: INTERNAL ERROR. Veridor crashed; the traceback is above. A bug in Veridor, not a finding about the target. Nothing was concluded." ;;
+                130) echo "##vso[task.logissue type=error]veridor-gate: exit 130: INTERRUPTED by SIGINT. Sequence teardown ran first. Nothing was concluded." ;;
+                143) echo "##vso[task.logissue type=error]veridor-gate: exit 143: INTERRUPTED by SIGTERM (run cancelled or timed out). Sequence teardown ran first. Nothing was concluded." ;;
+                *) echo "##vso[task.logissue type=error]veridor-gate: exit $status is not one of Veridor's exit codes (0 1 2 3 70 130 143); failing the step." ;;
+              esac
+              exit "$status"
+            displayName: Run the authorization gate
+            # VERIDOR_CONFIG, VERIDOR_BASE_URL, VERIDOR_FAIL_ON and
+            # VERIDOR_ALLOW_UNMEASURED come from `variables:` above. Mapping
+            # them here from a parameter would reopen them to whoever queues.
+            env:
+              VERIDOR_OUTPUT_DIR: $(Build.ArtifactStagingDirectory)/veridor
+              VERIDOR_OWNER_TOKEN: $(VERIDOR_OWNER_TOKEN)
+              VERIDOR_OTHER_TENANT_TOKEN: $(VERIDOR_OTHER_TENANT_TOKEN)
+              VERIDOR_ADMIN_TOKEN: $(VERIDOR_ADMIN_TOKEN)
+
+          - task: PublishTestResults@2
+            displayName: Publish Veridor results as tests
+            condition: always()
+            inputs:
+              testResultsFormat: JUnit
+              testResultsFiles: $(Build.ArtifactStagingDirectory)/veridor/veridor-junit.xml
+              testRunTitle: Veridor authorization gate
+              failTaskOnFailedTests: false
+              failTaskOnMissingResultsFile: false
+
+          - task: PublishBuildArtifacts@1
+            displayName: Publish SARIF and the run document
+            condition: always()
+            inputs:
+              PathtoPublish: $(Build.ArtifactStagingDirectory)/veridor
+              ArtifactName: CodeAnalysisLogs
+              publishLocation: Container

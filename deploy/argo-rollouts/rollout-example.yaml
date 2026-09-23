@@ -1,0 +1,87 @@
+# Example: a canary that must pass the veridor-gate analysis before it is
+# promoted. Replace the pod template with your application; keep the two
+# Services, the strategy and the analysis step.
+#
+# With no trafficRouting, Argo Rollouts splits by replica count and pins each
+# Service to its ReplicaSet: invoices-api-stable selects only stable pods,
+# invoices-api-canary only canary pods. The gate probes the canary Service, so
+# it measures the new version before it is promoted.
+#
+#   setWeight 50  -> one canary pod beside one stable pod
+#   analysis      -> veridor-gate Job against invoices-api-canary
+#                    Job failed    -> AnalysisRun Failed -> rollout aborted,
+#                                     canary scaled down, status Degraded
+#                    Job succeeded -> continue
+#   setWeight 100 -> canary promoted to stable
+apiVersion: v1
+kind: Service
+metadata:
+  name: invoices-api-stable
+spec:
+  selector:
+    app: invoices-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: invoices-api-canary
+spec:
+  selector:
+    app: invoices-api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Rollout
+metadata:
+  name: invoices-api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels:
+      app: invoices-api
+  template:
+    metadata:
+      labels:
+        app: invoices-api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: api
+          image: registry.example.com/shop/invoices-api:1.4.2
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+            periodSeconds: 2
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+  strategy:
+    canary:
+      canaryService: invoices-api-canary
+      stableService: invoices-api-stable
+      steps:
+        - setWeight: 50
+        - analysis:
+            templates:
+              - templateName: veridor-gate
+            args:
+              - name: base-url
+                value: http://invoices-api-canary:8080
+        - setWeight: 100

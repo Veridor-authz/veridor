@@ -1,0 +1,96 @@
+{
+  "name": "lubelogger-supply-record-cross-user-read",
+  "advisory": {
+    "id": "GHSA-qw92-hqxv-2x9g",
+    "summary": "GET /Vehicle/GetSupplyRecordsForPlanRecordTemplate returned a vehicle's supply records to any authenticated user who named the vehicle's plan template id.",
+    "url": "https://github.com/hargata/lubelog/security/advisories/GHSA-qw92-hqxv-2x9g",
+    "note": [
+      "The endpoint loaded the plan template by caller-supplied id and returned",
+      "the supply records of the template's vehicle without checking the caller",
+      "could view that vehicle. So a user who owns a different vehicle reads",
+      "another user's supply records -- descriptions, part numbers, costs -- by",
+      "naming the victim's template id. v1.7.1 adds UserCanEditVehicle(.., View)",
+      "and answers 200 with a JSON \"Access Denied\" body carrying no records; the",
+      "owner still gets 200 with the records. Confirmed from source at both tags:",
+      "v1.7.0 SupplyController.cs has no access check, v1.7.1 adds it.",
+      "Status is 200 on BOTH builds, so a status oracle is blind to the fix --",
+      "only the planted marker distinguishes them. The owner is declared in the",
+      "same check as the positive control: its 200-with-marker proves the marker",
+      "is live and reachable on the patched build, so the attacker's marker-free",
+      "200 there is a real exclusion, not an unproven one.",
+      "LubeLogger accepts HTTP Basic against its AuthN scheme on every route when",
+      "EnableAuth is set, so each identity is a static Authorization header.",
+      "Measured by hand on both tags before this was written: the attacker gets",
+      "403 at /api/vehicle/info for the owner's vehicle (no allowed route to it)",
+      "and 200 reading a plan template of its own (its credential is valid on the",
+      "patched build), so the patched build's marker-free 200 is the fix, not a",
+      "refused credential."
+    ]
+  },
+  "image": "ghcr.io/hargata/lubelogger",
+  "vulnerable": "v1.7.0",
+  "patched": "v1.7.1",
+  "vulnerable_digest": "sha256:01bdb486af71e641c3ae41499e0412a21f2e04fa31b25c5c6531b42c112938e5",
+  "patched_digest": "sha256:678a5c4af387e525f06ef954b454efe536745f517f2078dc646ccce9332adb9d",
+  "container_port": 8080,
+  "health_path": "/health",
+  "provision": "lubelogger_supply_idor",
+  "marker": "VERIDOR-MARKER-63eef4c615bcd0d74f",
+  "control": {
+    "path": "/Vehicle/GetSupplyRecordsForPlanRecordTemplate?planRecordTemplateId=${VERIDOR_PAIR_TEMPLATE_ID}",
+    "headers": {
+      "Authorization": "Basic ${VERIDOR_PAIR_OWNER_BASIC}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "vehicle_owner": {
+        "headers": {
+          "Authorization": "Basic ${VERIDOR_PAIR_OWNER_BASIC}"
+        },
+        "marker": "VERIDOR-MARKER-63eef4c615bcd0d74f",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/Vehicle/GetSupplyRecordsForPlanRecordTemplate?planRecordTemplateId=${VERIDOR_PAIR_TEMPLATE_ID}"
+        }
+      },
+      "other_user": {
+        "headers": {
+          "Authorization": "Basic ${VERIDOR_PAIR_ATTACKER_BASIC}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "supply-records-must-not-be-cross-user-readable",
+        "name": "A user must not read another user's supply records via a plan template id",
+        "request": {
+          "method": "GET",
+          "path": "/Vehicle/GetSupplyRecordsForPlanRecordTemplate?planRecordTemplateId=${VERIDOR_PAIR_TEMPLATE_ID}"
+        },
+        "expect": {
+          "vehicle_owner": {
+            "status": [
+              200
+            ],
+            "contains_marker": "vehicle_owner"
+          },
+          "other_user": {
+            "status": [
+              200
+            ],
+            "excludes_marker": "vehicle_owner"
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed"
+}

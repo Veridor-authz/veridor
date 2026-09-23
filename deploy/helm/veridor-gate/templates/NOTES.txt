@@ -1,0 +1,96 @@
+{{- $failOn := .Values.gate.failOn | toString -}}
+veridor-gate {{ .Chart.Version }} (Veridor {{ .Chart.AppVersion }}), hook.mode={{ .Values.hook.mode }}
+{{ if eq .Values.hook.mode "argocd" }}
+Job: {{ include "veridor-gate.argocdJobPrefix" . }}<named by Argo CD, one per sync that runs hooks> in namespace {{ .Release.Namespace }}
+{{- else }}
+Job: {{ include "veridor-gate.jobName" . }} in namespace {{ .Release.Namespace }}
+{{- end }}
+Target: {{ .Values.target.baseUrl | default "config.target.base_url" }}
+{{- if eq .Values.hook.mode "argocd" }}
+
+The Job is an Argo CD {{ include "veridor-gate.argoList" .Values.hook.argocd.phase }} hook with no fixed name (metadata.generateName):
+Argo CD creates one per sync that runs hooks, once the sync's resources are Healthy, named
+{{ include "veridor-gate.argocdJobPrefix" . }}<revision>-postsync-<the sync's start, Unix seconds>
+(<revision>: its first 7 characters; empty for an Application with several sources),
+and a failed Job fails that sync's operation. Each sync reads its own Job; with
+one fixed name Argo CD v3.5.3 had reported syncs from the previous sync's Job.
+A selective sync or an Apply Only sync runs no hooks: it creates no gate Job and
+still ends Succeeded, with no PostSync entry in its syncResult.
+
+Only Argo CD renders this mode. `helm install` and `helm upgrade` refuse it:
+the Helm CLI does not run Argo CD hooks, so it would apply the Job as a plain
+resource and report the release deployed whatever the gate found. These notes
+come from a dry run. Deploy the chart through an Argo CD Application; with the
+Helm CLI, use hook.mode helm.
+
+The Job a sync ran is the PostSync entry of the Application's
+status.operationState.syncResult.resources. Read its log:
+
+  job="$(kubectl -n argocd get application <app> -o jsonpath='{.status.operationState.syncResult.resources[?(@.hookType=="PostSync")].name}')"
+  kubectl -n {{ .Release.Namespace }} logs "job/${job}"
+{{ $policies := splitList "," (include "veridor-gate.argoList" .Values.hook.argocd.deletePolicy) -}}
+{{- if kindIs "invalid" .Values.job.ttlSecondsAfterFinished }}
+Argo CD deletes each sync's Job, and its log, as soon as it has read the
+result (hook.argocd.deletePolicy {{ join "," $policies }}).
+{{- else }}
+Each sync's Job and its log stay for job.ttlSecondsAfterFinished ({{ int .Values.job.ttlSecondsAfterFinished }} s)
+after it finished{{ if has "HookSucceeded" $policies }}; HookSucceeded deletes a passing one as soon as Argo CD has read it{{ end }}{{ if has "HookFailed" $policies }}; HookFailed deletes a failing one, and its log, as soon as Argo CD has read it{{ end }}.
+{{- end }}
+{{- else if eq .Values.hook.mode "helm" }}
+{{- $events := splitList "," (include "veridor-gate.helmList" .Values.hook.helm.events) }}
+
+Ran as this {{ ternary "install" "upgrade" .Release.IsInstall }}'s Helm {{ ternary "post-install" "post-upgrade" .Release.IsInstall }} hook (hook.helm.events {{ join "," $events }}).
+If this release reports success, the gate exited 0 against whatever
+{{ .Values.target.baseUrl | default "config.target.base_url" }} routed to when Helm started the hook. Unless this
+command ran with --rollback-on-failure (or --wait), Helm started it as soon
+as the manifests were applied, while the previous version's pods still
+served (a RollingUpdate keeps them until the new ones are Ready; under
+Recreate the old pod was still terminating and answering, measured), so it
+may have probed the version being replaced; even after that wait a pod
+being replaced can still answer, unless the target is a Service of this
+release's pods only. If the Job failed, the release is
+failed; --rollback-on-failure also rolled it back, and without it the new
+version is serving. The invocation measured to probe the new pods: README,
+"hook.mode helm: what the gate probes".
+{{- if has "test" $events }}
+`helm test {{ .Release.Name }} -n {{ .Release.Namespace }}` runs it again: there the
+command's exit status is the gate, and a failed test leaves the release
+`deployed`.
+{{- end }}
+{{- if has "post-rollback" $events }}
+It also runs after `helm rollback` (post-rollback).
+{{- end }}
+Read the gate's output:
+
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "veridor-gate.jobName" . }}
+{{- else }}
+
+A plain Job. Nothing here waits for it: whatever applied it must wait for
+this Job's own outcome, Complete or Failed, and pass only on Complete:
+
+  while outcome="$(kubectl -n {{ .Release.Namespace }} get job {{ include "veridor-gate.jobName" . }} -o jsonpath='{.status.conditions[?(@.status=="True")].type}')"; do
+    case " $outcome " in *" Complete "* | *" Failed "*) break ;; esac
+    sleep 5
+  done
+  kubectl -n {{ .Release.Namespace }} logs job/{{ include "veridor-gate.jobName" . }}
+  case " $outcome " in *" Complete "*) true ;; *) false ;; esac
+
+Each `helm install` / `helm upgrade` is a new revision, so a new Job
+(-r<revision>), and Helm removes the previous one. `helm template` always
+renders revision 1: applied with `kubectl apply`, the Job is always -r1, and
+re-applying it unchanged runs nothing while a wait reads the previous run.
+Delete it first (README, "hook.mode none").
+{{- end }}
+
+Exit code = gate: 0 Complete;{{ if ne $failOn "none" }} 1 (a finding gate.failOn {{ $failOn }} selects),{{ end }} 2 (configuration refused),
+3 (something went unmeasured{{ if not .Values.gate.requireComplete }}; gate.requireComplete=false narrows this to Veridor's unflagged cases, such as no probe answered at all{{ end }}), 70 (internal error)
+all fail the Job.{{ if eq $failOn "none" }} gate.failOn is none: findings never fail this Job, and a vulnerable target completes it.{{ end }}
+A Complete Job means Veridor exited 0: nothing the selected gate
+(gate.failOn {{ $failOn }}{{ if .Values.gate.requireComplete }}, --require-complete{{ end }}{{ if .Values.gate.requireCleanTeardown }}, --require-clean-teardown{{ end }}) selects was present. Findings it does
+not select leave it Complete; the Job log's summary still counts them. It is
+not evidence that authorization is enforced beyond the requests sent.
+{{- if .Values.existingConfigMap.name }}
+
+The configuration comes from ConfigMap {{ .Values.existingConfigMap.name }}. The chart cannot read it,
+so its literal-credential refusal did not run on it.
+{{- end }}

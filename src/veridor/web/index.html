@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Veridor authorization regression artifacts: map, run and mutate">
+    <meta name="color-scheme" content="light dark">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Veridor</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/styles.css">
+    <!-- Synchronous, before first paint. The CSP forbids inline script, so the
+         anti-flash theme snippet has to be its own same-origin file. -->
+    <script src="/theme.js"></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#run-detail">Skip to content</a>
+    <header>
+      <div class="brand">
+        <!--
+          Inlined rather than <img src="/favicon.svg">, for two reasons found by
+          rendering it: an SVG file with no intrinsic width/height reports
+          naturalWidth 0 to an <img>, and the file's own dark plate vanishes
+          against the dark theme. Inline, the mark inherits currentColor and
+          works on both surfaces. The file stays as the tab icon, where a dark
+          plate is correct.
+
+          The mark is the product: a boundary, and a marker on the wrong side.
+        -->
+        <svg class="brand-mark" viewBox="0 0 32 32" width="26" height="26"
+             role="img" aria-label="Veridor">
+          <path d="M16 5v22" stroke="currentColor" stroke-width="1.75"
+                stroke-linecap="round" opacity=".3"/>
+          <path d="M5.5 10.5l5.5 10 5.5-10" fill="none" stroke="currentColor"
+                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+          <circle cx="23.5" cy="16" r="3.2" fill="var(--alert)"/>
+        </svg>
+        <span class="brand-text">
+          <h1>Veridor</h1>
+          <span class="brand-sub">Authorization regression</span>
+        </span>
+      </div>
+      <!--
+        The verb bar is the product's shape, and it is the same shape as
+        `veridor --help` and the README. Each verb answers one question and
+        makes ONE kind of claim; keeping them in separate views is what stops a
+        reader carrying a `map` hypothesis across into a `run` finding.
+      -->
+      <nav class="verbs" aria-label="Verbs">
+        <button type="button" role="tab" data-verb="map" aria-selected="false">
+          <span class="verb-name">map</span>
+          <span class="verb-question">what would a compromise reach?</span>
+        </button>
+        <button type="button" role="tab" data-verb="run" aria-selected="true">
+          <span class="verb-name">run</span>
+          <span class="verb-question">does the boundary hold?</span>
+        </button>
+        <button type="button" role="tab" data-verb="mutate" aria-selected="false">
+          <span class="verb-name">mutate</span>
+          <span class="verb-question">would my suite catch a regression?</span>
+        </button>
+      </nav>
+      <div class="header-actions">
+        <!--
+          "LOCAL" is the security posture, not an environment name: this viewer
+          reads files off disk and never leaves the machine. The title says so
+          for anyone who reads the chip and wonders.
+        -->
+        <span
+          id="connection"
+          class="status neutral"
+          title="Reading artifacts from local disk. This viewer issues no request to your target."
+        >Loading</span>
+        <button
+          id="theme-toggle"
+          class="icon-button"
+          type="button"
+          aria-label="Switch between light and dark theme"
+          title="Switch theme"
+        >
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>
+          </svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+               stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.8A9 9 0 1111.2 3a7 7 0 009.8 9.8z"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <main>
+      <aside aria-label="Artifact history">
+        <div class="section-heading">
+          <h2 id="list-heading">Run history</h2>
+          <span id="loaded-at" class="muted freshness"></span>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
+        <!--
+          A history with no filter is fine at two entries and unusable at two
+          hundred, which is what a real target produces within a week of running
+          this on every commit.
+        -->
+        <label class="filter">
+          <span class="visually-hidden">Filter this list</span>
+          <input id="filter" type="search" placeholder="Filter&hellip;" autocomplete="off">
+        </label>
+        <!--
+          Only the list scrolls. Heading, refresh and filter stay put, because a
+          filter box that scrolls away is useless exactly when the list is long
+          enough to need one.
+        -->
+        <div class="sidebar-scroll">
+          <ol id="runs" class="run-list"></ol>
+          <p id="no-matches" class="empty" hidden>Nothing matches that filter.</p>
+          <p id="empty-runs" class="empty" hidden>
+            No runs yet. Execute <code>veridor run</code> to create one.
+          </p>
+        </div>
+      </aside>
+      <section id="run-detail" tabindex="-1" aria-live="polite">
+        <div class="placeholder">
+          <p class="eyebrow">EXECUTION-BACKED EVIDENCE</p>
+          <h2>Select a run</h2>
+          <p>Inspect findings and authorization changes between baselines.</p>
+        </div>
+      </section>
+      <!--
+        The footer is not decoration. This viewer reads artifacts off local
+        disk and has no authentication, and saying so on every page is cheaper
+        than assuming everyone read the README.
+      -->
+      <footer class="app-footer">
+        <strong>Veridor</strong>
+        <span>Local viewer &mdash; reads <code>.veridor/</code>, never writes, issues no request.</span>
+        <span>Findings are measured against <em>your</em> declaration, not against a policy Veridor knows.</span>
+      </footer>
+    </main>
+
+    <template id="detail-template">
+      <!--
+        The verdict sits beside the identifier it is a verdict about. Pinned to
+        the far right of a 1100px column it was separated from its subject by
+        half a screen of nothing.
+      -->
+      <div class="detail-header">
+        <div>
+          <p class="eyebrow">RUN DETAIL</p>
+          <div class="title-row">
+            <h2 data-field="run-id"></h2>
+            <span data-field="run-status" class="status"></span>
+          </div>
+          <p class="muted" data-field="metadata"></p>
+        </div>
+      </div>
+      <div class="metrics" data-field="metrics"></div>
+      <!--
+        The scope block is a sibling of the metrics, above the findings, and is
+        never conditional. core.py states the invariant: the declaration-scope
+        sentence must accompany every count of findings Veridor prints and
+        every report it emits. The dashboard was the one artifact channel that
+        dropped it, so a reader saw a red Vulnerable count and a "Fix:" line
+        with nothing telling them the declaration is the untested half.
+      -->
+      <section class="panel scope" data-field="scope" aria-label="How to read this run">
+        <p class="eyebrow">HOW TO READ THIS RUN</p>
+        <p class="scope-lead" data-field="scope-finding"></p>
+        <p data-field="scope-pass"></p>
+        <div data-field="disclosures"></div>
+      </section>
+      <div class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">CURRENT SIGNAL</p>
+            <h3>Findings</h3>
+          </div>
+          <span class="count" data-field="finding-count"></span>
+        </div>
+        <div data-field="findings"></div>
+      </div>
+      <div class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">BASELINE COMPARISON</p>
+            <h3>Regression diff</h3>
+          </div>
+          <span class="muted" data-field="baseline"></span>
+        </div>
+        <div class="tabs" role="tablist" aria-label="Regression categories">
+          <button type="button" role="tab" data-tab="new" id="tab-new" aria-controls="panel-diff" aria-selected="true">New</button>
+          <button type="button" role="tab" data-tab="resolved" id="tab-resolved" aria-controls="panel-diff" aria-selected="false">Resolved</button>
+          <button type="button" role="tab" data-tab="unchanged" id="tab-unchanged" aria-controls="panel-diff" aria-selected="false">Unchanged</button>
+          <!--
+            'escalated' is computed and printed by the runner but had no
+            representation here, so a finding whose grade rose to 'confirmed'
+            since the baseline was announced on one console line and then
+            dropped by the viewer.
+          -->
+          <button type="button" role="tab" data-tab="escalated" id="tab-escalated" aria-controls="panel-diff" aria-selected="false">Escalated</button>
+        </div>
+        <div data-field="diff" id="panel-diff" role="tabpanel" aria-labelledby="tab-new"></div>
+      </div>
+    </template>
+
+    <!--
+      MAP. Everything in this view is an OBSERVATION or a HYPOTHESIS. The
+      documents carry their own `claim`, `limitation` and `footer` strings and
+      those are rendered verbatim rather than paraphrased, because the
+      paraphrase is where overclaiming gets in.
+    -->
+    <template id="map-template">
+      <div class="detail-header">
+        <div>
+          <p class="eyebrow">MAP DETAIL</p>
+          <div class="title-row">
+            <h2 data-field="map-id"></h2>
+            <span data-field="map-status" class="status neutral">observed</span>
+          </div>
+          <p class="muted" data-field="map-metadata"></p>
+        </div>
+      </div>
+      <!--
+        Metrics first, then how to read them -- the same rhythm as the run view.
+        The three verbs previously disagreed about this order, which made the
+        product feel assembled rather than designed. The scope block still sits
+        ABOVE the data it qualifies, never below it.
+      -->
+      <div class="metrics" data-field="map-metrics"></div>
+      <section class="panel scope" data-field="map-scope" aria-label="How to read this map">
+        <p class="eyebrow">HOW TO READ THIS MAP</p>
+        <p class="scope-lead" data-field="map-claim"></p>
+        <p data-field="map-limitation"></p>
+        <p class="muted" data-field="map-safety"></p>
+        <div data-field="map-incomplete"></div>
+      </section>
+      <div class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">OBSERVED REACH, LOWER BOUND</p>
+            <h3>Blast radius per identity</h3>
+          </div>
+          <span class="muted">operations, not objects</span>
+        </div>
+        <div data-field="blast-radius"></div>
+      </div>
+      <div class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">HYPOTHESES, NOT FINDINGS</p>
+            <h3>Anomaly candidates</h3>
+          </div>
+          <span class="count" data-field="candidate-count"></span>
+        </div>
+        <p class="muted" data-field="candidate-discipline"></p>
+        <div data-field="candidates"></div>
+        <p class="muted" data-field="candidate-footer"></p>
+      </div>
+      <!--
+        DRIFT. Deliberately the last panel and deliberately inside `map`, not a
+        fourth tab: drift is what this map MEANS read against an earlier one,
+        so a tab of its own would sell it as a fourth verb. It makes a
+        different claim from everything above it -- candidates are hypotheses
+        about one run, drift is a measured difference between two -- so it gets
+        its own heading and its own discipline line, and it renders nothing at
+        all when no baseline was given. "No comparison was asked for" and "a
+        comparison found nothing" are different states and must not look alike.
+      -->
+      <div class="panel" data-field="drift-panel" hidden>
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">A DIFFERENCE BETWEEN TWO RUNS, NOT A VERDICT</p>
+            <h3>Access-matrix drift</h3>
+          </div>
+          <span class="count" data-field="drift-count"></span>
+        </div>
+        <p class="muted" data-field="drift-discipline"></p>
+        <div data-field="drift-targets"></div>
+        <div data-field="drift-changes"></div>
+        <p class="muted" data-field="drift-blindness"></p>
+      </div>
+    </template>
+
+    <!--
+      MUTATE. The score is a property of the DECLARATION. A surviving mutant
+      says a check may be vacuous; it is never a report about the target, and
+      mutation.py bans the vocabulary that would make it read like one.
+    -->
+    <template id="mutate-template">
+      <div class="detail-header">
+        <div>
+          <p class="eyebrow">MUTATION DETAIL</p>
+          <h2 data-field="mutate-id"></h2>
+          <p class="muted" data-field="mutate-metadata"></p>
+        </div>
+        <div data-field="mutate-score" class="hero"></div>
+      </div>
+      <div class="metrics" data-field="mutate-metrics"></div>
+      <section class="panel scope" data-field="mutate-scope" aria-label="How to read this score">
+        <p class="eyebrow">HOW TO READ THIS SCORE</p>
+        <p class="scope-lead" data-field="mutate-claim"></p>
+        <p data-field="mutate-relationship"></p>
+        <p class="muted" data-field="mutate-formula"></p>
+      </section>
+      <div class="panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">CHECKS THAT MAY BE VACUOUS</p>
+            <h3>Surviving mutants</h3>
+          </div>
+          <span class="count" data-field="survivor-count"></span>
+        </div>
+        <div data-field="survivors"></div>
+      </div>
+      <!--
+        `unresolved` in the document is survivors PLUS errored. The survivors
+        are already listed above, so this panel shows only the remainder:
+        mutants that errored, about which NOTHING was measured. They are not
+        survivors and must never be called any, but they cannot be dropped
+        either -- the all-clear sentence is false while one exists.
+      -->
+      <div class="panel" data-field="unresolved-panel">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">NOTHING WAS MEASURED</p>
+            <h3>Errored mutants</h3>
+          </div>
+          <span class="count" data-field="unresolved-count"></span>
+        </div>
+        <div data-field="unresolved"></div>
+      </div>
+    </template>
+  </body>
+</html>

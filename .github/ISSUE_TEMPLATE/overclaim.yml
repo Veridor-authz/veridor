@@ -1,0 +1,39 @@
+name: A result or document overclaims
+description: Veridor stated something stronger than the evidence supports.
+labels: [bug, claim-discipline]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Overclaiming is treated as a defect in this project, the same as a
+        crash. If a message, report, badge or document could lead a reader to
+        act on a conclusion the measurement does not support, that is a bug
+        worth filing.
+
+        Examples of what belongs here: a passing run reading as "the boundary is
+        enforced"; a candidate reading as a finding; a coverage number reading
+        as a property of the API rather than of the configuration; a drift
+        change reading as a verdict.
+
+  - type: textarea
+    id: quote
+    attributes:
+      label: What Veridor said
+      description: Paste the exact text, and say where it appeared.
+    validations:
+      required: true
+
+  - type: textarea
+    id: supported
+    attributes:
+      label: What the measurement actually supports
+    validations:
+      required: true
+
+  - type: textarea
+    id: wrong
+    attributes:
+      label: How a reader could act on this and be wrong
+      description: The concrete mistake someone could make. This is the part that matters.
+    validations:
+      required: true

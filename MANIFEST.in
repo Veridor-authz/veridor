@@ -1,0 +1,7 @@
+# The sdist is what the wheel is built from, not a way to run the suite.
+# setuptools' default file set took tests/test_*.py but none of the helpers
+# they import (source_path, tiers, ...), nor fixtures/ or scripts/, so none of
+# the 51 modules it shipped could be imported from an unpacked sdist (measured),
+# and they were half its size. The suite runs from a clone.
+# scripts/release_check.py dist refuses an sdist that carries tests/ again.
+prune tests

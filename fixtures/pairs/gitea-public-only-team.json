@@ -1,0 +1,82 @@
+{
+  "name": "gitea-public-only-token-reaches-private-team",
+  "advisory": {
+    "id": "CVE-2026-58431",
+    "summary": "The public-only API token restriction was not enforced on team API routes.",
+    "url": "https://www.cve.org/CVERecord?id=CVE-2026-58431",
+    "references": ["https://blog.gitea.com/release-of-1.27.0/"],
+    "note": [
+      "Both identities are the SAME human. The boundary under test is the",
+      "TOKEN's own scope, not who holds it -- a boundary a model of users alone",
+      "cannot express, because it belongs to the credential.",
+      "The vulnerable build returns 200 carrying the private organisation's",
+      "marker; the fix returns 403. Status and marker both move, so this pair",
+      "would be caught by a status oracle as well -- included deliberately as",
+      "the contrast to the starred-list pair, where only the marker moves."
+    ]
+  },
+  "image": "gitea/gitea",
+  "vulnerable": "1.26.4",
+  "patched": "1.27.0",
+  "vulnerable_digest": "sha256:8e25c717b8f748445e15ec46e0390f577cb628101184cb0a150d1dae126c1f39",
+  "patched_digest": "sha256:7dff60d7ea6df9d0bdf78971cdb1350e9b7df3fda5f115c77afe12122887bd64",
+  "container_port": 3000,
+  "health_path": "/api/v1/version",
+  "provision": "gitea_public_only_team",
+  "marker": "VERIDOR-MARKER-9f3a2b1c4d5e6f",
+  "control": {
+    "path": "/api/v1/teams/${VERIDOR_PAIR_TEAM_ID}",
+    "token": "VERIDOR_PAIR_OWNER_TOKEN",
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "full_scope_token": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_OWNER_TOKEN}"
+        },
+        "marker": "VERIDOR-MARKER-9f3a2b1c4d5e6f",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/api/v1/teams/${VERIDOR_PAIR_TEAM_ID}"
+        }
+      },
+      "public_only_token": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_RESTRICTED_TOKEN}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "public-only-token-must-not-reach-a-private-org-team",
+        "name": "A public-only token must not read a private organisation's team",
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/teams/${VERIDOR_PAIR_TEAM_ID}"
+        },
+        "expect": {
+          "full_scope_token": {
+            "status": [
+              200
+            ],
+            "contains_marker": "full_scope_token"
+          },
+          "public_only_token": {
+            "status": [
+              403
+            ],
+            "excludes_marker": "full_scope_token"
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed"
+}

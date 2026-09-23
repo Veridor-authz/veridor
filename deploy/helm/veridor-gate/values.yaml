@@ -1,0 +1,282 @@
+# Values for the veridor-gate chart. Every value is described in README.md.
+# The chart renders a Job that runs:
+#
+#   veridor run --config /config/veridor.json --output-dir /work/.veridor ...
+#
+# and the Job's exit code is the gate. There is no wrapper script and no
+# `|| true`: exit 0 completes the Job, any other exit fails it.
+
+hook:
+  # REQUIRED. How the Job is attached to a deployment. There is no default on
+  # purpose: a Job carrying Argo CD annotations installed with plain `helm
+  # install` runs, fails, and leaves the release green -- a gate that gates
+  # nothing. Choose one:
+  #   argocd  Argo CD PostSync hook (the sync operation fails when the Job
+  #           fails). The Job has no fixed name: generateName, so Argo CD
+  #           gives each sync that runs hooks a Job of its own; with one
+  #           fixed name Argo CD v3.5.3 reported syncs from the previous
+  #           sync's Job (deploy/argocd/README.md, "Each sync reads its own
+  #           Job"). A selective or Apply Only sync runs no hooks, so no gate
+  #           ("Syncs that run no gate"). Rendered by Argo CD only: `helm
+  #           install` refuses it.
+  #   helm    Helm post-install,post-upgrade hook (the release fails). As a
+  #           dependency of the app's chart, aimed at a Service of this
+  #           revision's pods, run with helm upgrade --install
+  #           --rollback-on-failure: README "hook.mode helm: what the gate
+  #           probes". With Helm's default flags the hook runs before the
+  #           new pods are Ready and probes the version being replaced.
+  #           Helm CLI only: a render that reaches no cluster (helm
+  #           template, Argo CD) is refused; see allowRenderWithoutCluster.
+  #   none    a plain Job; whatever applies it must watch it
+  mode: ""
+  argocd:
+    # PostSync runs after every Sync-phase resource is Healthy. The gate
+    # probes whatever target.baseUrl routes to then, and a pod being replaced
+    # can still answer: aim it at a Service of the new pods only, on a label
+    # hashed from the pod template (README, "Under Argo CD and helm
+    # template"). A label from .Release.Revision does not work here: Argo CD
+    # renders with helm template, where it is always 1. A PostSync gate
+    # reports on a version already serving; to keep a failing one from
+    # taking traffic, gate an Argo Rollouts canary. It is the only phase
+    # accepted. PreSync is refused: it runs before this chart's ConfigMap is
+    # applied. Sync is refused: Argo CD runs it with the apply of the
+    # application's manifests, not once they are Healthy, so it probes the
+    # version being replaced.
+    phase: PostSync
+    # One or more of BeforeHookCreation, HookSucceeded, HookFailed. Each
+    # sync's Job has a name of its own, so BeforeHookCreation (Argo CD's
+    # default) finds no earlier Job to delete: each Job and its log stay
+    # for job.ttlSecondsAfterFinished after it finished (measured: one Job
+    # per sync until then). HookSucceeded deletes a passing Job, and
+    # HookFailed a failing one with the log that says why, as soon as Argo CD
+    # has read it. With job.ttlSecondsAfterFinished null, both are required.
+    deletePolicy: BeforeHookCreation
+    # Optional argocd.argoproj.io/sync-wave for the Job. Empty = not set.
+    syncWave: ""
+  helm:
+    # Helm runs these hooks as soon as it has applied the manifests unless it
+    # waits first (Helm 4 default --wait=hookOnly): upgrade with
+    # --rollback-on-failure, which waits for the resources and rolls back a
+    # failed gate, and aim target.baseUrl at a Service of this revision's pods.
+    # Must include post-install and post-upgrade: Helm creates the Job only on
+    # the events listed, so a verb left out runs no gate and still succeeds.
+    # post-rollback and test may be added (test: `helm test`, whose exit
+    # status is then the gate; a failed test leaves the release deployed).
+    # The pre-* events are refused: they run before this chart's ConfigMap is
+    # created or updated, so a first install cannot mount it and an upgrade
+    # reads the old one.
+    events: post-install,post-upgrade
+    # Must include before-hook-creation (hook-succeeded or hook-failed may be
+    # added): the Job keeps one name, and without it the next upgrade finds
+    # the Job an earlier run left and does not run the gate again.
+    deletePolicy: before-hook-creation
+    weight: "0"
+    # helm mode is for the Helm CLI: `helm install` / `helm upgrade`, which
+    # reach the cluster. A render that reaches none is refused: Argo CD
+    # renders that way, and turns this hook into a PostSync hook with one
+    # fixed Job name, from which Argo CD v3.5.3 reported syncs by the
+    # previous sync's Job (vulnerable syncs Succeeded; measured). Under Argo
+    # CD use hook.mode argocd. true lets `helm template` or a client-side
+    # --dry-run render helm mode for the Helm CLI; never set it under Argo CD.
+    allowRenderWithoutCluster: false
+
+image:
+  # This image is not published at this version: build one from the repository's
+  # Dockerfile and set repository and tag.
+  repository: ghcr.io/veridor-authz/veridor
+  # Empty = the chart's appVersion.
+  tag: ""
+  # sha256:... When set the image is referenced as repository:tag@digest, and
+  # the digest is what the kubelet pulls: the tag beside it is ignored. The
+  # published chart sets it to its release's image, the one tagged
+  # appVersion, so a different tag alone is refused: set digest to "" to pull
+  # that tag by tag, or to that tag's digest together with digestTag.
+  digest: ""
+  # The tag `digest` is the digest of. Empty = the chart's appVersion. With a
+  # digest set, the render is refused unless the tag (tag, or appVersion when
+  # empty) is this one.
+  digestTag: ""
+  pullPolicy: IfNotPresent
+  # Set explicitly so the chart does not depend on the image's ENTRYPOINT: it
+  # works with an image whose ENTRYPOINT is `veridor` and with an image that
+  # only has `veridor` on PATH.
+  command:
+    - veridor
+imagePullSecrets: []
+
+# The Veridor configuration, as an object. Rendered to JSON in a ConfigMap and
+# mounted at /config/veridor.json. Identity credentials must be ${NAME}
+# references (optionally after one auth-scheme word, e.g. "Bearer ${NAME}"),
+# with NAME supplied from a Secret through secretEnv. The render FAILS when a
+# header carries a literal value -- see README "Credentials".
+config: {}
+
+# Use an existing ConfigMap instead of `config`. The chart cannot inspect it,
+# so the literal-credential refusal does not apply to it.
+existingConfigMap:
+  name: ""
+  key: veridor.json
+
+target:
+  # Passed as --base-url. Required unless config.target.base_url is set; even
+  # then config.target must be an object (`target: {}` is enough), or Veridor
+  # refuses the configuration. In a cluster this is usually a Service DNS
+  # name. It lands in the Job's arguments and is not expanded: no ${NAME},
+  # no credential parameters.
+  baseUrl: ""
+
+# Credentials, from existing Secrets only. Each entry becomes
+#   env: [{name, valueFrom: {secretKeyRef: {name: secretName, key}}}]
+# There is no field for a value: nothing here puts a credential in a manifest.
+#   - name: VERIDOR_OWNER_TOKEN
+#     secretName: invoices-gate-credentials
+#     key: owner-token
+secretEnv: []
+
+# Header names (case-insensitive) allowed to carry a literal value because
+# they are not credentials, e.g. X-Tenant-Id or Accept.
+allowLiteralHeaders: []
+
+gate:
+  # --fail-on: new+confirmed | new | any | confirmed | none. new+confirmed is
+  # Veridor's default. The chart passes no --baseline, so every finding counts
+  # as new unless you add `--baseline PATH` through extraArgs.
+  failOn: new+confirmed
+  # --require-complete: exit 3 when a probe went unanswered (rate limit, 5xx,
+  # timeout) or a denial is unproven (liveness_unproven: a denial-only
+  # expectation, in a check or a sequence assert step, by an identity that
+  # presents a credential, where some identity was served in the same check
+  # or sequence, not proven live elsewhere (a 2xx on a request where an
+  # identity with no credential, or the fabricated credential, was refused;
+  # or its marker_probe), and the fabricated credential drew the same denial,
+  # none was sent (only GET, HEAD and OPTIONS get one, and only when an
+  # identity declares a credential header; never on a write or in a
+  # sequence), its request failed, or its answer was neither a refusal nor a
+  # success; give that identity a marker_probe); README "Exit 3" has the
+  # rest. ON
+  # here, as in the GitHub Action: selecting a gate is the request for a
+  # gate. false lets a partially measured run pass; a run where NOTHING
+  # answered still exits 3.
+  requireComplete: true
+  # --require-clean-teardown: exit 3 when a sequence teardown did not complete.
+  requireCleanTeardown: false
+  # --read-only: refuse (exit 2) any configuration that can send a request
+  # other than GET, HEAD or OPTIONS.
+  readOnly: false
+  # false passes --no-prove-liveness. Leave it on: without it an expired token
+  # reads as a boundary that held.
+  proveLiveness: true
+  # Also write SARIF to <output.dir>/veridor.sarif (kept only with
+  # output.existingClaim).
+  sarif: false
+  # --wait-for-target: before the first request, wait up to this many seconds
+  # for the target's host and port to accept a TCP connection, trying once a
+  # second. A PostSync hook Job can start in the same second the new target
+  # pod turns Ready, before the Service routes to it; without a wait those
+  # probes are refused and the gate exits 3. It never changes a verdict: a
+  # target that never accepts is measured as before. It does not make the
+  # gate reach the NEW version: while old pods serve, it returns at once.
+  # 0 turns it off. Keep it well under job.activeDeadlineSeconds.
+  waitForTargetSeconds: 60
+
+# Appended after the chart's own arguments, verbatim. May not contain a flag
+# the chart passes from a value (--config, --output-dir, --fail-on,
+# --base-url, --require-complete, --require-clean-teardown, --read-only,
+# --no-prove-liveness, --sarif, --wait-for-target) in any spelling Veridor
+# reads as it, abbreviations included, nor --help or a single-dash token
+# with an h in it (-h, -hx: argparse reads -hx as -h and exits 0 having run
+# nothing). Veridor keeps a flag's last value, so an extraArgs --base-url
+# would replace target.baseUrl without its credential check. Set the value
+# instead.
+extraArgs: []
+
+output:
+  # --output-dir. Must be under /work.
+  dir: /work/.veridor
+  # Mount this existing PersistentVolumeClaim at /work instead of an emptyDir,
+  # to keep run history, the run JSON and SARIF after the pod is gone.
+  existingClaim: ""
+  # sizeLimit of the /work emptyDir (ignored with existingClaim).
+  sizeLimit: 128Mi
+
+job:
+  # Seconds before Kubernetes stops the Job's pod and marks the Job Failed
+  # with reason DeadlineExceeded.
+  activeDeadlineSeconds: 600
+  # Seconds a finished Job (and its pod log) is kept. Keep it longer than your
+  # Argo CD / Helm hook needs to observe the result. null = never deleted,
+  # refused with hook.mode argocd unless hook.argocd.deletePolicy has both
+  # HookSucceeded and HookFailed: there every sync adds a Job.
+  ttlSecondsAfterFinished: 3600
+  # May not set any key under helm.sh/ or argocd.argoproj.io/. A hook key
+  # here replaces the hook annotation the chart checked (Helm keeps the
+  # last); use hook.* instead. The others decide when the Job is kept or
+  # deleted: helm.sh/resource-policy: keep kept a passing Job through helm
+  # uninstall, and the next install adopted it and ran no gate.
+  annotations: {}
+  labels: {}
+  podAnnotations: {}
+  # May not set app.kubernetes.io/name, instance or component: they are the
+  # NetworkPolicy's podSelector, and overriding one detaches the policy.
+  podLabels: {}
+
+# Pod and container user. 10001 is the uid of the veridor user in the release
+# image. null omits the field, for platforms that assign the uid themselves
+# (OpenShift restricted-v2); runAsNonRoot stays true either way.
+podSecurityContext:
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+serviceAccount:
+  # Create a dedicated ServiceAccount. Its token is never mounted.
+  create: false
+  # Name to use (create=true: the name to create; empty = the fullname).
+  # create=false and empty = the namespace's default ServiceAccount.
+  name: ""
+  annotations: {}
+
+networkPolicy:
+  # Egress only to targetPeers:targetPorts and DNS; no ingress at all.
+  # Only as good as the network plugin's enforcement -- README "NetworkPolicy"
+  # has a measured gap on kind's default plugin.
+  enabled: false
+  # NetworkPolicyPeer objects the gate may reach. Required when enabled.
+  #   - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: shop}}
+  #     podSelector: {matchLabels: {app: invoices-api}}
+  targetPeers: []
+  # NetworkPolicyPort objects, e.g. [{port: 8080, protocol: TCP}]. Required
+  # when enabled: the port the target's PODS listen on, not the Service port.
+  # Each needs a port: an entry without one allows every port.
+  targetPorts: []
+  # With enabled, peers and ports must not be empty (a rule with no peers
+  # allows every destination); set enabled: false to allow no DNS at all.
+  dns:
+    enabled: true
+    peers:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: kube-system
+        podSelector:
+          matchLabels:
+            k8s-app: kube-dns
+    ports:
+      - port: 53
+        protocol: UDP
+      - port: 53
+        protocol: TCP
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+nameOverride: ""
+fullnameOverride: ""

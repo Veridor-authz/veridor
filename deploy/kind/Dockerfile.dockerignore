@@ -1,0 +1,20 @@
+# Build-context rules for deploy/kind/Dockerfile ONLY. BuildKit reads a file
+# named <Dockerfile>.dockerignore beside the Dockerfile in preference to the
+# repository's .dockerignore.
+#
+# The root .dockerignore excludes scripts/ and fixtures/ because the release
+# image ships only the wheel. This demo image needs both -- it seeds real
+# artifacts by running the verbs against scripts/demo_server.py with the
+# fixtures -- and with the root file alone the documented build fails. As in the
+# root file, what this Dockerfile does not COPY stays out of the context.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!NOTICE
+!src/
+!fixtures/
+!scripts/demo_server.py
+!deploy/kind/seed.sh
+src/veridor.egg-info/
+**/__pycache__/

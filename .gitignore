@@ -1,0 +1,21 @@
+.veridor/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+/veridor.json
+/veridor/
+/baseline.json
+/current.json
+/coverage.json
+/candidates.json
+/proof.json
+/veridor.sarif
+/veridor-junit.xml
+/summary.md
+/gl-sast-report.json
+
+# Local files that are never committed.
+.private/

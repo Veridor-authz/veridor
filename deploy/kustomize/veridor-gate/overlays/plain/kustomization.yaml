@@ -1,0 +1,27 @@
+# The gate as a plain Job. Nothing fails by itself when the gate fails:
+# whatever applies this must wait for THIS run's Job and read its outcome.
+# A Job runs once: re-applying an unchanged overlay prints "unchanged", runs
+# nothing, and a `kubectl wait` then reads the previous run's Job (measured: a
+# stale Complete passed a target that had since turned vulnerable). After a
+# change of configuration or image the re-apply is refused ("field is
+# immutable"). So delete the previous Job first, every time, check each step
+# (a refused delete must stop the run, not fall through to the old Job), and
+# wait for the Job this run created -- the README's "Running the plain Job"
+# section, which the e2e runs verbatim under sh:
+#
+#   old="$(kubectl get job veridor-gate --ignore-not-found -o jsonpath='{.metadata.uid}')" || exit 1
+#   kubectl delete job veridor-gate --ignore-not-found --wait=true || exit 1
+#   kubectl apply -k my-overlay/ || exit 1
+#   uid="$(kubectl get job veridor-gate -o jsonpath='{.metadata.uid}')" || exit 1
+#   if [ -z "$uid" ] || [ "$uid" = "$old" ]; then echo "veridor-gate: apply created no new Job" >&2; exit 1; fi
+#   while outcome="$(kubectl get job veridor-gate -o jsonpath='{.metadata.uid} {.status.conditions[?(@.status=="True")].type}')"; do
+#     case "$outcome " in "$uid "*) ;; *) outcome=""; break ;; esac
+#     case " $outcome " in *" Complete "* | *" Failed "*) break ;; esac
+#     sleep 5
+#   done
+#   kubectl logs job/veridor-gate
+#   case " $outcome " in *" Complete "*) true ;; *) false ;; esac
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

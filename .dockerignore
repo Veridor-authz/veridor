@@ -1,0 +1,12 @@
+# Build context for the root Dockerfile (the release image). The Dockerfile
+# COPYs only pyproject.toml, README.md, LICENSE, NOTICE and src/; everything
+# else stays out of the context, so it never reaches the builder at all, remote
+# builders included. deploy/kind/Dockerfile has its own Dockerfile.dockerignore.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!NOTICE
+!src/
+src/veridor.egg-info/
+**/__pycache__/

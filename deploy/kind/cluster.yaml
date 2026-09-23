@@ -1,0 +1,14 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: veridor-demo
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      # Bound to 127.0.0.1 rather than 0.0.0.0 on purpose. The viewer ships
+      # with no authentication -- that is correct for a local run browser and
+      # wrong for anything reachable off the machine -- so the port mapping is
+      # where that assumption gets enforced for this deployment.
+      - containerPort: 30787
+        hostPort: 8787
+        listenAddress: "127.0.0.1"
+        protocol: TCP

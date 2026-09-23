@@ -1,0 +1,87 @@
+{
+  "name": "gitea-revoked-collaborator-starred-leak",
+  "advisory": {
+    "id": "CVE-2026-58434",
+    "summary": "Private repository metadata remained accessible after access was revoked.",
+    "url": "https://www.cve.org/CVERecord?id=CVE-2026-58434",
+    "references": ["https://blog.gitea.com/release-of-1.27.0/"],
+    "note": [
+      "Chosen because it is the shape a status oracle cannot see. The revoked",
+      "collaborator receives HTTP 200 on BOTH builds -- the fix removes the",
+      "private repository from the payload, not the endpoint. Only a planted",
+      "marker distinguishes them, which is the entire argument for the oracle.",
+      "It also answers the 'green because gone' objection: the owner control",
+      "probe returns 200 on the patched build, so the endpoint is still there.",
+      "The marker owner is deliberately absent from the check's expectations: including them makes their response at the CHECK path the positive control, which defeats marker_probe. This fix empties that list for everyone, so that control would be vacuous and Veridor -- correctly -- reports the exclusion as unverifiable rather than as a pass."
+    ]
+  },
+  "image": "gitea/gitea",
+  "vulnerable": "1.26.4",
+  "patched": "1.27.0",
+  "vulnerable_digest": "sha256:8e25c717b8f748445e15ec46e0390f577cb628101184cb0a150d1dae126c1f39",
+  "patched_digest": "sha256:7dff60d7ea6df9d0bdf78971cdb1350e9b7df3fda5f115c77afe12122887bd64",
+  "container_port": 3000,
+  "health_path": "/api/v1/version",
+  "provision": "gitea",
+  "marker": "VERIDOR-MARKER-9f3a2b1c4d5e6f",
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_OWNER_TOKEN}"
+        },
+        "marker": "VERIDOR-MARKER-9f3a2b1c4d5e6f",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/api/v1/repos/owner/secret-project"
+        }
+      },
+      "revoked_collaborator": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_REVOKED_TOKEN}"
+        }
+      },
+      "stranger": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_STRANGER_TOKEN}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "revoked-collaborator-retains-private-repo-metadata",
+        "name": "A revoked collaborator must not still read the private repository",
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/users/outsider/starred"
+        },
+        "expect": {
+          "revoked_collaborator": {
+            "status": [
+              200
+            ],
+            "excludes_marker": "owner"
+          },
+          "stranger": {
+            "status": [
+              200
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      }
+    ]
+  },
+  "control": {
+    "path": "/api/v1/repos/owner/secret-project",
+    "token": "VERIDOR_PAIR_OWNER_TOKEN",
+    "status": 200,
+    "expect_marker": true
+  },
+  "expected_evidence": "confirmed"
+}

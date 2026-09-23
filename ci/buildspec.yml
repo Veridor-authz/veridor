@@ -1,0 +1,149 @@
+# Veridor authorization regression gate -- AWS CodeBuild buildspec template.
+#
+# CodeDeploy is a deployment service with no build phase, and CodePipeline
+# orchestrates but runs nothing itself; the gate belongs in CodeBuild. In
+# CodePipeline, add a Test action whose provider is CodeBuild and point it at
+# this file.
+#
+# STATUS: UNTESTED IN A REAL CODEBUILD PROJECT. Nothing here has run in AWS.
+# ci/README.md lists what was checked instead (the veridor command line against
+# the real CLI parser, the exit-code branches, the shell with shellcheck, the
+# keys against the buildspec reference) and what was not. SchemaStore
+# publishes no buildspec schema to validate against.
+#
+# NOT YET PUBLISHED. The PyPI package, container image and zipapp named below
+# do not exist until Veridor's first release (0.1.0).
+#
+# THE PYPI NAME IS UNCLAIMED. Nobody has registered `veridor` on PyPI, so
+# anyone can, and can publish the version named below. A pip line naming it would
+# install whatever is there and run it with the credentials this build holds. So
+# the install phase below names a wheel path that does not exist, and stops the
+# build there (pip exits 1 before it looks at any index). Build a wheel from the
+# repository and put its path in that phase.
+#
+# INSTALL -- pick one; pip on a wheel path is the active one below.
+#   1. pip (active): runtime-versions python, then pip on that wheel path. Once
+#      the first release is on the repository's Releases page and the name is no
+#      longer unclaimed,
+#      the line can name `veridor==0.1.0` instead.
+#   2. zipapp: download veridor-0.1.0.pyz from the release in the install
+#      phase, verify it with the `gh attestation verify` command in
+#      SECURITY.md (pinned to release.yml at the tag), and run
+#      `python3 veridor-0.1.0.pyz run ...` in place of `veridor run ...`.
+#      SHA256SUMS alone detects a damaged download, not a substituted one.
+#   3. Container image as the project's build image: not checked at all; the
+#      image's ENTRYPOINT is `veridor` and it runs as uid 10001.
+#
+# CREDENTIALS. Name each ${VERIDOR_*} reference in the Veridor configuration
+# under env: secrets-manager or parameter-store (examples below), never under
+# env: variables. A variable that is unset or empty when Veridor starts makes
+# it refuse with exit 2 before sending anything.
+#
+# WHO CHOOSES THE TARGET. Veridor sends every credential to the base URL
+# (VERIDOR_BASE_URL, or target.base_url in VERIDOR_CONFIG), so whoever may set
+# that value decides where the tokens go. A buildspec cannot fix it: anyone
+# allowed codebuild:StartBuild on the project can override any environment
+# variable (environmentVariablesOverride), VERIDOR_BASE_URL and VERIDOR_FAIL_ON
+# included, and can replace this buildspec (buildspecOverride). Deny both to
+# every principal that may start a build but must not read the credentials.
+# AWS's "CodeBuild condition keys" page shows the keys: a Deny on StartBuild
+# with Null "codebuild:source.buildspec": "false", and one on
+# "codebuild:environment.environmentVariables.name" that denies any override,
+# not a list of names: an added HTTP_PROXY or https_proxy sends every
+# credential to a proxy, PIP_INDEX_URL changes what the install phase runs,
+# and BASH_ENV runs a file in this build's bash. Read there, not tried on AWS.
+#
+# EXIT CODES. The build phase exits with Veridor's own code, so every non-zero
+# code fails the build:
+#   0 nothing the fail-on policy gates on was found (a finding it does not
+#   gate on, such as one in the baseline, still gives 0) | 1 the gate failed
+#   on a finding | 2 refused (configuration,
+#   credential, path or coverage) | 3 no gating finding, but something went
+#   unmeasured | 70 Veridor crashed (never a finding) | 130 / 143 interrupted,
+#   teardown ran first.
+# CodeBuild has no warning state, so exit 3 fails the build and there is no
+# switch that turns it green.
+#
+# REPORTS. JUnit goes to the report group below (the Reports tab). The run
+# JSON, the SARIF and the Markdown summary are uploaded as artifacts.
+#
+# NETWORK: the target has to be reachable from the build container. For a
+# service in a VPC, give the CodeBuild project VPC settings.
+
+version: 0.2
+
+env:
+  shell: bash
+  variables:
+    VERIDOR_CONFIG: veridor.json
+    VERIDOR_FAIL_ON: new+confirmed
+    # Empty uses target.base_url from the configuration. The project's
+    # environment variables and a StartBuild override replace these values:
+    # see WHO CHOOSES THE TARGET above.
+    VERIDOR_BASE_URL: ""
+    # A prior run JSON to diff against; empty for none. A path that does not
+    # exist is exit 2.
+    VERIDOR_BASELINE: ""
+  # secrets-manager:
+  #   VERIDOR_OWNER_TOKEN: veridor/staging:owner-token
+  # parameter-store:
+  #   VERIDOR_ADMIN_TOKEN: /veridor/staging/admin-token
+
+phases:
+  install:
+    runtime-versions:
+      python: 3.12
+    commands:
+      # Stops the build until you put a wheel's path here: see the note at the top.
+      - python3 -m pip install --quiet --disable-pip-version-check "./REPLACE_WITH_THE_PATH_OF_A_VERIDOR_WHEEL.whl"
+      - veridor --version
+
+  build:
+    commands:
+      - |
+        set -e
+        # The reports and artifacts sections below name this directory too.
+        out=veridor-out
+        mkdir -p "$out"
+        set --
+        if [ -n "$VERIDOR_BASE_URL" ]; then set -- "$@" --base-url "$VERIDOR_BASE_URL"; fi
+        if [ -n "$VERIDOR_BASELINE" ]; then set -- "$@" --baseline "$VERIDOR_BASELINE"; fi
+
+        # Stopping the build signals the shell as well as veridor; the trap keeps
+        # this shell alive until veridor's teardown is done.
+        trap 'echo "veridor-gate: SIGTERM received; waiting for veridor to finish its teardown." >&2' TERM
+
+        status=0
+        veridor run \
+          --config "$VERIDOR_CONFIG" \
+          --output-dir "$out" \
+          --fail-on "$VERIDOR_FAIL_ON" \
+          --require-complete \
+          --json "$out/veridor-run.json" \
+          --report "junit=$out/veridor-junit.xml" \
+          --report "sarif=$out/veridor.sarif" \
+          --report "markdown=$out/veridor-summary.md" \
+          "$@" || status=$?
+
+        case "$status" in
+          0) echo "veridor-gate: exit 0: PASS. Nothing that --fail-on $VERIDOR_FAIL_ON gates on was found. A finding it does not gate on, such as one in the baseline, also exits 0. The summary above and the Reports tab list everything measured." ;;
+          1) echo "veridor-gate: exit 1: FAIL. The gate failed on a finding; see the Reports tab and $out/veridor-summary.md." >&2 ;;
+          2) echo "veridor-gate: exit 2: REFUSED. A configuration, credential, path or coverage error; the veridor: line above names it. Not a finding and not a pass." >&2 ;;
+          3) echo "veridor-gate: exit 3: INCOMPLETE, failing the build. No gating finding, but something the gate needs went unmeasured. CodeBuild has no warning state." >&2 ;;
+          70) echo "veridor-gate: exit 70: INTERNAL ERROR. Veridor crashed; the traceback is above. A bug in Veridor, not a finding about the target. Nothing was concluded." >&2 ;;
+          130) echo "veridor-gate: exit 130: INTERRUPTED by SIGINT. Sequence teardown ran first. Nothing was concluded." >&2 ;;
+          143) echo "veridor-gate: exit 143: INTERRUPTED by SIGTERM (build stopped or timed out). Sequence teardown ran first. Nothing was concluded." >&2 ;;
+          *) echo "veridor-gate: exit $status is not one of Veridor's exit codes (0 1 2 3 70 130 143); failing the build." >&2 ;;
+        esac
+        exit "$status"
+
+reports:
+  veridor-authorization:
+    files:
+      - veridor-junit.xml
+    base-directory: veridor-out
+    file-format: JUNITXML
+
+artifacts:
+  files:
+    - veridor-out/**/*

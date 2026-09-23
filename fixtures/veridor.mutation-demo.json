@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "target": {
+    "base_url": "http://127.0.0.1:8766",
+    "timeout_seconds": 3
+  },
+  "identities": {
+    "order_owner": {
+      "headers": {
+        "Authorization": "Bearer order-owner-token"
+      },
+      "marker": "vdr-6B0Fa6c-z8JsRxAl85RFt00L"
+    },
+    "outsider": {
+      "headers": {
+        "Authorization": "Bearer outsider-token"
+      }
+    },
+    "anonymous": {
+      "headers": {}
+    }
+  },
+  "checks": [
+    {
+      "id": "order-tenant-isolation",
+      "name": "Order tenant isolation (a check that can fail)",
+      "request": {
+        "method": "GET",
+        "path": "/api/orders/o-1"
+      },
+      "expect": {
+        "order_owner": {
+          "status": [200],
+          "contains_marker": "order_owner"
+        },
+        "outsider": {
+          "status": [404],
+          "excludes_marker": "order_owner"
+        },
+        "anonymous": {
+          "status": [401]
+        }
+      }
+    },
+    {
+      "id": "widget-read-permissive",
+      "name": "Widget read (a check that cannot fail)",
+      "request": {
+        "method": "GET",
+        "path": "/api/wide/w-1"
+      },
+      "expect": {
+        "order_owner": {
+          "status": [200]
+        },
+        "outsider": {
+          "status": [200, 403, 404]
+        }
+      }
+    }
+  ]
+}

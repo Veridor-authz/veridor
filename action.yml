@@ -1,0 +1,774 @@
+name: Veridor authorization regression
+description: >-
+  Run declared multi-user authorization checks (or drift against a committed
+  matrix) and fail the job on Veridor's exit code. Needs Python 3.11 or newer
+  on the runner, for example from actions/setup-python. Runs Veridor from this
+  action's own checkout: nothing is installed and no package index is reached.
+branding:
+  icon: shield
+  color: blue
+inputs:
+  mode:
+    description: >-
+      run (default) gates on the expectations you declared and writes SARIF,
+      JUnit and Markdown. drift declares nothing: it diffs this run's access
+      matrix against a baseline matrix you recorded earlier, and fails when
+      access widened. Use two steps if you want both: one step is one verb,
+      because the two exit non-zero for different reasons and a shared exit
+      code would hide which.
+    required: false
+    default: run
+  config:
+    description: Path to the Veridor JSON configuration.
+    required: true
+  baseline:
+    description: >-
+      run mode only. Optional path to a prior Veridor run JSON. drift mode
+      compares a different document and uses matrix-baseline, deliberately
+      not this key.
+    required: false
+    default: ""
+  output-dir:
+    description: Directory for persisted run history.
+    required: false
+    default: .veridor
+  sarif:
+    description: >-
+      run mode only. SARIF output path. Empty means veridor.sarif in the
+      workspace. Upload it with github/codeql-action/upload-sarif; this action
+      does not upload anything.
+    required: false
+    default: ""
+  junit:
+    description: >-
+      run mode only. JUnit XML output path. Empty means a file in a fresh
+      directory under RUNNER_TEMP; the junit output names it either way.
+    required: false
+    default: ""
+  markdown:
+    description: >-
+      Markdown report output path, both modes. Empty means a file in a fresh
+      directory under RUNNER_TEMP; the markdown output names it either way.
+    required: false
+    default: ""
+  summary:
+    description: >-
+      true (default) appends the Markdown report to the job summary
+      (GITHUB_STEP_SUMMARY). It appends and never replaces what earlier steps
+      wrote. false writes nothing there.
+    required: false
+    default: "true"
+  fail-on:
+    description: >-
+      run mode only. Gate policy; empty means new+confirmed. new+confirmed
+      fails on anything absent from the baseline PLUS anything a marker
+      proved, regardless of age. new fails only on a finding absent from the
+      baseline -- which is a set difference against a file this README asks
+      you to commit, so a pull request that adds a finding id to baseline.json
+      turns a live confirmed leak into a green build. any fails on any
+      finding, confirmed fails only when a response actually carried another
+      identity's marker, none never fails.
+    required: false
+    default: ""
+  json:
+    description: >-
+      run mode only. Optional path for the run JSON document. Empty means a
+      file in a fresh directory under RUNNER_TEMP; run-json names it.
+    required: false
+    default: ""
+  base-url:
+    description: Optional override for target.base_url.
+    required: false
+    default: ""
+  wait-for-target:
+    description: >-
+      Both modes. Seconds to wait, before the first request, for the
+      target's host and port to accept a TCP connection (veridor
+      --wait-for-target). 0 (default) does not wait. For a target started in
+      the same job, such as a service that is still booting. It never changes
+      a verdict: a target that never accepts is measured as before, by the
+      probes' own transport errors. A whole number of seconds, 0 or more;
+      anything else is refused.
+    required: false
+    default: "0"
+  openapi:
+    description: >-
+      Optional OpenAPI 3 or Swagger 2 JSON specification. Enables boundary
+      coverage, which is computed offline and never issues a request. Required
+      in drift mode: the matrix is projected from that inventory, and Veridor
+      never discovers routes on its own.
+    required: false
+    default: ""
+  coverage:
+    description: Optional path for the machine-readable coverage report JSON. Needs openapi.
+    required: false
+    default: ""
+  badge:
+    description: Optional path for the shields.io coverage badge endpoint JSON. Needs openapi.
+    required: false
+    default: ""
+  base-path:
+    description: Optional spec path prefix; omit to auto-detect. Needs openapi.
+    required: false
+    default: ""
+  allow-no-matches:
+    description: >-
+      true reports coverage as not measured instead of failing when no
+      configured check path matches any operation in the specification.
+      Needs openapi; true without it is refused.
+    required: false
+    default: "false"
+  matrix-baseline:
+    description: >-
+      drift mode, required. A matrix JSON recorded by an earlier run. A FILE,
+      not a directory: this step writes a matrix into the directory a
+      directory baseline resolves from, so the re-run of a failed build would
+      compare the regression against itself and pass. Commit it the way you
+      commit a test snapshot: a CI runner has no .veridor/ from last week, and
+      a cache miss silently means no baseline.
+    required: false
+    default: ""
+  fail-on-drift:
+    description: >-
+      drift mode only; empty means opened. opened fails when an identity that
+      was refused is now served, or when another identity's marker appeared
+      in a response. any fails on any difference, including a status code
+      changing. none reports and never fails. This default differs from
+      `veridor map`, where it is none: the CLI is a discovery command with
+      many uses, while selecting this mode in CI is itself the request for a
+      gate.
+    required: false
+    default: ""
+  drift:
+    description: >-
+      drift mode only. Optional path for the machine-readable drift report
+      JSON. Empty means a file under RUNNER_TEMP; drift-json names it.
+    required: false
+    default: ""
+  matrix:
+    description: >-
+      drift mode only. Optional path to also write this run's matrix. Copy it
+      over matrix-baseline and commit to accept the change that caused the
+      drift.
+    required: false
+    default: ""
+  acknowledge-target:
+    description: >-
+      drift mode only. Required verbatim by `veridor map` when the target is
+      neither loopback nor a private address: "I am authorized to test HOST".
+      A job pointed at a real staging host needs this; one pointed at a
+      service container on localhost does not.
+    required: false
+    default: ""
+  max-requests:
+    description: >-
+      drift mode only. Refuse to start when the matrix plan is larger than
+      this (Veridor's default is 500). The refusal happens before the first
+      request.
+    required: false
+    default: ""
+  rate:
+    description: drift mode only. Requests per second, sequential (Veridor's default is 2).
+    required: false
+    default: ""
+  read-only:
+    description: >-
+      run mode. true refuses a configuration that can issue any request
+      outside GET, HEAD and OPTIONS -- check, sequence step, teardown, login
+      or marker probe. The load fails with exit 2 before a single request is
+      sent. The recommended setting for any target you did not personally
+      provision. true is refused in drift mode: `veridor map` sends no
+      mutating verb unless one is named for it, and this action names none.
+      Only true or false (any case) is accepted; anything else is refused.
+    required: false
+    default: "false"
+  require-complete:
+    description: >-
+      Both modes, and ON by default here. Exits 3 when any probe went
+      unanswered -- a rate limit, a 5xx, a timeout, a body too large to scan --
+      and, in run mode, when a denial is unproven (liveness.unproven): a
+      denial-only expectation (in a check, or a sequence assert step) whose
+      identity presents a credential, where some identity was served in the
+      same check or sequence, that nothing else in the run proved live (a 2xx
+      it drew on a request where an identity with no credential, or the
+      fabricated credential, was refused; or its marker_probe), and that a
+      fabricated credential could not tell apart from a dead token: it drew
+      the same denial, none was sent (with every POST, PUT, PATCH or DELETE,
+      inside a sequence, or when no identity declares a credential header),
+      its request failed, or its answer was neither a refusal nor a success.
+      Give that identity a marker_probe. The step log names the identity.
+      Those boundaries are unverified rather than verified, and a job reads an
+      exit code rather than a summary. A real finding always wins the exit
+      code. This default differs from the CLI, where it is opt-in: the CLI is
+      used interactively and a partial answer is often exactly what you asked
+      for, while selecting this action is itself the request for a gate. Set
+      it to false to accept a partially measured run as a pass. Only true or
+      false (any case) is accepted; anything else is refused.
+    required: false
+    default: "true"
+  require-clean-teardown:
+    description: >-
+      run mode. true additionally exits 3 when a sequence teardown did not
+      complete cleanly, so a job can tell "the gate passed" from "the gate
+      passed and the target may still hold fixtures this run created". A real
+      finding always wins the exit code. true is refused in drift mode: `map`
+      runs no sequence, so there is no teardown to require. Only true or
+      false (any case) is accepted; anything else is refused.
+    required: false
+    default: "false"
+outputs:
+  exit-code:
+    description: >-
+      Veridor's exit code, as a string: 0 pass, 1 the gate failed, 2 a
+      refusal (by Veridor or by this action), 3 the gate passed but something
+      was not measured, 70 Veridor crashed (a bug, not a finding), 130
+      SIGINT, 143 SIGTERM. Written on every path out of the step. If this
+      action's own script fails it is that script's non-zero status. The
+      action fails the step on any non-zero code, so a workflow that reads
+      this after a failure must set continue-on-error -- WHICH TURNS THE GATE
+      OFF until you re-fail the job yourself on this value.
+    value: ${{ steps.veridor.outputs.exit-code }}
+  version:
+    description: The Veridor version this action ran, read from its own checkout.
+    value: ${{ steps.veridor.outputs.version }}
+  run-json:
+    description: >-
+      run mode. Path of the run document, whether or not `json` was set.
+      Empty unless Veridor wrote that file during this step (after a
+      refusal, for one).
+    value: ${{ steps.veridor.outputs.run-json }}
+  sarif:
+    description: >-
+      run mode. Path of the SARIF file; empty unless Veridor wrote it during
+      this step. Condition an upload on this output, not on hashFiles: a
+      file an earlier step left at the path is not this run's.
+    value: ${{ steps.veridor.outputs.sarif }}
+  junit:
+    description: run mode. Path of the JUnit XML report; empty unless Veridor wrote it during this step.
+    value: ${{ steps.veridor.outputs.junit }}
+  markdown:
+    description: Path of the Markdown report; empty unless Veridor wrote it during this step.
+    value: ${{ steps.veridor.outputs.markdown }}
+  drift-json:
+    description: >-
+      drift mode. Path of the drift report, whether or not `drift` was set;
+      empty unless Veridor wrote that file during this step.
+    value: ${{ steps.veridor.outputs.drift-json }}
+  coverage-json:
+    description: >-
+      Path of the coverage document when openapi is set, whether or not
+      `coverage` was set; empty unless Veridor wrote that file during this
+      step.
+    value: ${{ steps.veridor.outputs.coverage-json }}
+  run-id:
+    description: run mode. The run identifier, for correlating artifacts.
+    value: ${{ steps.veridor.outputs.run-id }}
+  gate-exit-code:
+    description: >-
+      run mode. The exit code the gate decided, from the run document's gate
+      object. Equal to exit-code unless writing a report failed afterwards.
+    value: ${{ steps.veridor.outputs.gate-exit-code }}
+  gate-reasons:
+    description: >-
+      run mode. The gate object's reasons as one line of JSON: a list of
+      objects with a machine-readable code (findings, nothing_answered,
+      identity_unauthenticated, inconclusive, ...) and the exit code it
+      carries. [] when the gate passed.
+    value: ${{ steps.veridor.outputs.gate-reasons }}
+  findings:
+    description: run mode. Total findings, of every verdict.
+    value: ${{ steps.veridor.outputs.findings }}
+  findings-new:
+    description: run mode. Findings absent from the baseline.
+    value: ${{ steps.veridor.outputs.findings-new }}
+  findings-vulnerable:
+    description: >-
+      run mode. Findings whose verdict is `vulnerable`. This is the number a
+      summary comment should quote; `findings` includes inconclusive probes.
+    value: ${{ steps.veridor.outputs.findings-vulnerable }}
+  findings-inconclusive:
+    description: >-
+      run mode. Probes that could not be graded. A gate that passes with a
+      high number here has not established what its silence suggests.
+    value: ${{ steps.veridor.outputs.findings-inconclusive }}
+  coverage-percent:
+    description: Boundary coverage as a percentage, to one decimal place.
+    value: ${{ steps.veridor.outputs.coverage-percent }}
+  coverage-status:
+    description: >-
+      The coverage document's own status string, passed through verbatim. Not
+      an enumeration this file invents: `coverage` asserts what is declared
+      and enforces no threshold, so do not branch on a value you have not
+      seen this tool emit.
+    value: ${{ steps.veridor.outputs.coverage-status }}
+  drift-changes:
+    description: drift mode. Number of differences from the baseline.
+    value: ${{ steps.veridor.outputs.drift-changes }}
+  drift-significant:
+    description: drift mode. Differences that mean MORE access than the baseline.
+    value: ${{ steps.veridor.outputs.drift-significant }}
+  drift-blind-cells:
+    description: >-
+      drift mode. Cells the BASELINE never measured. A regression there can
+      never be reported as more access, so a quiet report with a high number
+      here is quiet about a part of the grid, not evidence about it.
+    value: ${{ steps.veridor.outputs.drift-blind-cells }}
+runs:
+  using: composite
+  steps:
+    - name: Run Veridor
+      id: veridor
+      shell: bash
+      env:
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_CONFIG: ${{ inputs.config }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_OUTPUT_DIR: ${{ inputs['output-dir'] }}
+        INPUT_SARIF: ${{ inputs.sarif }}
+        INPUT_JUNIT: ${{ inputs.junit }}
+        INPUT_MARKDOWN: ${{ inputs.markdown }}
+        INPUT_SUMMARY: ${{ inputs.summary }}
+        INPUT_FAIL_ON: ${{ inputs['fail-on'] }}
+        INPUT_JSON: ${{ inputs.json }}
+        INPUT_BASE_URL: ${{ inputs['base-url'] }}
+        INPUT_WAIT_FOR_TARGET: ${{ inputs['wait-for-target'] }}
+        INPUT_OPENAPI: ${{ inputs.openapi }}
+        INPUT_COVERAGE: ${{ inputs.coverage }}
+        INPUT_BADGE: ${{ inputs.badge }}
+        INPUT_BASE_PATH: ${{ inputs['base-path'] }}
+        INPUT_ALLOW_NO_MATCHES: ${{ inputs['allow-no-matches'] }}
+        INPUT_MATRIX_BASELINE: ${{ inputs['matrix-baseline'] }}
+        INPUT_FAIL_ON_DRIFT: ${{ inputs['fail-on-drift'] }}
+        INPUT_DRIFT: ${{ inputs.drift }}
+        INPUT_MATRIX: ${{ inputs.matrix }}
+        INPUT_ACKNOWLEDGE_TARGET: ${{ inputs['acknowledge-target'] }}
+        INPUT_MAX_REQUESTS: ${{ inputs['max-requests'] }}
+        INPUT_RATE: ${{ inputs.rate }}
+        INPUT_READ_ONLY: ${{ inputs['read-only'] }}
+        INPUT_REQUIRE_COMPLETE: ${{ inputs['require-complete'] }}
+        INPUT_REQUIRE_CLEAN_TEARDOWN: ${{ inputs['require-clean-teardown'] }}
+      run: |
+        # Every value arrives through env:, never through an expression in
+        # this script, so no input can inject shell. The runner executes this
+        # file as `bash --noprofile --norc -eo pipefail`: any command of this
+        # script's own that fails ends the step non-zero (fail closed).
+        # Written for bash 3.2 too, the bash macOS ships.
+        status=2
+        refused=false
+        veridor_ran=false
+        finished=false
+
+        refuse() {
+          refused=true
+          echo "::error title=Veridor action refused::$*" >&2
+          exit 2
+        }
+
+        # `exit-code` is a contract: a workflow that branches on it must never
+        # read an empty string and take it for a pass, so it is written on
+        # every path out of this script. (Invoked by the trap below.)
+        # shellcheck disable=SC2329
+        on_exit() {
+          local rc=$?
+          local code="$status"
+          if [[ "$finished" != true && "$refused" != true ]]; then
+            echo "::error title=Veridor action failed::this action's own script failed with exit ${rc} (Veridor ran: ${veridor_ran}). That is a defect in the action, not a finding about your target." >&2
+            if [[ "$veridor_ran" != true || "$code" == 0 ]]; then
+              code="$rc"
+            fi
+          fi
+          printf 'exit-code=%s\n' "$code" >> "$GITHUB_OUTPUT"
+        }
+
+        if [[ -z "${GITHUB_OUTPUT:-}" || -z "${GITHUB_ACTION_PATH:-}" ]]; then
+          echo "::error title=Veridor action refused::GITHUB_OUTPUT and GITHUB_ACTION_PATH must be set; this script runs as a GitHub Actions composite step." >&2
+          exit 2
+        fi
+        trap on_exit EXIT
+
+        # A line break in any input could forge extra lines in GITHUB_OUTPUT,
+        # and no path, URL or acknowledgement legitimately contains one.
+        names=(MODE CONFIG BASELINE OUTPUT_DIR SARIF JUNIT MARKDOWN SUMMARY FAIL_ON JSON
+          BASE_URL WAIT_FOR_TARGET OPENAPI COVERAGE BADGE BASE_PATH ALLOW_NO_MATCHES MATRIX_BASELINE
+          FAIL_ON_DRIFT DRIFT MATRIX ACKNOWLEDGE_TARGET MAX_REQUESTS RATE READ_ONLY
+          REQUIRE_COMPLETE REQUIRE_CLEAN_TEARDOWN)
+        for name in "${names[@]}"; do
+          variable="INPUT_${name}"
+          value="${!variable-}"
+          case "$value" in
+            *$'\n'* | *$'\r'*)
+              refuse "input $(printf '%s' "$name" | tr '[:upper:]_' '[:lower:]-') contains a line break"
+              ;;
+          esac
+        done
+
+        # Booleans are exactly true or false, in any case. `read-only: yes`
+        # used to compare unequal to "true" and silently turned the refusal of
+        # mutating requests OFF; `require-complete: 1` switched the default-on
+        # gate off. A value that is neither is refused, never guessed.
+        read_only="" require_complete="" require_clean_teardown="" allow_no_matches="" summary=""
+        parse_boolean() {
+          case "$3" in
+            [Tt][Rr][Uu][Ee]) printf -v "$1" '%s' true ;;
+            [Ff][Aa][Ll][Ss][Ee]) printf -v "$1" '%s' false ;;
+            *) refuse "input $2 must be true or false, got '$3'. Write true or false; yes, 1, on and an empty value are refused rather than guessed." ;;
+          esac
+        }
+        parse_boolean read_only read-only "$INPUT_READ_ONLY"
+        parse_boolean require_complete require-complete "$INPUT_REQUIRE_COMPLETE"
+        parse_boolean require_clean_teardown require-clean-teardown "$INPUT_REQUIRE_CLEAN_TEARDOWN"
+        parse_boolean allow_no_matches allow-no-matches "$INPUT_ALLOW_NO_MATCHES"
+        parse_boolean summary summary "$INPUT_SUMMARY"
+
+        # A whole number of seconds, like the flag it becomes. `60s`, `-1` or
+        # `1.5` would reach veridor as an argument error (exit 2) anyway; saying
+        # so here names the input instead of the flag.
+        if [[ ! "$INPUT_WAIT_FOR_TARGET" =~ ^[0-9]+$ ]]; then
+          refuse "input wait-for-target must be a whole number of seconds, 0 or more, got '${INPUT_WAIT_FOR_TARGET}'. 0 does not wait."
+        fi
+
+        # Python: the first of python3, python that is 3.11 or newer. The
+        # version is parsed here rather than trusted from an exit status.
+        python=""
+        found=""
+        for candidate in python3 python; do
+          path="$(command -v "$candidate" || true)"
+          [[ -n "$path" ]] || continue
+          if ! version="$("$path" -I -c 'import sys; print("%d.%d.%d" % sys.version_info[:3])' 2>&1)"; then
+            found="${found}${found:+; }${candidate} at ${path} did not run (${version})"
+            continue
+          fi
+          found="${found}${found:+; }${candidate} ${version} at ${path}"
+          if [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.[0-9]+$ ]]; then
+            major="${BASH_REMATCH[1]}"
+            minor="${BASH_REMATCH[2]}"
+            if (( major > 3 || (major == 3 && minor >= 11) )); then
+              python="$path"
+              break
+            fi
+          fi
+        done
+        if [[ -z "$python" ]]; then
+          refuse "Veridor needs Python 3.11 or newer; found ${found:-neither python3 nor python on PATH}. Add actions/setup-python with python-version: '3.12' (or any 3.11+) before this step."
+        fi
+
+        # Veridor runs from this action's own checkout. -P keeps the working
+        # directory -- the caller's repository -- off sys.path, so a directory
+        # named veridor/ in that repository cannot stand in for the package.
+        # The location is checked, not assumed.
+        src="${GITHUB_ACTION_PATH}/src"
+        [[ -d "${src}/veridor" ]] || refuse "no Veridor package at ${src}/veridor; this action runs from its own checkout"
+        if ! located="$(PYTHONPATH="$src" "$python" -P -c '
+        import os, sys
+        import veridor
+        expected = os.path.realpath(os.path.join(sys.argv[1], "veridor"))
+        actual = os.path.realpath(os.path.dirname(veridor.__file__))
+        print(veridor.__version__, actual)
+        sys.exit(0 if actual == expected else 3)
+        ' "$src" 2>&1)"; then
+          refuse "Veridor did not load from this action's checkout (${src}): ${located}"
+        fi
+        veridor_version="${located%% *}"
+        echo "Veridor ${veridor_version} from ${located#* } (Python ${version} at ${python})"
+
+        veridor() {
+          PYTHONPATH="$src" "$python" -P -m veridor "$@"
+        }
+
+        # Fresh per invocation: a fixed path let a second Veridor step in the
+        # same job read the FIRST step's counts and report them as its own.
+        scratch="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/veridor-action.XXXXXX")"
+        run_json=""
+        drift_json=""
+        coverage_json=""
+        sarif=""
+        junit=""
+        markdown="${INPUT_MARKDOWN:-${scratch}/veridor.md}"
+
+        # An input belonging to the other mode is refused, never ignored:
+        # silently dropping `sarif` from a drift step would leave the workflow
+        # waiting on a file that was never going to arrive. Mode-specific
+        # inputs default to empty so that "not given" is distinguishable.
+        case "$INPUT_MODE" in
+          run)
+            for pair in "matrix-baseline=$INPUT_MATRIX_BASELINE" "drift=$INPUT_DRIFT" \
+                "matrix=$INPUT_MATRIX" "acknowledge-target=$INPUT_ACKNOWLEDGE_TARGET" \
+                "max-requests=$INPUT_MAX_REQUESTS" "rate=$INPUT_RATE" \
+                "fail-on-drift=$INPUT_FAIL_ON_DRIFT"; do
+              if [[ -n "${pair#*=}" ]]; then
+                refuse "input ${pair%%=*} requires mode: drift; this step is mode: run"
+              fi
+            done
+            sarif="${INPUT_SARIF:-veridor.sarif}"
+            junit="${INPUT_JUNIT:-${scratch}/veridor-junit.xml}"
+            run_json="${INPUT_JSON:-${scratch}/run.json}"
+            args=(
+              run
+              --config "$INPUT_CONFIG"
+              --output-dir "$INPUT_OUTPUT_DIR"
+              --sarif "$sarif"
+              --fail-on "${INPUT_FAIL_ON:-new+confirmed}"
+              --json "$run_json"
+              --report "junit=${junit}"
+              --report "markdown=${markdown}"
+            )
+            if [[ -n "$INPUT_BASELINE" ]]; then
+              args+=(--baseline "$INPUT_BASELINE")
+            fi
+            if [[ "$read_only" == true ]]; then
+              args+=(--read-only)
+            fi
+            if [[ "$require_complete" == true ]]; then
+              args+=(--require-complete)
+            fi
+            if [[ "$require_clean_teardown" == true ]]; then
+              args+=(--require-clean-teardown)
+            fi
+            ;;
+          drift)
+            for pair in "baseline=$INPUT_BASELINE" "json=$INPUT_JSON" "sarif=$INPUT_SARIF" \
+                "junit=$INPUT_JUNIT" "fail-on=$INPUT_FAIL_ON"; do
+              if [[ -n "${pair#*=}" ]]; then
+                refuse "input ${pair%%=*} is a run-mode input; drift compares matrices (matrix-baseline, drift), writes no SARIF or JUnit, and gates through fail-on-drift"
+              fi
+            done
+            if [[ "$read_only" == true || "$require_clean_teardown" == true ]]; then
+              refuse "read-only and require-clean-teardown are run-mode inputs; map sends no mutating verb unless one is named for it and this action names none, and map runs no sequence so there is no teardown to require"
+            fi
+            if [[ -z "$INPUT_OPENAPI" ]]; then
+              refuse "mode: drift requires the openapi input; the matrix is projected from that inventory and Veridor never discovers routes"
+            fi
+            if [[ -z "$INPUT_MATRIX_BASELINE" ]]; then
+              refuse "mode: drift requires matrix-baseline. Record one with 'veridor map --config ... --openapi ...' and commit the matrix JSON it writes"
+            fi
+            if [[ ! -e "$INPUT_MATRIX_BASELINE" ]]; then
+              refuse "matrix-baseline '${INPUT_MATRIX_BASELINE}' does not exist. A missing baseline fails here rather than passing as a gate with nothing to compare"
+            fi
+            # fail-on-drift defaults to `opened` here, so this step is always a
+            # gate and a directory baseline is always a ratchet: it resolves to
+            # the newest matrix, this run writes one more, and the re-run of a
+            # red build compares the regression against itself.
+            if [[ -d "$INPUT_MATRIX_BASELINE" ]]; then
+              refuse "matrix-baseline '${INPUT_MATRIX_BASELINE}' is a directory. A gate compares against a committed FILE: a directory resolves to the newest matrix in it, so a re-run of a failed job would compare the regression against itself and pass"
+            fi
+            drift_json="${INPUT_DRIFT:-${scratch}/drift.json}"
+            args=(
+              map
+              --config "$INPUT_CONFIG"
+              --output-dir "$INPUT_OUTPUT_DIR"
+              --baseline "$INPUT_MATRIX_BASELINE"
+              --fail-on-drift "${INPUT_FAIL_ON_DRIFT:-opened}"
+              --drift "$drift_json"
+            )
+            if [[ -n "$INPUT_MATRIX" ]]; then
+              args+=(--matrix "$INPUT_MATRIX")
+            fi
+            if [[ -n "$INPUT_ACKNOWLEDGE_TARGET" ]]; then
+              args+=(--acknowledge-target "$INPUT_ACKNOWLEDGE_TARGET")
+            fi
+            if [[ -n "$INPUT_MAX_REQUESTS" ]]; then
+              args+=(--max-requests "$INPUT_MAX_REQUESTS")
+            fi
+            if [[ -n "$INPUT_RATE" ]]; then
+              args+=(--rate "$INPUT_RATE")
+            fi
+            if [[ "$require_complete" == true ]]; then
+              args+=(--require-complete)
+            fi
+            ;;
+          *)
+            refuse "unknown mode '${INPUT_MODE}'; expected 'run' or 'drift'"
+            ;;
+        esac
+
+        if [[ -n "$INPUT_BASE_URL" ]]; then
+          args+=(--base-url "$INPUT_BASE_URL")
+        fi
+        # Only digits by now; any non-zero digit means a wait. Passed as typed,
+        # never through shell arithmetic, which would overflow a long number.
+        if [[ "$INPUT_WAIT_FOR_TARGET" =~ [1-9] ]]; then
+          args+=(--wait-for-target "$INPUT_WAIT_FOR_TARGET")
+        fi
+        if [[ -n "$INPUT_OPENAPI" ]]; then
+          args+=(--openapi "$INPUT_OPENAPI")
+          coverage_json="${INPUT_COVERAGE:-${scratch}/coverage.json}"
+          args+=(--coverage "$coverage_json")
+          if [[ -n "$INPUT_BADGE" ]]; then
+            args+=(--badge "$INPUT_BADGE")
+          fi
+          if [[ -n "$INPUT_BASE_PATH" ]]; then
+            args+=(--base-path "$INPUT_BASE_PATH")
+          fi
+          if [[ "$allow_no_matches" == true ]]; then
+            args+=(--allow-no-matches)
+          fi
+        elif [[ -n "${INPUT_COVERAGE}${INPUT_BADGE}${INPUT_BASE_PATH}" || "$allow_no_matches" == true ]]; then
+          refuse "coverage, badge, base-path and allow-no-matches: true require the openapi input"
+        fi
+
+        # A document is read back, and a path output set, only if Veridor wrote
+        # the file during THIS step: a file left at a caller's `json:` or
+        # `sarif:` path by an earlier step must not be reported, or uploaded,
+        # as this run's. Before Veridor starts, record which file sits at each
+        # path this step passes it (device and inode, or none); afterwards a
+        # path counts only if a different file is there. Veridor writes every
+        # document and report by renaming a new file over the path
+        # (core.write_json, reports.write_text), so what it wrote always has
+        # an identity that was not there before. No clock is involved: the mtime comparison this
+        # replaces read a stale document from the same second as this step's
+        # start (one-second mtimes), or from a clock ahead, as this step's own.
+        before="${scratch}/before.json"
+        "$python" -I -c '
+        import json, os, sys
+        def identity(path):
+            try:
+                found = os.lstat(path)
+            except OSError:
+                return None
+            return [found.st_dev, found.st_ino]
+        with open(sys.argv[1], "w", encoding="utf-8") as handle:
+            json.dump({path: identity(path) for path in sys.argv[2:] if path}, handle)
+        ' "$before" "$run_json" "$coverage_json" "$drift_json" "$sarif" "$junit" "$markdown"
+        fresh() {
+          "$python" -I -c '
+        import json, os, stat, sys
+        path = sys.argv[1]
+        with open(sys.argv[2], encoding="utf-8") as handle:
+            before = json.load(handle)
+        try:
+            found = os.lstat(path)
+        except OSError:
+            sys.exit(1)
+        new = [found.st_dev, found.st_ino] != before.get(path, "unrecorded")
+        sys.exit(0 if path in before and stat.S_ISREG(found.st_mode) and new else 1)
+        ' "$1" "$before"
+        }
+
+        set +e
+        veridor "${args[@]}"
+        status=$?
+        set -e
+        veridor_ran=true
+
+        case "$status" in
+          0) echo "Veridor exited 0." ;;
+          1) echo "::error title=Veridor gate failed::Veridor exited 1: the gate failed (mode run: findings the fail-on policy selects; mode drift: access widened against the baseline). The job summary and the reports list them." >&2 ;;
+          2) echo "::error title=Veridor refused::Veridor exited 2: it refused its configuration or inputs, or could not write an output, before a verdict. The reason is in this step's log." >&2 ;;
+          3)
+            if [[ "$INPUT_MODE" == drift ]]; then
+              echo "::error title=Veridor gate incomplete::Veridor exited 3: no drift was found, but the comparison measured too little to be a pass: no cell was measured in both this run and the baseline (a baseline recorded while the target was down is the usual cause), this run's matrix measured nothing, or, with require-complete, a probed cell went unmeasured. The reason is in this step's log." >&2
+            else
+              echo "::error title=Veridor gate incomplete::Veridor exited 3: the security gate passed but something was not measured (an unanswered probe, nothing answered at all, an unauthenticated identity, an unclean teardown, or with require-complete an unproven denial: a denial-only expectation no evidence ties to a live credential). The reason is in this step's log. That is not a pass." >&2
+            fi
+            ;;
+          70) echo "::error title=Veridor internal error::Veridor exited 70: it crashed with an uncaught exception. This is a bug in Veridor, not a finding about your target; the traceback is in this step's log." >&2 ;;
+          130) echo "::error title=Veridor interrupted::Veridor exited 130: stopped by SIGINT before it finished. Teardown for an in-flight sequence runs before this exit. Nothing was concluded: this is neither a pass nor a finding." >&2 ;;
+          143) echo "::error title=Veridor terminated::Veridor exited 143: stopped by SIGTERM (a cancelled job, a timeout, a runner shutting down) before it finished. Teardown for an in-flight sequence runs before this exit. Nothing was concluded: this is neither a pass nor a finding." >&2 ;;
+          *) echo "::error title=Veridor exit code::Veridor exited ${status}, a code this action does not define." >&2 ;;
+        esac
+
+        if [[ -n "$drift_json" ]] && fresh "$drift_json"; then
+          veridor report --from-drift "$drift_json" --format markdown --output "$markdown"
+        fi
+
+        # A path output names a file this step wrote, or is empty. It used to
+        # be set whatever happened, so after a refusal `outputs.sarif` named
+        # whatever an earlier step had left at that path.
+        printf 'version=%s\n' "$veridor_version" >> "$GITHUB_OUTPUT"
+        for pair in "run-json=$run_json" "drift-json=$drift_json" "coverage-json=$coverage_json" \
+            "sarif=$sarif" "junit=$junit" "markdown=$markdown"; do
+          if [[ -n "${pair#*=}" ]] && fresh "${pair#*=}"; then
+            printf '%s\n' "$pair" >> "$GITHUB_OUTPUT"
+          fi
+        done
+
+        # Counts and the gate decision, from documents this step wrote. A
+        # document that is missing (a refusal writes none) contributes
+        # nothing; one that exists and does not parse fails the step.
+        documents=()
+        for document in "$run_json" "$coverage_json" "$drift_json"; do
+          if [[ -n "$document" ]] && fresh "$document"; then
+            documents+=("$document")
+          else
+            documents+=("")
+          fi
+        done
+        "$python" -I - "${documents[@]}" <<'PY'
+        import json, os, sys, uuid
+
+        def document(path):
+            if not path:
+                return None
+            with open(path, encoding="utf-8") as handle:
+                loaded = json.load(handle)
+            if not isinstance(loaded, dict):
+                raise SystemExit(f"{path} is not a JSON object")
+            return loaded
+
+        lines = []
+
+        def emit(name, value):
+            if value is None:
+                return
+            if isinstance(value, bool):
+                value = "true" if value else "false"
+            elif not isinstance(value, str):
+                value = json.dumps(value, separators=(",", ":"), sort_keys=True)
+            delimiter = "veridor_" + uuid.uuid4().hex
+            lines.append(f"{name}<<{delimiter}\n{value}\n{delimiter}\n")
+
+        run, coverage, drift = (document(path) for path in sys.argv[1:4])
+        if run:
+            summary = run.get("summary") or {}
+            gate = run.get("gate") or {}
+            emit("run-id", run.get("run_id"))
+            emit("findings", len(run.get("findings") or []))
+            emit("findings-new", summary.get("new"))
+            emit("findings-vulnerable", summary.get("vulnerable"))
+            emit("findings-inconclusive", summary.get("inconclusive"))
+            emit("gate-exit-code", gate.get("exit_code"))
+            emit("gate-reasons", gate.get("reasons"))
+        if coverage:
+            ratio = coverage.get("coverage")
+            emit("coverage-status", coverage.get("status"))
+            emit("coverage-percent", None if ratio is None else round(100 * ratio, 1))
+        if drift:
+            emit("drift-changes", len(drift.get("changes") or []))
+            emit("drift-significant", drift.get("significant"))
+            emit("drift-blind-cells", drift.get("blind_cells"))
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+            handle.write("".join(lines))
+        PY
+
+        # The job summary is appended to, never replaced: earlier steps in the
+        # job write to the same page.
+        if [[ "$summary" == true ]]; then
+          if [[ -z "${GITHUB_STEP_SUMMARY:-}" ]]; then
+            echo "::warning title=Veridor summary::GITHUB_STEP_SUMMARY is not set, so no job summary was written."
+          elif [[ -n "$run_json" ]] && fresh "$run_json"; then
+            veridor report --from-run "$run_json" --format markdown >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -n "$drift_json" ]] && fresh "$drift_json"; then
+            veridor report --from-drift "$drift_json" --format markdown >> "$GITHUB_STEP_SUMMARY"
+          else
+            printf '\n**Veridor exited %s before it wrote a %s document**, so there is nothing to summarise and nothing was concluded. The reason is in the log of the step that ran Veridor.\n' \
+              "$status" "$INPUT_MODE" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        fi
+
+        # Deliberately 0: outputs are read from a step that COMPLETED, and the
+        # step below turns Veridor's code into the job's verdict.
+        finished=true
+        exit 0
+    - name: Fail the job on Veridor's exit code
+      shell: bash
+      env:
+        VERIDOR_EXIT_CODE: ${{ steps.veridor.outputs.exit-code }}
+      run: |
+        # An absent or non-numeric code means the step above never reached an
+        # opinion. That is not a pass.
+        code="${VERIDOR_EXIT_CODE:-}"
+        if [[ ! "$code" =~ ^[0-9]+$ ]]; then
+          echo "::error title=Veridor action failed::no usable exit code from the Veridor step (got '${code}'); failing closed." >&2
+          exit 1
+        fi
+        exit "$code"

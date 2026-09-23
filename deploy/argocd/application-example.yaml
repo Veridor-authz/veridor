@@ -1,0 +1,108 @@
+# Example: an Argo CD Application that deploys an app and runs the
+# veridor-gate chart as its PostSync hook. Two sources, one Application: the
+# gate belongs to the app it gates, so a sync of the app is a run of the gate.
+#
+# Replace:
+#   sources[0]           your application's source
+#   sources[1].repoURL   the Helm repository YOU serve the veridor-gate chart
+#                        from. The chart is not published to a public chart
+#                        repository at this version: `helm package
+#                        deploy/helm/veridor-gate` and host it, or point a Git
+#                        source (repoURL + path: deploy/helm/veridor-gate) at a
+#                        copy of this repository.
+#   valuesObject         your target Service, Secret and Veridor configuration,
+#                        and the gate's image.repository and image.tag. The
+#                        chart's default image is not published at this version,
+#                        so the PostSync Job cannot pull it: build one from the
+#                        repository's Dockerfile.
+#
+# The Secret named in secretEnv is not created by this Application. Create it
+# (or sync it from your secret manager) in the destination namespace first.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: invoices-api
+  namespace: argocd
+spec:
+  project: default
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: shop
+  sources:
+    - repoURL: https://git.example.com/shop/invoices-api.git
+      targetRevision: main
+      path: deploy
+    - repoURL: https://charts.example.com/veridor
+      chart: veridor-gate
+      targetRevision: 0.1.0
+      helm:
+        releaseName: invoices-api-gate
+        valuesObject:
+          # Argo CD gives each sync's gate Job a name of its own
+          # (invoices-api-gate-veridor-gate--postsync-<start>: no revision
+          # with several sources); read it from the sync's syncResult. Each
+          # Job and its log stay for job.ttlSecondsAfterFinished (3600 s)
+          # after it finished.
+          hook:
+            mode: argocd
+            argocd:
+              phase: PostSync
+          # Best a Service that selects only the pods this sync rolled out:
+          # the app's own Service can still route to a pod being replaced
+          # (README, "Sync waves and ordering").
+          target:
+            baseUrl: http://invoices-api.shop.svc.cluster.local:8080
+          secretEnv:
+            - name: VERIDOR_OWNER_TOKEN
+              secretName: invoices-gate-credentials
+              key: owner-token
+            - name: VERIDOR_OUTSIDER_TOKEN
+              secretName: invoices-gate-credentials
+              key: outsider-token
+          gate:
+            failOn: new+confirmed
+            requireComplete: true
+          config:
+            version: 1
+            target:
+              base_url: http://invoices-api.shop.svc.cluster.local:8080
+              timeout_seconds: 5
+            identities:
+              invoice_owner:
+                headers:
+                  Authorization: Bearer ${VERIDOR_OWNER_TOKEN}
+                marker: vdr-Xk7Qm2Ls9Rt4Vb8Nc3Zp6Wf1
+              # marker + marker_probe: something this identity IS served,
+              # which proves its token is live. Without them a target that
+              # answers an unknown token with the same 404 leaves the denial
+              # below unproven, and requireComplete exits 3
+              # (liveness_unproven) against a fixed target.
+              other_tenant:
+                headers:
+                  Authorization: Bearer ${VERIDOR_OUTSIDER_TOKEN}
+                marker: vdr-Bq3Wm8Ke5Tz1Yx7Rn2Hd4Vs6
+                marker_probe:
+                  method: GET
+                  path: /api/invoices/inv-200
+              anonymous:
+                headers: {}
+            checks:
+              - id: invoice-tenant-isolation
+                name: Invoice tenant isolation
+                request:
+                  method: GET
+                  path: /api/invoices/inv-100
+                expect:
+                  invoice_owner:
+                    status: [200]
+                    contains_marker: invoice_owner
+                  other_tenant:
+                    status: [404]
+                    excludes_marker: invoice_owner
+                  anonymous:
+                    status: [401]
+  # No syncPolicy.retry: a retried sync re-runs the gate, and a gate that is
+  # retried until it passes reports the luckiest attempt.
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=false

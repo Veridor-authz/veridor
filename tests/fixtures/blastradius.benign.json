@@ -1,0 +1,137 @@
+{
+ "version": 1,
+ "target": {
+  "base_url": "http://127.0.0.1:8765",
+  "timeout_seconds": 3
+ },
+ "identities": {
+  "alice": {
+   "headers": {
+    "Authorization": "Bearer alice-token"
+   },
+   "marker": "veridor-marker-alice"
+  },
+  "bob": {
+   "headers": {
+    "Authorization": "Bearer bob-token"
+   }
+  },
+  "carol": {
+   "headers": {
+    "Authorization": "Bearer carol-token"
+   }
+  },
+  "admin": {
+   "headers": {
+    "Authorization": "Bearer admin-token"
+   }
+  },
+  "anon": {
+   "headers": {}
+  }
+ },
+ "checks": [
+  {
+   "id": "invoice-owner-reads-own-invoice",
+   "name": "The invoice owner can read her own invoice",
+   "request": {
+    "method": "GET",
+    "path": "/api/invoices/id-1"
+   },
+   "expect": {
+    "alice": {
+     "status": [
+      200
+     ]
+    },
+    "carol": {
+     "status": [
+      404
+     ]
+    }
+   }
+  }
+ ],
+ "matrix": {
+  "specimens": {
+   "/api/invoices/{id}": [
+    {
+     "label": "owner_invoice",
+     "values": {
+      "id": "id-1"
+     }
+    }
+   ],
+   "/api/config/{key}": [
+    {
+     "label": "smtp_host",
+     "values": {
+      "key": "key-1"
+     }
+    }
+   ],
+   "/api/announcements/{id}": [
+    {
+     "label": "tenant_a_announcement",
+     "values": {
+      "id": "id-1"
+     }
+    }
+   ],
+   "/api/reports/{id}": [
+    {
+     "label": "tenant_a_report",
+     "values": {
+      "id": "id-1"
+     }
+    }
+   ],
+   "/api/teams/{tid}/members": [
+    {
+     "label": "tenant_a_team",
+     "values": {
+      "tid": "tid-1"
+     }
+    }
+   ],
+   "/api/users/{uid}/profile": [
+    {
+     "label": "own_profile",
+     "per_identity": {
+      "alice": {
+       "uid": "u-alice"
+      },
+      "bob": {
+       "uid": "u-bob"
+      },
+      "carol": {
+       "uid": "u-carol"
+      },
+      "admin": {
+       "uid": "u-admin"
+      },
+      "anon": {
+       "uid": "u-anon"
+      }
+     }
+    }
+   ]
+  },
+  "marker_owner": "alice",
+  "peer_groups": {
+   "tenant_users": [
+    "alice",
+    "bob",
+    "carol"
+   ]
+  },
+  "privilege_order": [
+   "anon",
+   "carol",
+   "bob",
+   "alice",
+   "admin"
+  ],
+  "unauthenticated": "anon"
+ }
+}

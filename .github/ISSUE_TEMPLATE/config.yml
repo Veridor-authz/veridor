@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability in Veridor
+    url: https://github.com/Veridor-authz/veridor/blob/main/SECURITY.md
+    about: >-
+      Anything that would let an attacker reach a target, escape a safety gate,
+      or read a credential. SECURITY.md has the private reporting form and what
+      to include. Please do not open a public issue for these.

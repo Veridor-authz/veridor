@@ -1,0 +1,151 @@
+# Argo Rollouts AnalysisTemplate: run `veridor run` against the CANARY before
+# it takes more traffic. Job provider: the Job succeeding is a Successful
+# measurement, the Job failing is a Failed one, and failureLimit 0 means one
+# failure aborts the rollout: the canary is scaled down and the stable
+# ReplicaSet keeps serving.
+#
+# Veridor's exit code decides the Job: 0 passes; 1 (findings), 2 (configuration
+# refused), 3 (something went unmeasured -- --require-complete is on) and 70
+# (internal error) all fail it. The job provider has no Inconclusive outcome,
+# so exit 3 aborts the rollout like a finding does.
+#
+# Needs, in the Rollout's namespace:
+#   ConfigMap  {{args.config-map}}  key veridor.json -- the Veridor configuration,
+#              credentials written as ${NAME} references
+#   Secret     {{args.secret}}      one key per variable the configuration
+#              references, named exactly as the variable (VERIDOR_OWNER_TOKEN)
+#
+# Used from a Rollout step:
+#   - analysis:
+#       templates: [{templateName: veridor-gate}]
+#       args: [{name: base-url, value: http://invoices-api-canary:8080}]
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: veridor-gate
+  labels:
+    app.kubernetes.io/name: veridor-gate
+    app.kubernetes.io/component: analysis
+spec:
+  args:
+    # The canary Service, e.g. http://invoices-api-canary:8080. No default: a
+    # gate pointed at the stable Service would measure the version already live.
+    - name: base-url
+    - name: config-map
+      value: veridor-config
+    - name: secret
+      value: veridor-credentials
+    # This image is not published at this version: build one from the
+    # repository's Dockerfile and set it here.
+    - name: image
+      value: ghcr.io/veridor-authz/veridor:0.1.0
+    - name: fail-on
+      value: new+confirmed
+    # Seconds to wait before the first request for the canary Service to
+    # accept a TCP connection (veridor --wait-for-target). The analysis can
+    # start as the canary pod turns Ready, before the Service routes to it;
+    # probes sent then are refused and the gate exits 3, which aborts the
+    # rollout. It never changes a verdict. "0" turns it off.
+    - name: wait-for-target
+      value: "60"
+  metrics:
+    - name: veridor
+      count: 1
+      failureLimit: 0
+      provider:
+        job:
+          metadata:
+            labels:
+              app.kubernetes.io/name: veridor-gate
+              app.kubernetes.io/component: analysis
+          spec:
+            # Never retried: a retry reports the luckiest attempt.
+            backoffLimit: 0
+            activeDeadlineSeconds: 600
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/name: veridor-gate
+                  app.kubernetes.io/component: analysis
+              spec:
+                restartPolicy: Never
+                automountServiceAccountToken: false
+                enableServiceLinks: false
+                securityContext:
+                  runAsNonRoot: true
+                  runAsUser: 10001
+                  runAsGroup: 10001
+                  fsGroup: 10001
+                  seccompProfile:
+                    type: RuntimeDefault
+                containers:
+                  - name: veridor
+                    image: "{{args.image}}"
+                    imagePullPolicy: IfNotPresent
+                    # Explicit, so the ENTRYPOINT of the image does not matter.
+                    command: ["veridor"]
+                    args:
+                      - run
+                      - --config
+                      - /config/veridor.json
+                      - --output-dir
+                      - /work/.veridor
+                      - --base-url
+                      - "{{args.base-url}}"
+                      - --fail-on
+                      - "{{args.fail-on}}"
+                      - --require-complete
+                      - --wait-for-target
+                      - "{{args.wait-for-target}}"
+                    env:
+                      - name: PYTHONUNBUFFERED
+                        value: "1"
+                      - name: PYTHONDONTWRITEBYTECODE
+                        value: "1"
+                    # Every key of the Secret becomes a variable. optional: a
+                    # missing Secret leaves them unset and Veridor refuses the
+                    # configuration at once (exit 2, naming the variable)
+                    # instead of the pod waiting for activeDeadlineSeconds.
+                    envFrom:
+                      - secretRef:
+                          name: "{{args.secret}}"
+                          optional: true
+                    terminationMessagePolicy: FallbackToLogsOnError
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      readOnlyRootFilesystem: true
+                      runAsNonRoot: true
+                      runAsUser: 10001
+                      runAsGroup: 10001
+                      capabilities:
+                        drop: ["ALL"]
+                      seccompProfile:
+                        type: RuntimeDefault
+                    resources:
+                      requests:
+                        cpu: 100m
+                        memory: 128Mi
+                      limits:
+                        cpu: "1"
+                        memory: 512Mi
+                    volumeMounts:
+                      - name: config
+                        mountPath: /config
+                        readOnly: true
+                      - name: work
+                        mountPath: /work
+                      - name: tmp
+                        mountPath: /tmp
+                volumes:
+                  - name: config
+                    configMap:
+                      name: "{{args.config-map}}"
+                      items:
+                        - key: veridor.json
+                          path: veridor.json
+                  - name: work
+                    emptyDir:
+                      sizeLimit: 128Mi
+                  - name: tmp
+                    emptyDir:
+                      sizeLimit: 64Mi

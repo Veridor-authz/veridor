@@ -1,0 +1,15 @@
+{{- if not .Values.existingConfigMap.name }}
+{{- include "veridor-gate.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "veridor-gate.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "veridor-gate.labels" . | nindent 4 }}
+data:
+  # Rendered from the `config` value. Credentials are ${NAME} references only;
+  # the render fails before this is written if a header carries a literal.
+  veridor.json: |
+    {{- .Values.config | toPrettyJson | nindent 4 }}
+{{- end }}

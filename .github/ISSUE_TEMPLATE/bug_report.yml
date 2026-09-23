@@ -1,0 +1,74 @@
+name: Bug report
+description: Veridor crashed, refused something it should accept, or accepted something it should refuse.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you paste anything:** replace every credential with an
+        `${ENV_VAR}` reference. Veridor's own proof capsules refuse to build
+        with a literal token in them, and the same rule applies here.
+
+        If this is a way to bypass a safety gate, read a credential, or reach a
+        target you should not, please report it privately instead:
+        [private vulnerability report](https://github.com/Veridor-authz/veridor/security/advisories/new).
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `veridor --version`.
+      placeholder: veridor 0.1.0
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: The command you ran
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected, and what happened instead
+      description: >-
+        Include the exit code. If Veridor printed a message, paste it whole —
+        the messages are written to be self-explanatory, and one that is not is
+        itself worth fixing.
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Minimal configuration that reproduces it
+      description: Credentials as `${ENV_VAR}` references, please.
+      render: json
+
+  - type: dropdown
+    id: verb
+    attributes:
+      label: Which verb
+      options: [map, run, mutate, capsule, verify, report, coverage, init, serve, other]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How you run Veridor
+      options:
+        - from a source checkout
+        - a wheel or pip install
+        - the zipapp
+        - the container image
+        - the GitHub Action
+        - the GitLab component
+        - the Helm chart or Kustomize
+        - Jenkins, Azure Pipelines or CodeBuild template
+        - other
+    validations:
+      required: true

@@ -1,0 +1,60 @@
+[build-system]
+# PEP 639: `license` below is an SPDX expression and `license-files` ships
+# LICENSE and NOTICE. Measured 2026-09-24: setuptools 76.1.0 fails to build
+# this file; 77.0.3 builds it and writes License-Expression and License-File.
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "veridor"
+version = "0.1.0"
+description = "CI-first authorization regression runner for multi-user APIs"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{name = "Santosh Kumar Puppala"}]
+maintainers = [{name = "Santosh Kumar Puppala"}]
+keywords = ["security", "authorization", "ci", "sarif"]
+# The version classifiers below name what CI is set up to test, not what ought
+# to work: .github/workflows/veridor.yml is configured to run the fast tier and a
+# wheel install on each one, and tests/test_release_files.py refuses to let the
+# classifiers and the fast tier's matrix disagree. `requires-python` is what pip enforces, so an untested floor
+# is a promise made to somebody who cannot discover it is false until it is.
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Security",
+]
+
+# Without these a PyPI page carries no link back to the source, the issue
+# tracker, or the security policy -- for a security tool, the three things a
+# reader most wants before installing it. Homepage and Documentation name the
+# repository because no domain serves anything, and metadata is fixed once a
+# release is uploaded.
+[project.urls]
+Homepage = "https://github.com/Veridor-authz/veridor"
+Documentation = "https://github.com/Veridor-authz/veridor/blob/main/README.md"
+Repository = "https://github.com/Veridor-authz/veridor"
+Issues = "https://github.com/Veridor-authz/veridor/issues"
+Changelog = "https://github.com/Veridor-authz/veridor/blob/main/CHANGELOG.md"
+"Security policy" = "https://github.com/Veridor-authz/veridor/security/policy"
+
+[project.scripts]
+veridor = "veridor.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+# Every file the viewer serves. A missing glob here is not a build warning --
+# it is a 200 for the page and a 404 for its stylesheet, discovered by a user.
+veridor = ["web/*.html", "web/*.js", "web/*.css", "web/*.svg"]

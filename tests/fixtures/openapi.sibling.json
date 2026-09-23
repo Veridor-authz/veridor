@@ -1,0 +1,298 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Veridor blast-radius demo: deliberate sibling asymmetry",
+    "version": "1.0.0",
+    "description": "Two path families whose members should behave alike. The fixture server deliberately lets one identity through on exactly one member of each family, so sibling diffing has a real inconsistency to find without anybody declaring a policy first."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/api/reports/daily": {
+      "get": {
+        "summary": "Read the daily report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/weekly": {
+      "get": {
+        "summary": "Read the weekly report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/monthly": {
+      "get": {
+        "summary": "Read the monthly report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/quarterly": {
+      "get": {
+        "summary": "Read the quarterly report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/annual": {
+      "get": {
+        "summary": "Read the annual report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/q1": {
+      "get": {
+        "summary": "Read the q1 report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/q2": {
+      "get": {
+        "summary": "Read the q2 report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/q3": {
+      "get": {
+        "summary": "Read the q3 report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/h1": {
+      "get": {
+        "summary": "Read the h1 report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/h2": {
+      "get": {
+        "summary": "Read the h2 report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/forecast": {
+      "get": {
+        "summary": "Read the forecast report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/archive": {
+      "get": {
+        "summary": "Read the archive report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/reports/{id}": {
+      "get": {
+        "summary": "Read one report",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/ledgers/summary": {
+      "get": {
+        "summary": "Read the summary ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/ap": {
+      "get": {
+        "summary": "Read the ap ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/ar": {
+      "get": {
+        "summary": "Read the ar ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/gl": {
+      "get": {
+        "summary": "Read the gl ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/tax": {
+      "get": {
+        "summary": "Read the tax ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/payroll": {
+      "get": {
+        "summary": "Read the payroll ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/fx": {
+      "get": {
+        "summary": "Read the fx ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/ledgers/accruals": {
+      "get": {
+        "summary": "Read the accruals ledger",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    }
+  }
+}

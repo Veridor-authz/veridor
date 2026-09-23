@@ -1,0 +1,28 @@
+name: Question
+description: What a result means, how something works, or how to reach the maintainer.
+labels: [question]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Issues are public. Replace every credential with an `${ENV_VAR}`
+        reference, and leave out the details of anything that would let an
+        attacker reach a target, escape a safety gate, or read a credential:
+        SECURITY.md says how to report those.
+
+        Examples of what belongs here: "is this finding real?", "why is coverage
+        0%?", "what does suspected mean?".
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: If it is about a result, paste the output and say which command produced it.
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `veridor --version`, if the question is about a run.

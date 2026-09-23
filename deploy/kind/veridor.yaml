@@ -1,0 +1,113 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: veridor
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: veridor-viewer
+  namespace: veridor
+  labels: { app: veridor-viewer }
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: veridor-viewer }
+  template:
+    metadata:
+      labels: { app: veridor-viewer }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        fsGroup: 10001
+      volumes:
+        # The artifacts are ephemeral on purpose. This is a demonstration, and a
+        # PVC would imply the viewer is a system of record. It is not: it reads
+        # whatever `.veridor/` it is pointed at, and the CLI owns that directory.
+        - name: artifacts
+          emptyDir: {}
+      initContainers:
+        # Generates real artifacts by running all three verbs against the demo
+        # target inside this pod, before the viewer starts. Nothing displayed in
+        # the UI is canned.
+        - name: seed
+          image: veridor:demo
+          imagePullPolicy: Never
+          command: ["/app/seed.sh"]
+          volumeMounts:
+            - { name: artifacts, mountPath: /data }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits:   { cpu: "1",  memory: 512Mi }
+      containers:
+        - name: viewer
+          image: veridor:demo
+          imagePullPolicy: Never
+          args:
+            - veridor
+            - serve
+            - --output-dir=/data/.veridor
+            # 0.0.0.0 inside the pod is the only way kube-proxy can reach it.
+            # Exposure is constrained at the edge instead: a NodePort mapped to
+            # 127.0.0.1 on the host. The viewer has no auth and never should be
+            # published beyond a loopback interface.
+            - --host=0.0.0.0
+            # Acknowledged, not waved through: `serve` refuses a non-loopback
+            # bind without this flag. Inside the pod 0.0.0.0 is the only address
+            # kube-proxy can reach, so the loopback-only NodePort mapping in
+            # cluster.yaml is what keeps the unauthenticated viewer off the LAN.
+            - --i-understand-this-is-unauthenticated
+            - --port=8787
+          ports:
+            - { name: http, containerPort: 8787 }
+          volumeMounts:
+            - { name: artifacts, mountPath: /data, readOnly: true }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          # The viewer only reads files it already has, so both probes hit the
+          # same cheap endpoint. `/api/runs` is a better signal than `/` because
+          # it proves the artifact directory is actually readable, not merely
+          # that the process is up.
+          #
+          # The viewer answers only Host names it expects (loopback, or what it
+          # was told to bind) -- its defence against DNS rebinding. A probe
+          # addressed to the pod IP is refused with 421 and the pod is killed, so
+          # the probes say who they are.
+          readinessProbe:
+            httpGet:
+              path: /api/runs
+              port: http
+              httpHeaders: [{ name: Host, value: "127.0.0.1" }]
+            initialDelaySeconds: 1
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/runs
+              port: http
+              httpHeaders: [{ name: Host, value: "127.0.0.1" }]
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: veridor-viewer
+  namespace: veridor
+spec:
+  type: NodePort
+  selector: { app: veridor-viewer }
+  ports:
+    - name: http
+      port: 8787
+      targetPort: http
+      nodePort: 30787

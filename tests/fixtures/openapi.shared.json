@@ -1,0 +1,142 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Veridor blast-radius demo: a legitimately shared resource",
+    "version": "1.0.0",
+    "description": "Every member of the declared peer group reaches the same team workspace, because it is genuinely shared. There is no inconsistency between the observations, so no candidate may be produced from them."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "summary": "Liveness probe",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/team/changelog": {
+      "get": {
+        "summary": "The team-wide changelog, shared by design",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/{id}": {
+      "get": {
+        "summary": "Read one team note",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        },
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ]
+      }
+    },
+    "/api/notes/pinned": {
+      "get": {
+        "summary": "Read the pinned notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/recent": {
+      "get": {
+        "summary": "Read the recent notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/archived": {
+      "get": {
+        "summary": "Read the archived notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/shared": {
+      "get": {
+        "summary": "Read the shared notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/starred": {
+      "get": {
+        "summary": "Read the starred notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    },
+    "/api/notes/drafts": {
+      "get": {
+        "summary": "Read the drafts notes",
+        "responses": {
+          "200": {
+            "description": "ok"
+          },
+          "403": {
+            "description": "refused"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,21 @@
+apiVersion: v2
+name: veridor-gate
+description: >-
+  Runs `veridor run` as a Kubernetes Job so a deployment is gated on the
+  authorization expectations you declared. The Job's exit code is the gate:
+  Argo CD fails the sync (each sync that runs hooks runs a Job of its own,
+  generateName; a selective or Apply Only sync runs none), Helm fails the
+  release, when the Job fails.
+type: application
+version: 0.1.0
+# Kept equal to src/veridor/__init__.py __version__; tests/test_helm_chart.py
+# fails when the two drift. The image tag defaults to this value.
+appVersion: "0.1.0"
+kubeVersion: ">=1.25.0-0"
+home: https://github.com/Veridor-authz/veridor
+sources:
+  - https://github.com/Veridor-authz/veridor
+keywords:
+  - authorization
+  - argocd
+  - gate

@@ -1,0 +1,133 @@
+{
+  "name": "bugsink-cross-project-event-read",
+  "advisory": {
+    "id": "CVE-2026-47715",
+    "summary": "A Bugsink issue-event page loaded the event by id without scoping it to the issue in the URL, so a member of one project read another project's event data through an issue they could access.",
+    "url": "https://github.com/bugsink/bugsink/security/advisories/GHSA-vx2f-6m6h-9frf",
+    "note": [
+      "GHSA-vx2f-6m6h-9frf. The issue_event_stacktrace/_details/_breadcrumbs",
+      "views are only @issue_membership_required: they check membership of the",
+      "URL's ISSUE, then _get_event did Event.objects.get(pk=event_pk) on the",
+      "caller-supplied event id ALONE. So a user who is a member of their own",
+      "project names their own issue and another project's event id and reads",
+      "that event -- exception type and value, rendered on the stacktrace page.",
+      "2.2.0 matches Event.objects.get(issue=issue, pk=event_pk); when it does",
+      "not match it renders an 'event not in this issue' page, still HTTP 200.",
+      "So the status is 200 on BOTH builds and only the planted marker (the",
+      "exception value) distinguishes them -- a status oracle is blind to the",
+      "fix, like the lubelogger pair. The owner reading its own event in the",
+      "control is the live positive: its 200+marker on 2.2.0 proves the marker",
+      "is reachable, so the attacker's marker-free 200 there is the fix.",
+      "Confirmed from source inside both images: 2.1.3 issues/views.py has",
+      "Event.objects.get(pk=event_pk); 2.2.0 has Event.objects.get(issue=issue,",
+      "pk=event_pk). Image version labels read 2.1.3 and 2.2.0.",
+      "Bugsink issue-event pages authenticate with a Django session cookie, so",
+      "each identity is a static Cookie header, filled from a session minted",
+      "through the app's own ORM.",
+      "Measured by hand on both tags before this was written: the attacker",
+      "reads the owner's event (200 + marker) on 2.1.3 and gets a marker-free",
+      "200 on 2.2.0; its session is valid on 2.2.0 (it reads its own event 200),",
+      "so the exclusion is the fix, not a refused credential; the owner is 403",
+      "on the attacker's issue on both tags.",
+      "The second check is the direct route: the attacker names the OWNER's",
+      "issue and event, and is refused 403 without the marker on both tags,",
+      "while the owner reads the same page 200 with the marker (measured on",
+      "2.1.3 and 2.2.0 on 2026-09-27; it had been inferred by symmetry from the",
+      "owner's 403 on the attacker's issue). So the leak needs the unscoped",
+      "event lookup, not a missing membership check on the issue. A fabricated",
+      "or absent session is 302 to /accounts/login/ on both, so a 403 here is",
+      "an authorization refusal of a live session, not a dead credential.",
+      "vulnerable_failing_checks names the first check alone, so every run",
+      "holds the 2.1.3 half too: a finding from the direct route on 2.1.3",
+      "fails the pair (scripts/patched_pairs.py, evaluate)."
+    ]
+  },
+  "vulnerable_failing_checks": ["event-must-not-be-readable-through-another-projects-issue"],
+  "image": "bugsink/bugsink",
+  "vulnerable": "2.1.3",
+  "patched": "2.2.0",
+  "vulnerable_digest": "sha256:cf9ad368d436f0e9dd6e686d0becf5062cc079518efbf032a084c5f73fcf7754",
+  "patched_digest": "sha256:aa96181b44f8a97a38db0c6530583cd81ecbe546d9d63dd4c19570adbc1a0e7a",
+  "container_port": 8000,
+  "health_path": "/health/ready",
+  "provision": "bugsink_event_cross_project",
+  "marker": "VERIDOR-MARKER-cd71488bbdbe9fab41",
+  "control": {
+    "path": "/issues/issue/${VERIDOR_PAIR_OWNER_ISSUE_ID}/event/${VERIDOR_PAIR_OWNER_EVENT_ID}/",
+    "headers": {
+      "Cookie": "sessionid=${VERIDOR_PAIR_OWNER_SESSION}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Cookie": "sessionid=${VERIDOR_PAIR_OWNER_SESSION}"
+        },
+        "marker": "VERIDOR-MARKER-cd71488bbdbe9fab41",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/issues/issue/${VERIDOR_PAIR_OWNER_ISSUE_ID}/event/${VERIDOR_PAIR_OWNER_EVENT_ID}/"
+        }
+      },
+      "attacker": {
+        "headers": {
+          "Cookie": "sessionid=${VERIDOR_PAIR_ATTACKER_SESSION}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "event-must-not-be-readable-through-another-projects-issue",
+        "name": "A project member must not read another project's event through an issue of its own",
+        "request": {
+          "method": "GET",
+          "path": "/issues/issue/${VERIDOR_PAIR_ATTACKER_ISSUE_ID}/event/${VERIDOR_PAIR_OWNER_EVENT_ID}/"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              403
+            ]
+          },
+          "attacker": {
+            "status": [
+              200
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      },
+      {
+        "id": "owners-event-must-not-be-readable-through-the-owners-issue",
+        "name": "A member of another project must not read the owner's event through the owner's own issue",
+        "request": {
+          "method": "GET",
+          "path": "/issues/issue/${VERIDOR_PAIR_OWNER_ISSUE_ID}/event/${VERIDOR_PAIR_OWNER_EVENT_ID}/"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ],
+            "contains_marker": "owner"
+          },
+          "attacker": {
+            "status": [
+              403
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed"
+}

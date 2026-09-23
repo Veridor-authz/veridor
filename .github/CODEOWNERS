@@ -1,0 +1,24 @@
+# Who reviews what. One maintainer today (GOVERNANCE.md), so every line names
+# the same owner; the paths below are listed anyway because they are the ones
+# where a mistake ships to users' pipelines or to a registry, and a second
+# maintainer added later should be added here first. The last matching line
+# wins. Whether GitHub requires this review is a branch-protection setting of
+# the repository, which this file cannot show.
+
+*                               @Santoshkumarpuppala
+
+# The GitHub Action, the workflows, and CI configuration.
+/action.yml                     @Santoshkumarpuppala
+/.github/                       @Santoshkumarpuppala
+
+# Release tooling: what decides the version, builds the artifacts and the image.
+/scripts/release_check.py       @Santoshkumarpuppala
+/scripts/build_zipapp.py        @Santoshkumarpuppala
+/Dockerfile                     @Santoshkumarpuppala
+/.dockerignore                  @Santoshkumarpuppala
+/pyproject.toml                 @Santoshkumarpuppala
+
+# What runs in other people's clusters and pipelines.
+/deploy/                        @Santoshkumarpuppala
+/templates/                     @Santoshkumarpuppala
+/ci/                            @Santoshkumarpuppala

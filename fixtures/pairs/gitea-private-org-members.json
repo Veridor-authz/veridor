@@ -1,0 +1,74 @@
+{
+  "name": "gitea-private-org-membership-confirmable",
+  "advisory": {
+    "id": "CVE-2026-58417",
+    "summary": "The REST API exposed the membership of private organizations.",
+    "url": "https://www.cve.org/CVERecord?id=CVE-2026-58417",
+    "references": ["https://blog.gitea.com/release-of-1.27.0/"],
+    "note": [
+      "The pair with NO marker anywhere, on purpose. On the vulnerable build",
+      "the stranger receives 200 with an empty list: nothing leaks except the",
+      "organisation's existence, which is still the boundary. Veridor catches",
+      "it on the declared status alone.",
+      "Kept as the counterweight to the marker-oracle pairs -- if every pair",
+      "needed a marker, the status oracle would be going untested here."
+    ]
+  },
+  "image": "gitea/gitea",
+  "vulnerable": "1.26.4",
+  "patched": "1.27.0",
+  "vulnerable_digest": "sha256:8e25c717b8f748445e15ec46e0390f577cb628101184cb0a150d1dae126c1f39",
+  "patched_digest": "sha256:7dff60d7ea6df9d0bdf78971cdb1350e9b7df3fda5f115c77afe12122887bd64",
+  "container_port": 3000,
+  "health_path": "/api/v1/version",
+  "provision": "gitea_private_org",
+  "marker": "VERIDOR-MARKER-9f3a2b1c4d5e6f",
+  "control": {
+    "path": "/api/v1/orgs/secretorg/members",
+    "token": "VERIDOR_PAIR_OWNER_TOKEN",
+    "status": 200,
+    "expect_marker": false
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "org_owner": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_OWNER_TOKEN}"
+        }
+      },
+      "stranger": {
+        "headers": {
+          "Authorization": "token ${VERIDOR_PAIR_STRANGER_TOKEN}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "private-org-membership-must-not-be-confirmable",
+        "name": "A non-member must not be able to confirm a private organisation exists",
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/orgs/secretorg/members"
+        },
+        "expect": {
+          "org_owner": {
+            "status": [
+              200
+            ]
+          },
+          "stranger": {
+            "status": [
+              404
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "ungraded"
+}

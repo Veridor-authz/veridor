@@ -1,0 +1,33 @@
+# jsonschema and PyYAML for the checks that validate against published
+# schemas: scripts/e2e_gitlab_job.sh (its gl-sast-report.json rows) and
+# `tests/ci_validate.py schemas` (GitLab CI and Azure Pipelines YAML). Neither
+# is a Veridor dependency; the runtime and the test suite stay stdlib-only.
+# Used by .github/workflows/veridor.yml as:
+#
+#   python -m venv "$RUNNER_TEMP/schema-venv"
+#   "$RUNNER_TEMP/schema-venv/bin/python" -m pip install --require-hashes --only-binary=:all: \
+#     -r .github/requirements/schema-check.txt
+#
+# Every package, dependencies included, is pinned by version and by the sha256
+# of its wheel, taken from PyPI's JSON API on 2026-09-24. rpds-py and PyYAML
+# ship compiled wheels: the hashes are those of the CPython 3.12 wheels for
+# Linux x86_64 (what the CI job installs) and macOS arm64 (to reproduce the job
+# on Apple silicon). Without --no-deps, pip refuses the install if a
+# dependency is missing from this file, so the list is complete by
+# construction. Dependabot's pip ecosystem proposes updates.
+attrs==26.1.0 \
+    --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+jsonschema==4.26.0 \
+    --hash=sha256:d489f15263b8d200f8387e64b4c3a75f06629559fb73deb8fdfb525f2dab50ce
+jsonschema-specifications==2025.9.1 \
+    --hash=sha256:98802fee3a11ee76ecaca44429fda8a41bff98b00a0f2838151b113f210cc6fe
+pyyaml==6.0.3 \
+    --hash=sha256:ba1cc08a7ccde2d2ec775841541641e4548226580ab850948cbfda66a1befcdc \
+    --hash=sha256:fc09d0aa354569bc501d4e787133afc08552722d3ab34836a80547331bb5d4a0
+referencing==0.37.0 \
+    --hash=sha256:381329a9f99628c9069361716891d34ad94af76e461dcb0335825aecc7692231
+rpds-py==2026.6.3 \
+    --hash=sha256:ecabd69db66de867690f9797f2f8fa27ba501bbc24540cbdbdc649cd15888ba6 \
+    --hash=sha256:538949e262e46caa31ac01bdb3c1e8f642622922cacbabbae6a8445d9dc33eaf
+typing-extensions==4.16.0 \
+    --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8

@@ -1,0 +1,86 @@
+{
+  "name": "vikunja-task-comment-idor",
+  "advisory": {
+    "id": "CVE-2026-33313",
+    "summary": "A task comment was readable by anyone who could read any task, by putting their own task's id in the URL.",
+    "url": "https://github.com/go-vikunja/vikunja/security/advisories/GHSA-mr3j-p26x-72x4",
+    "note": [
+      "GHSA-mr3j-p26x-72x4. GET /api/v1/tasks/{taskID}/comments/{commentID}",
+      "checked read access on the URL's task, then loaded the comment by id",
+      "alone. The attacker reads the owner's private comment through its OWN",
+      "task. 2.1.0 answers 200 with the comment; 2.2.0 answers 404.",
+      "The first pair written with control.headers: Vikunja takes only a",
+      "Bearer JWT, which is why an earlier attempt could not certify it.",
+      "Measured by hand on both tags before the pair was written: the attacker",
+      "gets 403 for the owner's task directly (no grant) and 200 for its own",
+      "task (its token is valid on 2.2.0, so the 404 is the fix).",
+      "The owner is declared 403 on the attacker's path: it cannot read the",
+      "attacker's task either, measured 403 on both tags."
+    ]
+  },
+  "image": "vikunja/vikunja",
+  "vulnerable": "2.1.0",
+  "patched": "2.2.0",
+  "vulnerable_digest": "sha256:f13103b0287aef74a69241fa46e6cac76e14caf643602144ccaca57fc76e587f",
+  "patched_digest": "sha256:fefda8ba71c3b06cc7f53f93ee14ebf1ad155a535e572b8dc702a46d789fc6d1",
+  "container_port": 3456,
+  "health_path": "/api/v1/info",
+  "provision": "vikunja_comment_idor",
+  "marker": "VERIDOR-MARKER-609cc573c24658ae",
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+        },
+        "marker": "VERIDOR-MARKER-609cc573c24658ae",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/api/v1/tasks/${VERIDOR_PAIR_OWNER_TASK_ID}/comments/${VERIDOR_PAIR_COMMENT_ID}"
+        }
+      },
+      "attacker": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_ATTACKER_TOKEN}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "comment-must-not-be-readable-through-another-task",
+        "name": "A user must not read another user's comment through a task of its own",
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/tasks/${VERIDOR_PAIR_ATTACKER_TASK_ID}/comments/${VERIDOR_PAIR_COMMENT_ID}"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              403
+            ]
+          },
+          "attacker": {
+            "status": [
+              404
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      }
+    ]
+  },
+  "control": {
+    "path": "/api/v1/tasks/${VERIDOR_PAIR_OWNER_TASK_ID}/comments/${VERIDOR_PAIR_COMMENT_ID}",
+    "headers": {
+      "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "expected_evidence": "confirmed"
+}

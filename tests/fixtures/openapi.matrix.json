@@ -1,0 +1,118 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Veridor Access Matrix Demo API",
+    "version": "1.0.0",
+    "description": "Route inventory for tests/fixtures/matrix.demo.json. It deliberately contains a sibling family under /api/reports/ (so sibling diffing has something to compare), one templated tenant-scoped operation (so per-identity specimens have somewhere to apply), one conventionally-public operation, and two mutating operations that the read-only default must record as unknown / skipped_mutating rather than omit."
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8765"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "health",
+        "summary": "Liveness probe",
+        "responses": {"200": {"description": "ok"}}
+      }
+    },
+    "/api/invoices": {
+      "get": {
+        "operationId": "listInvoices",
+        "summary": "List invoices visible to the caller",
+        "responses": {
+          "200": {"description": "invoice collection"},
+          "401": {"description": "unauthenticated"}
+        }
+      }
+    },
+    "/api/invoices/{id}": {
+      "get": {
+        "operationId": "getInvoice",
+        "summary": "Read one invoice",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "200": {"description": "invoice"},
+          "401": {"description": "unauthenticated"},
+          "404": {"description": "not found, or not the caller's invoice"}
+        }
+      },
+      "delete": {
+        "operationId": "deleteInvoice",
+        "summary": "Delete one invoice",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {
+          "204": {"description": "deleted"},
+          "403": {"description": "not the caller's invoice"}
+        }
+      }
+    },
+    "/api/reports/daily": {
+      "get": {
+        "operationId": "reportDaily",
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/reports/weekly": {
+      "get": {
+        "operationId": "reportWeekly",
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/reports/monthly": {
+      "get": {
+        "operationId": "reportMonthly",
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/reports/quarterly": {
+      "get": {
+        "operationId": "reportQuarterly",
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/reports/annual": {
+      "get": {
+        "operationId": "reportAnnual",
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/reports/{id}": {
+      "get": {
+        "operationId": "getReport",
+        "parameters": [
+          {"name": "id", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "report"}, "403": {"description": "refused"}}
+      }
+    },
+    "/api/tenants/{tid}/users/{uid}": {
+      "get": {
+        "operationId": "getTenantUser",
+        "parameters": [
+          {"name": "tid", "in": "path", "required": true, "schema": {"type": "string"}},
+          {"name": "uid", "in": "path", "required": true, "schema": {"type": "string"}}
+        ],
+        "responses": {"200": {"description": "user"}, "404": {"description": "absent or refused"}}
+      }
+    },
+    "/api/admin/audit": {
+      "get": {
+        "operationId": "readAuditLog",
+        "responses": {"200": {"description": "audit entries"}, "403": {"description": "not an administrator"}}
+      }
+    },
+    "/api/admin/audit/export": {
+      "post": {
+        "operationId": "exportAuditLog",
+        "responses": {"202": {"description": "export accepted"}, "403": {"description": "not an administrator"}}
+      }
+    }
+  }
+}

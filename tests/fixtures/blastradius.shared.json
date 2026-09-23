@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "target": {
+    "base_url": "http://127.0.0.1:8765",
+    "timeout_seconds": 3
+  },
+  "identities": {
+    "alice": {
+      "headers": {
+        "Authorization": "Bearer alice-token"
+      }
+    },
+    "bob": {
+      "headers": {
+        "Authorization": "Bearer bob-token"
+      }
+    },
+    "carol": {
+      "headers": {
+        "Authorization": "Bearer carol-token"
+      }
+    },
+    "anonymous": {
+      "headers": {}
+    }
+  },
+  "checks": [
+    {
+      "id": "changelog-is-shared",
+      "name": "The team changelog is readable by the whole team",
+      "request": {
+        "method": "GET",
+        "path": "/api/team/changelog"
+      },
+      "expect": {
+        "alice": {
+          "status": [
+            200
+          ]
+        },
+        "anonymous": {
+          "status": [
+            401
+          ]
+        }
+      }
+    }
+  ],
+  "matrix": {
+    "specimens": {
+      "/api/notes/{id}": [
+        {
+          "label": "team_note",
+          "values": {
+            "id": "n-1"
+          }
+        }
+      ]
+    },
+    "peer_groups": {
+      "team": [
+        "alice",
+        "bob",
+        "carol"
+      ]
+    },
+    "unauthenticated": "anonymous"
+  }
+}

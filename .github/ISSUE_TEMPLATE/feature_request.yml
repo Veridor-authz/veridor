@@ -1,0 +1,58 @@
+name: Feature request
+description: A check, report format, integration or option Veridor does not have.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem before the solution. A request that says what you
+        tried, what Veridor did, and what you needed instead is one that can be
+        weighed against the rest.
+
+        Veridor declares no policy, discovers no routes and sends no payloads
+        (README, "Non-goals"). A request that would change one of those is
+        welcome, but say so, because it is a design decision rather than a
+        feature.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What were you trying to do, and where did Veridor fall short?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would solve it
+      description: A command, an option, a report field, a CI integration. Rough is fine.
+    validations:
+      required: true
+
+  - type: textarea
+    id: claim
+    attributes:
+      label: What it would claim, and what it would not
+      description: >-
+        If the feature produces a result, what could a reader conclude from it,
+        and what must they not conclude? For example: coverage is asserted, never
+        enforced.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - map
+        - run
+        - mutate
+        - capsule / verify
+        - report formats
+        - GitHub Action
+        - GitLab component
+        - Helm chart / Kustomize / Argo
+        - other CI (Jenkins, Azure, CodeBuild)
+        - other
+    validations:
+      required: true

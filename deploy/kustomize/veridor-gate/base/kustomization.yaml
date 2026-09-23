@@ -1,0 +1,23 @@
+# The veridor-gate Job without Helm. Do not apply the base on its own: use
+# overlays/plain, or your own overlay on top of it. There is no Argo CD
+# overlay (README, "No Argo CD overlay").
+#
+# The Job is the one deploy/helm/veridor-gate renders with its default values:
+# same restricted pod, same arguments, backoffLimit 0. tests/test_kustomize.py
+# renders both and fails when they differ, so change them together.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+  - pairs:
+      app.kubernetes.io/name: veridor-gate
+      app.kubernetes.io/component: gate
+    includeTemplates: true
+resources:
+  - job.yaml
+# veridor.json is an EXAMPLE (the demo API's configuration). Replace it from
+# your overlay with `behavior: replace`. The generated name carries a hash of
+# the content, so a changed configuration is a changed Job.
+configMapGenerator:
+  - name: veridor-gate-config
+    files:
+      - veridor.json

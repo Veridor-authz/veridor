@@ -1,0 +1,167 @@
+{
+  "name": "ghost-contributor-reads-integration-admin-keys",
+  "advisory": {
+    "id": "CVE-2021-39192",
+    "summary": "Ghost's integrations endpoints granted every authenticated staff user, a Contributor included, the integration list with each integration's admin API key secret.",
+    "url": "https://github.com/TryGhost/Ghost/security/advisories/GHSA-j5c2-hm46-wp5c",
+    "note": [
+      "GHSA-j5c2-hm46-wp5c. core/server/models/integration.js overrode",
+      "permissible() to add the hosted customIntegrations limit check and then",
+      "`return true` -- discarding the permission answer it was overriding. So",
+      "GET /ghost/api/v4/admin/integrations/ served any authenticated staff",
+      "user, and ?include=api_keys handed them every integration's ADMIN API key",
+      "secret, which is an escalation to full Admin on the API. 4.10.0 takes",
+      "hasUserPermission/hasApiKeyPermission and throws NoPermissionError.",
+      "The permission hook read as enforcing and returned true regardless.",
+      "Confirmed from the source INSIDE both images: 4.9.4's permissible ends",
+      "`return true;` and the file holds no `hasUserPermission`; 4.10.0's throws",
+      "on it. A `customIntegrations` grep found 2 lines in each file, so the",
+      "empty result was a grep that could have found something. package.json",
+      "reads 4.9.4 and 4.10.0, so neither tag is a hotfix build of something",
+      "else.",
+      "Ghost's Admin API authenticates a staff user with a signed session",
+      "cookie, so each identity is a static Cookie header, minted through the",
+      "app's own /session/ endpoint.",
+      "Measured by hand on both tags before this was written: the contributor",
+      "reads /integrations/?include=api_keys 200 with the marker and every admin",
+      "key secret on 4.9.4, and 403 without the marker on 4.10.0. Its session is",
+      "valid on 4.10.0 -- /users/me/, /posts/ and /settings/ all 200 -- so the",
+      "403 is the fix, not a refused credential, and the provisioner asserts the",
+      "account's only role is Contributor so the attacker cannot be entitled. No",
+      "cookie and a fabricated cookie are both 403 on both builds, which is why",
+      "the credential's evidence is those 200s and not a status on this route.",
+      "The second check is the single-integration route, measured on both tags",
+      "rather than inferred from the list: the contributor reads the owner's",
+      "integration by id 200 with the marker on 4.9.4 and 403 without it on",
+      "4.10.0, while the owner is 200 with the marker on both.",
+      "There is no allowed route to the marker either: 27 admin routes were",
+      "swept with the contributor's session on 4.10.0, 11 of them answered 200",
+      "-- /settings/, /config/, /site/, /users/, /users/me/, /posts/, /pages/,",
+      "/tags/, /themes/, /roles/, /snippets/ -- and none carried the marker,",
+      "while /db/, the content export that would hold it, is 403. The owner's",
+      "session over those same 27 routes answered 200 on 20 and carried the",
+      "marker on exactly two, /integrations/ and /integrations/?include=api_keys,",
+      "so the contributor's zero is an absence and not a detector that cannot",
+      "fire. A count of four routes did not reproduce, and the routes are named",
+      "here because a bare count is a claim no test can diff.",
+      "The third check is the contributor reading its own profile, the request",
+      "the provisioner already makes on both builds to assert the Contributor",
+      "role. It is there for the patched build: the leaking routes are 403 to a",
+      "fabricated cookie too, so without a 200 somewhere in the run Veridor",
+      "records the contributor's 403s as unproven and the harness fails the pair",
+      "rather than certify a fix against a session that might be dead."
+    ]
+  },
+  "image": "ghost",
+  "vulnerable": "4.9.4",
+  "patched": "4.10.0",
+  "vulnerable_digest": "sha256:aa236394ebe9b79145ce263b00a50112bf800d20d96dd360482be58a6aec64ad",
+  "patched_digest": "sha256:68c1a62672c291f582e06fad0927c3f23c4eec4c9e4eebd9af48fd72117de9cb",
+  "container_port": 2368,
+  "health_path": "/ghost/api/v4/admin/site/",
+  "provision": "ghost_integration_keys",
+  "marker": "VERIDOR-MARKER-068b23566b680ced02",
+  "control": {
+    "path": "/ghost/api/v4/admin/integrations/?include=api_keys",
+    "headers": {
+      "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_OWNER_SESSION}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_OWNER_SESSION}"
+        },
+        "marker": "VERIDOR-MARKER-068b23566b680ced02",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/ghost/api/v4/admin/integrations/?include=api_keys"
+        }
+      },
+      "contributor": {
+        "headers": {
+          "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_CONTRIBUTOR_SESSION}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "contributor-must-not-browse-integrations",
+        "name": "A Contributor must not read the integration list or its admin API key secrets",
+        "request": {
+          "method": "GET",
+          "path": "/ghost/api/v4/admin/integrations/?include=api_keys"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ],
+            "contains_marker": "owner"
+          },
+          "contributor": {
+            "status": [
+              403
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      },
+      {
+        "id": "contributor-must-not-read-one-integration",
+        "name": "A Contributor must not read the owner's integration by id",
+        "request": {
+          "method": "GET",
+          "path": "/ghost/api/v4/admin/integrations/${VERIDOR_PAIR_INTEGRATION_ID}/?include=api_keys"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ],
+            "contains_marker": "owner"
+          },
+          "contributor": {
+            "status": [
+              403
+            ],
+            "excludes_marker": "owner"
+          }
+        }
+      },
+      {
+        "id": "contributor-session-is-live",
+        "name": "The Contributor's session is one Ghost recognises, as the owner's is",
+        "request": {
+          "method": "GET",
+          "path": "/ghost/api/v4/admin/users/me/?include=roles"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ]
+          },
+          "contributor": {
+            "status": [
+              200
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed",
+  "vulnerable_failing_checks": [
+    "contributor-must-not-browse-integrations",
+    "contributor-must-not-read-one-integration"
+  ]
+}

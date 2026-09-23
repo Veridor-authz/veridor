@@ -1,0 +1,139 @@
+# Veridor authorization regression gate -- GitLab CI, consumer example.
+#
+# The job itself is the CI/CD component in templates/veridor.yml. This file is
+# what a project adds to its own .gitlab-ci.yml to use it. Merge the include
+# below into your pipeline; do not replace your pipeline with this file.
+#
+# NOT YET PUBLISHED as of 2026-11-04. No release tag, container image, PyPI package or
+# GitLab CI/CD Catalog entry exists. The tag URL and the
+# component address below name the first release (0.1.0); neither resolves
+# until that release exists, and the remote include needs its commit SHA. ci/README.md lists what was executed and what was
+# only validated against GitLab's CI schema.
+#
+# Credentials. The Veridor configuration names every credential as a
+# ${VERIDOR_*} reference (ci/veridor.example.json shows the shape). Define each
+# one as a masked CI/CD variable in Settings > CI/CD > Variables. A variable
+# that is unset or empty in the job makes Veridor refuse with exit 2 before it
+# sends anything, instead of probing the target without the credential:
+#   * a merge request pipeline from a fork runs in the fork and receives none of
+#     this project's variables;
+#   * a protected variable reaches a merge request pipeline only when both the
+#     source and target branches are protected.
+# Use dedicated test identities whose tokens can do no harm if a pipeline
+# leaks them; masking hides a value in the log, it does not stop a job that
+# can run code from reading it.
+#
+# The job runs as uid 10001 in the Veridor image and writes its reports into
+# the project directory. GitLab's docker and kubernetes executors make that
+# directory world-writable by default; if yours does not, the job stops with
+# exit 2 and says so. Set `install: pip` to run in a Python image instead.
+
+include:
+  # Remote form: this repository's file, pinned to a commit. Works on any
+  # GitLab instance that can reach raw.githubusercontent.com. GitLab fetches a
+  # remote include again for every pipeline and gives no notice when it
+  # changes, and the included job runs with this project's CI/CD variables,
+  # the VERIDOR_* credentials among them. A tag can be moved, so do not include
+  #   https://raw.githubusercontent.com/Veridor-authz/veridor/v0.1.0/templates/veridor.yml
+  # as it stands. Instead:
+  #   1. Put the full commit SHA the release tag points to in the URL below:
+  #        git ls-remote https://github.com/Veridor-authz/veridor 'refs/tags/<tag>^{}'
+  #   2. Replace the integrity placeholder with the file's SHA-256 at that
+  #      commit, in the form GitLab takes:
+  #        curl -fsSL "<the URL below>" | openssl dgst -sha256 -binary | base64
+  #      and prefix it with sha256-. integrity needs GitLab 17.9 or later; on an
+  #      older GitLab, delete that line and keep the commit URL.
+  # Left as they are, both placeholders stop the pipeline: GitLab's
+  # documentation says a remote include it cannot fetch, or whose integrity
+  # does not match, fails it (read there, not observed on GitLab).
+  - remote: "https://raw.githubusercontent.com/Veridor-authz/veridor/COMMIT_SHA_OF_THE_RELEASE_TAG/templates/veridor.yml"
+    integrity: "sha256-REPLACE+with+the+base64+SHA256+of+that+file="
+    inputs:
+      config: veridor.json
+      # Omit to use target.base_url from the configuration. Veridor sends every
+      # credential here, so whoever sets this value chooses where they go: a
+      # literal, as here, changes only by a commit. A variable that is empty
+      # when the job runs is refused rather than falling back to it. A literal
+      # is not the whole answer: a pipeline variable named http_proxy, in any
+      # case, would carry every credential to a proxy, so the job removes
+      # every *_proxy variable before veridor runs unless
+      # proxy_from_environment is true, and with install: pip a PIP_INDEX_URL
+      # picks the code that runs. Wherever someone who may not read the
+      # credentials can run a pipeline, set the project's "Minimum role to
+      # use pipeline variables" to maintainer or no_one_allowed.
+      base_url: "https://staging.example.com"
+      fail_on: new+confirmed
+      # Exit 3 (nothing gating found, but something went unmeasured) fails the
+      # job unless this is true; then exit 3, and only exit 3, is a warning.
+      allow_unmeasured: false
+
+  # CI/CD Catalog form, once the repository is mirrored to GitLab and a release
+  # is published there. The address assumes a mirror at gitlab.com/Veridor-authz/veridor,
+  # which does not exist yet, under a namespace nothing here shows this project
+  # holds. Whoever holds it could publish a component at that address, and it
+  # would run with this project's CI/CD variables, so check the holder first. A
+  # component version can also be a full commit SHA, which does not move the way
+  # a tag can.
+  # - component: gitlab.com/Veridor-authz/veridor/veridor@0.1.0
+  #   inputs:
+  #     config: veridor.json
+  #     base_url: "https://staging.example.com"
+
+# The gate probes whatever base_url serves when the job starts, so run it
+# after the job that deploys that target. The default stage, `test`, runs
+# before GitLab's default `deploy` stage: aimed at the staging this pipeline
+# deploys, it would measure the previous deployment. Give it a later stage,
+# for example
+#
+# stages: [build, test, deploy-staging, verify-staging, deploy-production]
+#
+# with `stage: verify-staging` in the inputs above, or put it in the deploy
+# job's stage with `needs:` on that job, as the review-app example below does.
+#
+# The job is named `veridor` (input job_name) and runs in stage `test` (input
+# stage) in every pipeline your workflow creates (input job_rules). Without
+# workflow:rules, a push to a branch with an open merge request makes a branch
+# pipeline and a merge request pipeline, and the gate runs in both. To get one,
+# GitLab's "switch between branch pipelines and merge request pipelines"
+# recipe:
+#
+# workflow:
+#   rules:
+#     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+#     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
+#       when: never
+#     - if: $CI_COMMIT_BRANCH
+#
+# That also stops tag pipelines, so the gate no longer runs on a tag. Setting
+# job_rules instead restricts the gate itself: each pipeline your rules leave
+# out runs without it.
+#
+# To gate a review app, have the deploy job write the app's URL to a dotenv
+# report, set `base_url: $REVIEW_APP_URL` in the inputs above, and add a job
+# of the same name here with only the keys to add; GitLab merges it into the
+# included job. Do this only where the project's "Minimum role to use pipeline
+# variables" setting excludes everyone who may not read the credentials:
+# GitLab ranks a pipeline variable, set by whoever runs a pipeline, above the
+# dotenv value, so a REVIEW_APP_URL given when a pipeline is run would receive
+# every token.
+#
+# deploy-review:
+#   script:
+#     - ./deploy-review.sh
+#     - echo "REVIEW_APP_URL=https://review-$CI_COMMIT_REF_SLUG.example.com" >> review.env
+#   artifacts:
+#     reports:
+#       dotenv: review.env
+#
+# veridor:
+#   needs: [{job: deploy-review, artifacts: true}]
+#
+# Not `base_url: $CI_ENVIRONMENT_URL`: GitLab sets that variable only in a job
+# that declares an environment, and the gate job declares none, so the job
+# would stop with exit 2 on every pipeline.
+#
+# Reports it publishes, under veridor-out/ (input output_dir):
+#   gl-sast-report.json          artifacts:reports:sast (rendered on Ultimate)
+#   veridor-junit.xml            artifacts:reports:junit (every tier)
+#   gl-code-quality-report.json  artifacts:reports:codequality
+#   veridor-run.json, veridor-summary.md  plain artifacts

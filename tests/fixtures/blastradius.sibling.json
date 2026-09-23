@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "target": {
+    "base_url": "http://127.0.0.1:8765",
+    "timeout_seconds": 3
+  },
+  "identities": {
+    "invoice_owner": {
+      "headers": {
+        "Authorization": "Bearer owner-token"
+      }
+    },
+    "peer_tenant": {
+      "headers": {
+        "Authorization": "Bearer peer-token"
+      }
+    },
+    "other_tenant": {
+      "headers": {
+        "Authorization": "Bearer outsider-token"
+      }
+    }
+  },
+  "checks": [
+    {
+      "id": "reports-quarterly-isolation",
+      "name": "Quarterly report is not readable across tenants",
+      "request": {
+        "method": "GET",
+        "path": "/api/reports/quarterly"
+      },
+      "expect": {
+        "invoice_owner": {
+          "status": [
+            200
+          ]
+        },
+        "other_tenant": {
+          "status": [
+            403
+          ]
+        }
+      }
+    }
+  ],
+  "matrix": {
+    "specimens": {
+      "/api/reports/{id}": [
+        {
+          "label": "shared_report",
+          "values": {
+            "id": "r-77"
+          }
+        }
+      ]
+    }
+  }
+}

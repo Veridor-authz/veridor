@@ -1,0 +1,66 @@
+# Used by `helm lint` and tests/test_helm_chart.py. It is the demo
+# configuration (fixtures/veridor.demo.json) with every credential moved into
+# a Secret, which is the shape the chart requires.
+hook:
+  mode: argocd
+target:
+  baseUrl: http://invoices-api.shop.svc.cluster.local:8765
+secretEnv:
+  - name: VERIDOR_OWNER_TOKEN
+    secretName: invoices-gate-credentials
+    key: owner-token
+  - name: VERIDOR_OUTSIDER_TOKEN
+    secretName: invoices-gate-credentials
+    key: outsider-token
+  - name: VERIDOR_ADMIN_TOKEN
+    secretName: invoices-gate-credentials
+    key: admin-token
+config:
+  version: 1
+  target:
+    base_url: http://127.0.0.1:8765
+    timeout_seconds: 3
+  identities:
+    invoice_owner:
+      headers:
+        Authorization: Bearer ${VERIDOR_OWNER_TOKEN}
+      marker: vdr-Xk7Qm2Ls9Rt4Vb8Nc3Zp6Wf1
+    other_tenant:
+      headers:
+        Authorization: Bearer ${VERIDOR_OUTSIDER_TOKEN}
+      marker: vdr-Bq3Wm8Ke5Tz1Yx7Rn2Hd4Vs6
+      marker_probe:
+        method: GET
+        path: /api/invoices/inv-200
+    administrator:
+      headers:
+        Authorization: Bearer ${VERIDOR_ADMIN_TOKEN}
+    anonymous:
+      headers: {}
+  checks:
+    - id: invoice-tenant-isolation
+      name: Invoice tenant isolation
+      request:
+        method: GET
+        path: /api/invoices/inv-100
+      expect:
+        invoice_owner:
+          status: [200]
+          contains_marker: invoice_owner
+        other_tenant:
+          status: [404]
+          excludes_marker: invoice_owner
+        anonymous:
+          status: [401]
+    - id: audit-admin-role
+      name: Audit log administrator role
+      request:
+        method: GET
+        path: /api/admin/audit
+      expect:
+        administrator:
+          status: [200]
+        invoice_owner:
+          status: [403]
+        other_tenant:
+          status: [403]

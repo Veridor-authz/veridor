@@ -1,0 +1,9 @@
+# Patterns to ignore when building the package.
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*.orig
+*~
+# Values files used by `helm lint` / chart-testing; not part of the chart.
+ci/

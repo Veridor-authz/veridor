@@ -1,0 +1,103 @@
+{
+  "name": "datasette-private-instance-api-explorer",
+  "advisory": {
+    "id": "CVE-2023-40570",
+    "summary": "The /-/api explorer answered unauthenticated callers on an instance configured to be private.",
+    "url": "https://github.com/simonw/datasette/security/advisories/GHSA-7ch3-7pp7-7cpq",
+    "note": [
+      "The first BUILT pair: datasette publishes no image for its 1.0 alphas, so",
+      "each side is built from the release's published wheel, pinned by its PyPI",
+      "sha256, on a base pinned by digest (fixtures/pairs/recipes/datasette).",
+      "Status only, like gitea-private-org. The instance denies view-instance to",
+      "everyone but the owner; on 1.0a3 an anonymous GET /-/api still answers 200,",
+      "though with every name hidden. 1.0a4 answers 403 (fix commit 01e0558).",
+      "The second check is the control: the instance root is refused on BOTH",
+      "releases, so the differential is the explorer and not an open instance."
+    ]
+  },
+  "image": "veridor-pair-build/datasette",
+  "vulnerable": "1.0a3",
+  "patched": "1.0a4",
+  "build": {
+    "recipe": "datasette",
+    "base": "python@sha256:f77ac9e44ae96ef2c90b8053ea08c31f8be030f824196b0ae4db6d462c84e51f",
+    "package": "datasette"
+  },
+  "vulnerable_sha256": "474f307972a0fa563e86a1b16289355d14adf95cb386f881e06b46b20f30594e",
+  "patched_sha256": "dd815b35a00b86b7eea1db38fac525285ca1f8836accd094e7f3b0a01ed28b38",
+  "container_port": 8001,
+  "health_path": "/-/static/app.css",
+  "provision": "datasette_private_instance",
+  "marker": "VERIDOR-MARKER-5d2e8a07c4b1f9",
+  "control": {
+    "path": "/-/api",
+    "headers": {
+      "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+    },
+    "status": 200,
+    "expect_marker": false
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+        }
+      },
+      "anonymous": {
+        "headers": {}
+      }
+    },
+    "checks": [
+      {
+        "id": "api-explorer-must-honour-a-private-instance",
+        "name": "The API explorer must refuse a caller the instance refuses",
+        "request": {
+          "method": "GET",
+          "path": "/-/api"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ]
+          },
+          "anonymous": {
+            "status": [
+              403
+            ]
+          }
+        }
+      },
+      {
+        "id": "instance-root-is-private",
+        "name": "The instance itself refuses an anonymous caller",
+        "request": {
+          "method": "GET",
+          "path": "/"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ]
+          },
+          "anonymous": {
+            "status": [
+              403
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "vulnerable_failing_checks": [
+    "api-explorer-must-honour-a-private-instance"
+  ],
+  "expected_evidence": "ungraded"
+}

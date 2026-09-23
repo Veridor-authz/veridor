@@ -1,0 +1,19 @@
+# Optional: a dedicated ServiceAccount for the gate, instead of the
+# namespace's default one. Its token is never mounted. Add to your overlay:
+#
+#   components:
+#     - <path to>/components/service-account
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - serviceaccount.yaml
+patches:
+  - target:
+      group: batch
+      version: v1
+      kind: Job
+      name: veridor-gate
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/serviceAccountName
+        value: veridor-gate

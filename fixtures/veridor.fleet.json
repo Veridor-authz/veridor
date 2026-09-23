@@ -1,0 +1,69 @@
+{
+  "_comment": "Per-principal-scoped API. Every resource path embeds the CALLER's own principal, so the marker owner and the caller under test can never share one URL and no same-check control is possible. Each identity proves its own marker is live with a marker_probe, run once per run before the checks.",
+  "version": 1,
+  "target": {
+    "base_url": "http://127.0.0.1:8765",
+    "timeout_seconds": 3
+  },
+  "identities": {
+    "device_a": {
+      "headers": {
+        "Authorization": "Bearer device-a-token"
+      },
+      "marker": "vdr-OIItAlvvweFpwlDNmT1j5WJ8",
+      "marker_probe": {
+        "method": "GET",
+        "path": "/fleet/v1/device-a/artifacts/fw.bin"
+      }
+    },
+    "device_b": {
+      "headers": {
+        "Authorization": "Bearer device-b-token"
+      },
+      "marker": "vdr-lWJ25HBfPp4Y3_MeEkYhL9Gu",
+      "marker_probe": {
+        "method": "GET",
+        "path": "/fleet/v1/device-b/artifacts/fw.bin"
+      }
+    },
+    "anonymous": {
+      "headers": {}
+    }
+  },
+  "checks": [
+    {
+      "id": "fleet-device-b-artifact",
+      "name": "Device B artifact carries no device A data",
+      "request": {
+        "method": "GET",
+        "path": "/fleet/v1/device-b/artifacts/fw.bin"
+      },
+      "expect": {
+        "device_b": {
+          "status": [200],
+          "excludes_marker": "device_a"
+        },
+        "anonymous": {
+          "status": [401]
+        }
+      }
+    },
+    {
+      "id": "fleet-device-a-artifact",
+      "name": "Device A artifact carries no device B data",
+      "request": {
+        "method": "GET",
+        "path": "/fleet/v1/device-a/artifacts/fw.bin"
+      },
+      "expect": {
+        "device_a": {
+          "status": [200],
+          "excludes_marker": "device_b"
+        },
+        "device_b": {
+          "status": [403]
+        }
+      }
+    }
+  ]
+}

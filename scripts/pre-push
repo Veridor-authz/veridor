@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Run the fast tier before anything leaves this machine.
+#
+# Install:  ln -sf ../../scripts/pre-push .git/hooks/pre-push
+#
+# Why this exists. CI is configured to run the fast tier on every push to `main`
+# and every pull request. The gap is that CI cannot see a commit that never leaves the checkout:
+# a long stretch of local work can go red with nothing looking at it until the
+# day it is pushed.
+#
+# So this is not a second copy of the CI gate. It is the gate moved to the last
+# moment code is still local.
+#
+# What it tests is what is being pushed: the tip of each ref git names on
+# stdin, exported with `git archive` into a scratch directory, never the
+# working tree. It used to run the fast tier in the checkout, so a red commit
+# went out whenever the working tree was green -- a fix not yet committed, or
+# `git push origin <red branch>` from a green one (both reproduced). Commits
+# below a tip are not tested one by one; CI does not test them either.
+#
+# It runs the fast tier once per distinct tip, in that tip's own tree. Refs
+# that share a tip commit share one run, an annotated tag and the commit it
+# tags included, but a push of several refs, or of tags, at different commits
+# runs it once for each, so it takes that many times as long. And pushing an
+# old tag or an archived branch runs that commit's own fast tier, as it was
+# then, which may refuse the push though the current branch is green. Both are deliberate: what leaves is what is tested.
+#
+# Bypass with `git push --no-verify` when you mean to; the point is that
+# bypassing is a thing you decide rather than a thing that happens.
+set -euo pipefail
+
+root="$(git rev-parse --show-toplevel)"
+python="${VERIDOR_PYTHON:-python3.12}"
+
+if ! command -v "$python" >/dev/null 2>&1; then
+    echo "pre-push: $python not found; set VERIDOR_PYTHON to the interpreter to use" >&2
+    exit 1
+fi
+
+# One line per ref: <local ref> <local sha> <remote ref> <remote sha>. A local
+# sha of all zeros is a deletion, which pushes no commit. For an annotated tag
+# the local sha is the tag object, so each sha is peeled to the commit it
+# names before deduplicating; deduplicating on the tag object ran the fast
+# tier twice for `git push origin main v1` with v1 on main's tip. A tag of a
+# tree or blob does not peel and is kept as given.
+tips=""
+while read -r _ local_sha _ _; do
+    [ -n "$local_sha" ] || continue
+    case "$local_sha" in
+        *[!0]*) ;;
+        *) continue ;;
+    esac
+    tip="$(git -C "$root" rev-parse --verify --quiet "$local_sha^{commit}" || echo "$local_sha")"
+    case " $tips " in
+        *" $tip "*) ;;
+        *) tips="$tips $tip" ;;
+    esac
+done
+
+if [ -z "$tips" ]; then
+    echo "pre-push: no commit is being pushed; nothing to test."
+    exit 0
+fi
+
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/veridor-pre-push.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT
+
+for tip in $tips; do
+    tree="$scratch/$tip"
+    mkdir -p "$tree"
+    git -C "$root" archive "$tip" | tar -x -C "$tree"
+    echo "pre-push: running the fast tier on $tip, as committed, before it leaves the machine..."
+    if ! (cd "$tree" && "$python" scripts/run_tests.py --tier fast); then
+        cat >&2 <<MESSAGE
+
+pre-push: REFUSED. The fast tier fails on $tip, a commit this push
+sends. It is the gate this project asks contributors to run on every commit;
+pushing now puts it in front of CI in the state it is in. The working tree was
+not tested: what is committed is what leaves.
+
+Fix it and commit, or push deliberately with:  git push --no-verify
+MESSAGE
+        exit 1
+    fi
+done

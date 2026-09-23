@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "target": {
+    "base_url": "http://127.0.0.1:8765",
+    "timeout_seconds": 3
+  },
+  "identities": {
+    "invoice_owner": {
+      "headers": {
+        "Authorization": "Bearer owner-token"
+      },
+      "marker": "vdr-Xk7Qm2Ls9Rt4Vb8Nc3Zp6Wf1"
+    },
+    "peer_tenant": {
+      "headers": {
+        "Authorization": "Bearer peer-token"
+      }
+    },
+    "other_tenant": {
+      "headers": {
+        "Authorization": "Bearer outsider-token"
+      }
+    },
+    "administrator": {
+      "headers": {
+        "Authorization": "Bearer admin-token"
+      }
+    },
+    "anonymous": {
+      "headers": {}
+    }
+  },
+  "checks": [
+    {
+      "id": "invoice-tenant-isolation",
+      "name": "Invoice tenant isolation",
+      "request": {
+        "method": "GET",
+        "path": "/api/invoices/inv-100"
+      },
+      "expect": {
+        "invoice_owner": {
+          "status": [200],
+          "contains_marker": "invoice_owner"
+        },
+        "other_tenant": {
+          "status": [404],
+          "excludes_marker": "invoice_owner"
+        },
+        "anonymous": {
+          "status": [401]
+        }
+      }
+    }
+  ],
+  "matrix": {
+    "specimens": {
+      "/api/invoices/{id}": [
+        {"label": "owner_invoice", "values": {"id": "inv-100"}}
+      ],
+      "/api/reports/{id}": [
+        {"label": "shared_report", "values": {"id": "r-77"}}
+      ],
+      "/api/tenants/{tid}/users/{uid}": [
+        {
+          "label": "own_tenant_user",
+          "per_identity": {
+            "invoice_owner": {"tid": "t-1", "uid": "u-1"},
+            "peer_tenant": {"tid": "t-2", "uid": "u-2"},
+            "other_tenant": {"tid": "t-3", "uid": "u-3"}
+          }
+        }
+      ]
+    },
+    "ignore": [
+      "/health"
+    ],
+    "marker_owner": "invoice_owner",
+    "peer_groups": {
+      "tenant_users": ["invoice_owner", "peer_tenant", "other_tenant"]
+    },
+    "privilege_order": ["anonymous", "other_tenant", "administrator"],
+    "unauthenticated": "anonymous"
+  }
+}

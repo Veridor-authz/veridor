@@ -1,0 +1,305 @@
+spec:
+  description: "Veridor authorization regression gate: runs `veridor run` and publishes JUnit, GitLab SAST and Code Quality reports. The job exits with Veridor's own exit code."
+  inputs:
+    stage:
+      description: "Pipeline stage the gate job runs in. It must exist in your pipeline's stages. The gate probes whatever base_url serves when the job starts, so run it after the job that deploys that target: in a later stage, or in the same stage with needs: on the deploy job. The default, test, runs before GitLab's default deploy stage, so aimed at a target this pipeline deploys it measures the previous deployment."
+      default: test
+    job_name:
+      description: "Name of the gate job. Include the component twice with two names to gate two configurations."
+      default: veridor
+      regex: '^[A-Za-z0-9][A-Za-z0-9_.:-]*$'
+    install:
+      description: "How the job gets Veridor. image: run the Veridor container image (input image). pip: pip-install the package (input pip_package) into python_image, for runners that cannot pull the Veridor image."
+      options:
+        - image
+        - pip
+      default: image
+    image:
+      description: "Veridor container image, used when install is image. Its ENTRYPOINT is veridor, so the job clears it. Pin a digest once one is published. The default names the first release, which does not exist yet."
+      default: "ghcr.io/veridor-authz/veridor:0.1.0"
+      regex: '^\S+$'
+    python_image:
+      description: "Python 3.11 or newer image, used when install is pip. The job installs and runs the gate in it with every credential, so the default is pinned by digest: python:3.12-alpine at the digest the release Dockerfile builds on. It has no bash, and the job's script needs none. A tag can be moved to other contents; pin yours by digest too."
+      default: "python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111"
+      regex: '^\S+$'
+    pip_package:
+      description: "What pip installs when install is pip: a pinned requirement, or the path of a wheel in the project. The default names the first release, which as of 2026-11-04 is not on PyPI. The name is unclaimed there, so anyone can register it and publish that version, and this default would then run their code with every credential in the job: until the first release, set this to a wheel built from the repository. It names code the job installs and runs, so never forward untrusted text into it. A $ must begin a $NAME or ${NAME} variable reference: the value is written into the job's shell, so anything else after a $, such as $(...), is refused when the pipeline is created."
+      default: "veridor==0.1.0"
+      regex: '^(?:[^"\\\x60\n$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})+$'
+    config:
+      description: "Path of the Veridor configuration, relative to the project directory. Credentials in it are ${VERIDOR_*} references, filled from masked CI/CD variables. A $ must begin a $NAME or ${NAME} variable reference: the value is written into the job's shell, so anything else after a $, such as $(...), is refused when the pipeline is created."
+      default: veridor.json
+      regex: '^(?:[^"\\\x60\n$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})+$'
+    base_url:
+      description: "Overrides target.base_url. Empty uses the configuration's own. Veridor sends every credential to this address: prefer a literal URL. A literal is not enough on its own (see proxy_from_environment, and install: pip reads PIP_INDEX_URL): wherever someone who may not read the credentials can run a pipeline, set the project's Minimum role to use pipeline variables to maintainer or no_one_allowed. A variable reference is expanded when the job runs, e.g. $REVIEW_APP_URL written by your deploy job to a dotenv report, but a pipeline variable of that name outranks dotenv, project and .gitlab-ci.yml values. If it expands to nothing, the job refuses (exit 2). Not $CI_ENVIRONMENT_URL: GitLab sets it only in a job with an environment, and this job has none. A $ must begin a $NAME or ${NAME} reference: the value is written into the job's shell, so anything else after a $, such as $(...), is refused when the pipeline is created."
+      default: ""
+      regex: '^(?:[^"''\\\x60\s$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})*$'
+    proxy_from_environment:
+      description: "false (default): veridor runs without any variable whose name ends in _proxy, in any case (http_proxy, HTTPS_PROXY, no_proxy), so its requests go straight to the target, and the log names what was removed. true: veridor keeps them and follows http_proxy or https_proxy for a target that is not loopback, naming the proxy before its first request. A proxy reads every request to an http:// target, credentials included, and a pipeline variable of such a name is chosen by whoever runs the pipeline, whatever base_url says. Set true only for a target reachable only through a proxy, and only where the project's Minimum role to use pipeline variables excludes everyone who may not read the credentials. The pip install (install: pip) runs before this and keeps them."
+      type: boolean
+      default: false
+    wait_for_target:
+      description: "Seconds to wait, before the first request, for the target's host and port to accept a TCP connection (veridor run --wait-for-target). 0 (default) does not wait. For a target deployed moments earlier in the same pipeline. It never changes a verdict: a target that never accepts is measured as before. A whole number; anything else is refused (exit 2)."
+      type: number
+      default: 0
+    fail_on:
+      description: "Findings that fail the gate (veridor run --fail-on). new+confirmed (default): every finding not in the baseline, plus every finding graded confirmed (a response carried another identity's marker) even when the baseline holds it. A finding graded suspected (the status was wrong, no marker was seen) or ungraded (its check declares no marker) stops failing the gate once its id is in the baseline file, and that file is part of your merge request's diff: require Code Owner approval for it (CODEOWNERS; GitLab Premium), or use any, which gates on every finding whatever the baseline holds."
+      options:
+        - new+confirmed
+        - new
+        - confirmed
+        - any
+        - none
+      default: new+confirmed
+    require_complete:
+      description: "Pass --require-complete: exit 3 when any probe went unanswered, or a denial is unproven (liveness.unproven: a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its marker_probe), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a marker_probe), instead of passing on what was answered."
+      type: boolean
+      default: true
+    allow_unmeasured:
+      description: "When true, exit 3 (the gate passed but something went unmeasured) shows as a warning via allow_failure exit_codes [3]. When false (default) exit 3 fails the job. The component lets no other exit code fail, but a rule in job_rules that sets allow_failure overrides this (see job_rules)."
+      type: boolean
+      default: false
+    baseline:
+      description: "Prior run JSON to diff against (veridor run --baseline). Empty: no baseline. A path that does not exist is exit 2. Under the default fail_on, a finding whose id is in this file no longer fails the gate unless it is confirmed. The file is part of your merge request's diff, so require Code Owner approval for it (CODEOWNERS; GitLab Premium). A $ must begin a $NAME or ${NAME} variable reference, as for config."
+      default: ""
+      regex: '^(?:[^"''\\\x60\n$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})*$'
+    openapi:
+      description: "OpenAPI 3 or Swagger 2 JSON specification; enables boundary coverage (veridor run --openapi). Empty: none. A $ must begin a $NAME or ${NAME} variable reference, as for config."
+      default: ""
+      regex: '^(?:[^"''\\\x60\n$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})*$'
+    output_dir:
+      description: "Directory, relative to the project, for the run history and every report. It must be writable by the job's user (uid 10001 in the Veridor image)."
+      default: veridor-out
+      regex: '^[A-Za-z0-9_][A-Za-z0-9_./-]*$'
+    extra_args:
+      description: "More veridor run flags, split on spaces, e.g. --read-only --require-clean-teardown. Flags the component sets from its own inputs (config, output dir, JSON, fail-on, base URL, baseline, OpenAPI, wait for target) and --help are refused, abbreviations included. A $ must begin a $NAME or ${NAME} variable reference; ${NAME:...} and other expansions are refused when the pipeline is created, because bash evaluates some of them as arithmetic, which can run commands."
+      default: ""
+      regex: '^(?:[A-Za-z0-9 _./:=,+@%-]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})*$'
+    artifacts_expire_in:
+      description: "How long GitLab keeps the reports (artifacts:expire_in)."
+      default: "30 days"
+      regex: '^[A-Za-z0-9 ]+$'
+    job_rules:
+      description: "The job's rules. Default: every pipeline your workflow creates. Without workflow:rules, GitLab makes two pipelines for a push to a branch with an open merge request, and the gate runs in both; add workflow:rules to pick one (ci/.gitlab-ci.yml shows GitLab's recipe). Setting rules here restricts the gate: each pipeline they leave out runs without it. A rule's allow_failure overrides the job's own, as GitLab documents for rules, and one that sets it to true would show a finding (exit 1) as a warning. The component cannot check the rules you pass: leave allow_failure out of them."
+      type: array
+      default:
+        - when: on_success
+---
+# Veridor authorization regression gate: a GitLab CI/CD component.
+#
+# Use it with `include: remote:` (a raw URL of this file pinned to a commit,
+# with `integrity:`) or, once the repository is mirrored to GitLab and released
+# there, `include: component:`. ci/.gitlab-ci.yml shows both; ci/README.md
+# says what was and was not tested.
+# NOT YET PUBLISHED as of 2026-11-04: no release tag, container image, PyPI package or
+# CI/CD Catalog entry exists. The defaults name the first release.
+#
+# Exit codes, as the job treats them:
+#   0 nothing the fail_on policy gates on was found; a finding it does not
+#     gate on, and with require_complete false an unanswered probe, also give 0
+#   1 gate failed on a finding | 2 refused (config, credential, path)
+#   3 gate passed but something went unmeasured: FAILS the job unless
+#     allow_unmeasured is true, and then only exit 3 is allowed to fail;
+#     a rule in job_rules that sets allow_failure overrides this, and the
+#     component cannot check it, so leave allow_failure out of job_rules
+#   70 Veridor crashed (a bug in Veridor, never a finding)
+#   130 / 143 interrupted by SIGINT / SIGTERM (teardown runs first)
+# Every one of them is printed on its own line at the end of the log.
+# A job_rules rule that sets allow_failure overrides how the job treats
+# every exit code that fails it
+# (1, 2, 3 and 70), not only exit 3.
+#
+# The two hidden jobs of each pair below exist because a component input
+# cannot add or remove a key. The gate job extends exactly one of each pair,
+# chosen by the install and allow_unmeasured inputs.
+
+".$[[ inputs.job_name ]]:install-image":
+  image:
+    name: "$[[ inputs.image ]]"
+    entrypoint: [""]
+  before_script:
+    - veridor --version
+
+".$[[ inputs.job_name ]]:install-pip":
+  image: "$[[ inputs.python_image ]]"
+  before_script:
+    - python3 -m pip install --quiet --disable-pip-version-check "$[[ inputs.pip_package ]]"
+    - veridor --version
+
+".$[[ inputs.job_name ]]:unmeasured-false":
+  allow_failure: false
+
+".$[[ inputs.job_name ]]:unmeasured-true":
+  allow_failure:
+    exit_codes: [3]
+
+"$[[ inputs.job_name ]]":
+  stage: $[[ inputs.stage ]]
+  extends:
+    - ".$[[ inputs.job_name ]]:install-$[[ inputs.install ]]"
+    - ".$[[ inputs.job_name ]]:unmeasured-$[[ inputs.allow_unmeasured ]]"
+  rules: $[[ inputs.job_rules ]]
+  interruptible: true
+  retry: 0
+  script:
+    - |
+      # Not `set -u`: an input naming an unset variable must reach the
+      # refusal below with exit 2, not die in the shell with exit 1, which
+      # reads as a finding.
+      set -e
+      out="$[[ inputs.output_dir ]]"
+
+      # The job runs as the image's user: uid 10001 in the Veridor image. It
+      # cannot create anything in a project directory that only root may write.
+      # Veridor refuses that itself, with exit 2, before its first request, but
+      # its advice (--output-dir /tmp/veridor, docker run --user) is not
+      # something a GitLab job can act on. This check names the runner
+      # settings instead.
+      if ! mkdir -p "$out" || ! : > "$out/.veridor-write-check"; then
+        echo "veridor-gate: exit 2: REFUSED. uid $(id -u) cannot write $out in $(pwd). The Veridor image runs as uid 10001 and the project directory must be writable by it. GitLab's docker and kubernetes executors clone with umask 0000 by default, which allows it; a runner with FF_DISABLE_UMASK_FOR_DOCKER_EXECUTOR or FF_DISABLE_UMASK_FOR_KUBERNETES_EXECUTOR chowns the checkout to the image user instead. Otherwise use install: pip, or a runner that does either. Nothing was sent to the target." >&2
+        exit 2
+      fi
+      rm -f "$out/.veridor-write-check"
+
+      # An input that names a variable must not expand to nothing: an empty
+      # base_url would silently probe the configuration's own target instead.
+      # $4 says what an empty input means, so the advice cannot send a
+      # base_url user to the configuration's own target unawares.
+      veridor_gate_expanded() {
+        if [ -n "$2" ] && [ -z "$3" ]; then
+          echo "veridor-gate: exit 2: REFUSED. Input $1 is '$2', which expanded to an empty string in this pipeline. Set that variable for this job, or leave the input empty to $4. Nothing was sent to the target." >&2
+          exit 2
+        fi
+      }
+      base_url="$[[ inputs.base_url ]]"
+      # shellcheck disable=SC2016 # the raw input, deliberately unexpanded
+      veridor_gate_expanded base_url '$[[ inputs.base_url ]]' "$base_url" "probe the configuration's own target.base_url instead"
+      baseline="$[[ inputs.baseline ]]"
+      # shellcheck disable=SC2016 # the raw input, deliberately unexpanded
+      veridor_gate_expanded baseline '$[[ inputs.baseline ]]' "$baseline" "run without a baseline"
+      openapi="$[[ inputs.openapi ]]"
+      # shellcheck disable=SC2016 # the raw input, deliberately unexpanded
+      veridor_gate_expanded openapi '$[[ inputs.openapi ]]' "$openapi" "run without an OpenAPI document"
+
+      # A whole number of seconds, as veridor's --wait-for-target takes it. A
+      # number input can arrive as 1.5; that is refused here, naming the input.
+      wait_for_target="$[[ inputs.wait_for_target ]]"
+      waits=false
+      case "$wait_for_target" in
+        "" | *[!0-9]*)
+          echo "veridor-gate: exit 2: REFUSED. Input wait_for_target is '$wait_for_target'; it must be a whole number of seconds, 0 or more (0 does not wait). Nothing was sent to the target." >&2
+          exit 2
+          ;;
+        *[1-9]*) waits=true ;;
+      esac
+
+      # extra_args may add flags, never replace one this component sets from its
+      # own inputs. argparse accepts unique abbreviations (--fail none is
+      # --fail-on none), so prefixes are refused too. So is help: `run --help`
+      # exits 0 without running the gate.
+      set -- $[[ inputs.extra_args ]]
+      for arg in "$@"; do
+        case "$arg" in
+          --con*|--ou*|--j*|--f*|--base-u*|--basel*|--op*|--w*|-h*|--h*)
+            echo "veridor-gate: exit 2: REFUSED. extra_args contains $arg, which overrides a flag this component sets from its own inputs (config, output_dir, fail_on, base_url, baseline, openapi, wait_for_target) or asks for help instead of a run. Use the input. Nothing was sent to the target." >&2
+            exit 2
+            ;;
+        esac
+      done
+      if [ -n "$base_url" ]; then set -- "$@" --base-url "$base_url"; fi
+      if [ -n "$baseline" ]; then set -- "$@" --baseline "$baseline"; fi
+      if [ -n "$openapi" ]; then set -- "$@" --openapi "$openapi"; fi
+      if $waits; then set -- "$@" --wait-for-target "$wait_for_target"; fi
+      if $[[ inputs.require_complete ]]; then set -- "$@" --require-complete; fi
+
+      # Proxies. Veridor follows http_proxy or https_proxy, in any case, for a
+      # target that is not loopback, and a proxy reads every request to an
+      # http:// target, credentials included. A pipeline variable of that
+      # name is set by whoever starts the pipeline, so it would pick where
+      # every credential goes whatever base_url says. Unless
+      # proxy_from_environment is true, veridor runs without any variable
+      # whose name ends in _proxy, in any case: the set urllib reads. Names
+      # only; a value can carry a proxy password.
+      # The names come from env, sed and printenv. In an image without one of
+      # them, its error is swallowed by the substitution or the `if` below, so
+      # nothing would be removed and the log would still say no proxy
+      # variable is set: such an image is refused instead.
+      for tool in env sed printenv; do
+        if ! command -v "$tool" > /dev/null 2>&1; then
+          echo "veridor-gate: exit 2: REFUSED. This job's image has no $tool, which the job needs to find every variable whose name ends in _proxy before veridor runs. Without it a proxy variable would reach veridor unseen, whatever proxy_from_environment says. Use an image that has env, sed and printenv. Nothing was sent to the target." >&2
+          exit 2
+        fi
+      done
+      proxies=""
+      for name in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*$/\1/p'); do
+        case "$name" in
+          *_[Pp][Rr][Oo][Xx][Yy])
+            # A line inside a multi-line value can look like NAME=...: count
+            # only a variable that is set, and each name once.
+            case " $proxies " in *" $name "*) continue ;; esac
+            if printenv "$name" > /dev/null; then proxies="$proxies $name"; fi
+            ;;
+        esac
+      done
+      if $[[ inputs.proxy_from_environment ]]; then
+        if [ -n "$proxies" ]; then
+          echo "veridor-gate: proxy_from_environment is true, so veridor keeps${proxies}. It names any proxy it uses before its first request; a proxy reads every request to an http:// target, credentials included."
+        else
+          echo "veridor-gate: proxy_from_environment is true, and no proxy variable is set: veridor connects straight to the target."
+        fi
+      else
+        for name in $proxies; do unset -v "$name"; done
+        if [ -n "$proxies" ]; then
+          echo "veridor-gate: removed${proxies} from veridor's environment (proxy_from_environment is false), so its requests go straight to the target, not through a proxy a pipeline variable could name. Set proxy_from_environment: true for a target reachable only through a proxy."
+        else
+          echo "veridor-gate: no proxy variable is set; veridor connects straight to the target (proxy_from_environment is false)."
+        fi
+      fi
+
+      # A runner cancelling the job signals the shell as well as veridor. The
+      # trap keeps this shell alive until veridor has run its teardown and
+      # exited 143, so the line below still reaches the log.
+      trap 'echo "veridor-gate: SIGTERM received; waiting for veridor to finish its teardown." >&2' TERM
+
+      status=0
+      veridor run \
+        --config "$[[ inputs.config ]]" \
+        --output-dir "$out" \
+        --fail-on "$[[ inputs.fail_on ]]" \
+        --json "$out/veridor-run.json" \
+        --report "gitlab-sast=$out/gl-sast-report.json" \
+        --report "junit=$out/veridor-junit.xml" \
+        --report "codequality=$out/gl-code-quality-report.json" \
+        --report "markdown=$out/veridor-summary.md" \
+        "$@" || status=$?
+
+      case "$status" in
+        0) echo "veridor-gate: exit 0: PASS. Nothing that --fail-on $[[ inputs.fail_on ]] gates on was found. A finding it does not gate on, such as one in the baseline, also exits 0, and so does an unanswered probe when require_complete is false. The summary above and the reports list everything measured." ;;
+        1) echo "veridor-gate: exit 1: FAIL. The gate failed on a finding. See the JUnit, SAST and Code Quality reports and $out/veridor-summary.md." >&2 ;;
+        2) echo "veridor-gate: exit 2: REFUSED. A configuration, credential, path or coverage error; the veridor: line above names it. An unset or empty \${VERIDOR_*} variable lands here, as in a fork merge request pipeline, which receives no project variables. Not a finding and not a pass." >&2 ;;
+        3)
+          if $[[ inputs.allow_unmeasured ]]; then
+            echo "veridor-gate: exit 3: INCOMPLETE, shown as a warning because allow_unmeasured is true. No gating finding, but something the gate needs went unmeasured. This is not a pass." >&2
+          else
+            echo "veridor-gate: exit 3: INCOMPLETE, failing the job. No gating finding, but something the gate needs went unmeasured (an unanswered probe, nothing answered, an unauthenticated identity, an unclean teardown, or an unproven denial that no evidence ties to a live credential; the veridor: line above names it). Set allow_unmeasured: true to show exit 3 as a warning instead." >&2
+          fi
+          ;;
+        70) echo "veridor-gate: exit 70: INTERNAL ERROR. Veridor crashed; the traceback is above. This is a bug in Veridor, not a finding about the target, and nothing was concluded." >&2 ;;
+        130) echo "veridor-gate: exit 130: INTERRUPTED by SIGINT. Sequence teardown ran first. Nothing was concluded." >&2 ;;
+        143) echo "veridor-gate: exit 143: INTERRUPTED by SIGTERM, for example a cancelled job. Sequence teardown ran first. Nothing was concluded." >&2 ;;
+        *) echo "veridor-gate: exit $status is not one of Veridor's exit codes (0 1 2 3 70 130 143); failing the job." >&2 ;;
+      esac
+      exit "$status"
+  artifacts:
+    when: always
+    expire_in: "$[[ inputs.artifacts_expire_in ]]"
+    paths:
+      - "$[[ inputs.output_dir ]]/veridor-run.json"
+      - "$[[ inputs.output_dir ]]/veridor-summary.md"
+      - "$[[ inputs.output_dir ]]/gl-sast-report.json"
+      - "$[[ inputs.output_dir ]]/veridor-junit.xml"
+      - "$[[ inputs.output_dir ]]/gl-code-quality-report.json"
+    reports:
+      sast: "$[[ inputs.output_dir ]]/gl-sast-report.json"
+      junit: "$[[ inputs.output_dir ]]/veridor-junit.xml"
+      codequality: "$[[ inputs.output_dir ]]/gl-code-quality-report.json"

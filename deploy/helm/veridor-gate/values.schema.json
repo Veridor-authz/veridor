@@ -1,0 +1,217 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "veridor-gate values",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "hook": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["", "argocd", "helm", "none"],
+          "description": "Required. Empty is accepted here only so the templates can refuse it with a message naming the three choices."
+        },
+        "argocd": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "phase": {
+              "type": "string",
+              "enum": ["PostSync"],
+              "description": "PreSync is refused: it runs before the chart's ConfigMap is created or updated. Sync is refused: Argo CD runs it with the apply of the application's manifests, not once they are Healthy, so it probes the version being replaced."
+            },
+            "deletePolicy": {
+              "type": "string",
+              "pattern": "^(BeforeHookCreation|HookSucceeded|HookFailed)(,(BeforeHookCreation|HookSucceeded|HookFailed))*$",
+              "description": "Argo CD's hook-delete-policy, one or more of BeforeHookCreation, HookSucceeded, HookFailed. Each sync's Job has a name of its own (generateName), so BeforeHookCreation deletes nothing; HookSucceeded and HookFailed delete the Job and its log once Argo CD has read it."
+            },
+            "syncWave": { "type": ["string", "integer"] }
+          }
+        },
+        "helm": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "events": {
+              "type": "string",
+              "allOf": [
+                { "pattern": "^(post-install|post-upgrade|post-rollback|test)(,(post-install|post-upgrade|post-rollback|test))*$" },
+                { "pattern": "(^|,)post-install(,|$)" },
+                { "pattern": "(^|,)post-upgrade(,|$)" }
+              ],
+              "description": "Must include post-install and post-upgrade (post-rollback and test may be added): Helm creates the Job only on the events listed, so a verb left out is ungated. pre-install, pre-upgrade and pre-rollback are refused: they run before the chart's ConfigMap is created or updated."
+            },
+            "deletePolicy": {
+              "type": "string",
+              "pattern": "^((hook-succeeded|hook-failed),)*before-hook-creation(,(hook-succeeded|hook-failed))*$",
+              "description": "Must include before-hook-creation: the Job keeps one name, and a Job an earlier run left behind would otherwise be reused by the next upgrade instead of the gate running again."
+            },
+            "weight": { "type": ["string", "integer"] },
+            "allowRenderWithoutCluster": {
+              "type": "boolean",
+              "description": "Lets a helm-mode render that reaches no cluster (helm template, a client-side --dry-run) through. Argo CD renders that way and runs a helm-mode Job as a PostSync hook with one fixed name, from which Argo CD v3.5.3 reported syncs by the previous sync's Job; under Argo CD use hook.mode argocd and leave this false."
+            }
+          }
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["repository"],
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": "string" },
+        "digest": {
+          "type": "string",
+          "pattern": "^(sha256:[a-f0-9]{64})?$"
+        },
+        "digestTag": {
+          "type": "string",
+          "description": "The tag image.digest is the digest of; empty = the chart's appVersion. With a digest set, the effective image.tag must equal it."
+        },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "command": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": { "name": { "type": "string" } }
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "The Veridor configuration object. Validated by Veridor itself at run time; the chart checks credentials and ${NAME} references."
+    },
+    "existingConfigMap": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "key": { "type": "string", "minLength": 1 }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": { "type": "string", "pattern": "^(https?://.+)?$" }
+      }
+    },
+    "secretEnv": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "secretName", "key"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "secretName": { "type": "string", "minLength": 1 },
+          "key": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "allowLiteralHeaders": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "failOn": {
+          "type": "string",
+          "enum": ["new+confirmed", "new", "any", "confirmed", "none"]
+        },
+        "requireComplete": { "type": "boolean" },
+        "requireCleanTeardown": { "type": "boolean" },
+        "readOnly": { "type": "boolean" },
+        "proveLiveness": { "type": "boolean" },
+        "sarif": { "type": "boolean" },
+        "waitForTargetSeconds": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "--wait-for-target: seconds to wait before the first request for the target's port to accept a TCP connection. 0 = off."
+        }
+      }
+    },
+    "extraArgs": {
+      "type": "array",
+      "items": { "type": ["string", "number"] }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dir": { "type": "string", "pattern": "^/work(/.*)?$" },
+        "existingClaim": { "type": "string" },
+        "sizeLimit": { "type": "string", "minLength": 1 }
+      }
+    },
+    "job": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "ttlSecondsAfterFinished": { "type": ["integer", "null"], "minimum": 0 },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+        "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "podLabels": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "runAsUser": { "type": ["integer", "null"], "minimum": 1 },
+        "runAsGroup": { "type": ["integer", "null"], "minimum": 1 },
+        "fsGroup": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "resources": { "type": "object" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "name": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "targetPeers": { "type": "array", "items": { "type": "object" } },
+        "targetPorts": { "type": "array", "items": { "type": "object" } },
+        "dns": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "peers": { "type": "array", "items": { "type": "object" } },
+            "ports": { "type": "array", "items": { "type": "object" } }
+          }
+        }
+      }
+    },
+    "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "global": { "type": "object" }
+  }
+}

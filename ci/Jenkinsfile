@@ -1,0 +1,177 @@
+// Veridor authorization regression gate -- Jenkins declarative pipeline template.
+//
+// STATUS: UNTESTED ON A REAL JENKINS CONTROLLER. Nothing here has run in a
+// Jenkins build. ci/README.md lists what was checked instead (the veridor
+// command line against the real CLI parser, the exit-code branches, the shell
+// with shellcheck) and what was not.
+//
+// NOT YET PUBLISHED. The container image, the PyPI package and the zipapp named
+// below do not exist until Veridor's first release (0.1.0).
+//
+// INSTALL -- pick one; the container image is the active one below.
+//   1. Container image (active): the Docker Pipeline plugin runs the stages in
+//      ghcr.io/veridor-authz/veridor. The image's ENTRYPOINT is `veridor`, and the
+//      plugin starts the container with a command of its own, so `args` clears
+//      the entrypoint. The plugin also passes `-u <jenkins uid>:<gid>`, so the
+//      workspace stays writable; do not add `-u root`.
+//   2. pip: the PyPI name is unclaimed. Nobody has registered `veridor`, so anyone
+//      can, and until the first release the line below would run their code
+//      with this build's credentials; build a wheel from the repository and
+//      install that path instead. Use `image 'python:3.12-slim'` (drop the args
+//      line) and, before the gate, run in an sh step:
+//        python3 -m venv .venv && .venv/bin/pip install --quiet 'veridor==0.1.0'
+//      then put .venv/bin first on PATH (environment { PATH = "..." } or
+//      withEnv). The plugin's uid cannot write site-packages, hence the venv.
+//   3. zipapp: on any agent with Python 3.11+, download veridor-0.1.0.pyz from
+//      the release, verify it with the `gh attestation verify` command in
+//      SECURITY.md (pinned to release.yml at the tag), and run
+//      `python3 veridor-0.1.0.pyz run ...` where the script says `veridor run`.
+//      SHA256SUMS alone detects a damaged download, not a substituted one.
+//
+// CREDENTIALS. The Veridor configuration names each credential as a
+// ${VERIDOR_*} reference. Bind each one with withCredentials under exactly that
+// name (below). A binding whose credential does not exist fails the build. A
+// variable that is unset or empty when Veridor starts makes it refuse with
+// exit 2 before sending anything.
+//
+// WHO CHOOSES THE TARGET. Veridor sends every bound credential to the base URL
+// (VERIDOR_BASE_URL, or target.base_url in VERIDOR_CONFIG). Whoever may set
+// that value decides where the owner, other-tenant and admin tokens go. So it
+// and every setting that can weaken the gate (fail-on, the baseline, the exit
+// 3 switch) are `environment` entries in this file, changed by a commit. They
+// are deliberately NOT build parameters: a user with Job/Build could otherwise
+// type their own host into "Build with Parameters" and collect the tokens
+// without Credentials/View, or pick a policy that cannot fail. An
+// `environment` entry also wins over a build parameter of the same name, so a
+// parameter added later in the job's configuration cannot override it. A
+// variable this file does not fix is different: http_proxy or HTTPS_PROXY on
+// the agent, in the controller's global properties or as a parameter added in
+// the job's configuration sends every credential to a proxy, and PIP_INDEX_URL
+// picks what the pip option installs. Jenkins drops a parameter the job does
+// not declare unless hudson.model.ParametersAction.keepUndefinedParameters is
+// true (SECURITY-170): keep it unset, and keep those settings to people who
+// may read the credentials.
+//
+// EXIT CODES, and the build result each one gives:
+//   0   SUCCESS    nothing the fail-on policy gates on was found; a finding
+//                  it does not gate on, such as one in the baseline, still
+//                  gives 0
+//   1   FAILURE    the gate failed on a finding
+//   2   FAILURE    refused: configuration, credential, path or coverage error
+//   3   FAILURE    no gating finding, but something went unmeasured; UNSTABLE
+//                  instead only when VERIDOR_ALLOW_UNMEASURED is 'true' below
+//   70  FAILURE    Veridor crashed (a bug in Veridor, never a finding)
+//   130 / 143  FAILURE  interrupted by SIGINT / SIGTERM; teardown ran first
+//   anything else  FAILURE
+// Reports never decide the result: `junit` runs with skipMarkingBuildUnstable,
+// so a failed test case cannot turn an exit-0 build UNSTABLE.
+//
+// PLUGINS: Pipeline, Docker Pipeline, Credentials Binding, JUnit. Warnings Next
+// Generation (9.x or newer, for its SARIF parser) is optional.
+
+pipeline {
+  agent {
+    docker {
+      image 'ghcr.io/veridor-authz/veridor:0.1.0'
+      args '--entrypoint='
+    }
+  }
+
+  options {
+    timeout(time: 30, unit: 'MINUTES')
+  }
+
+  // Fixed here, not build parameters: see WHO CHOOSES THE TARGET above.
+  environment {
+    VERIDOR_CONFIG = 'veridor.json'
+    // Overrides target.base_url; empty uses the configuration's own.
+    VERIDOR_BASE_URL = ''
+    VERIDOR_FAIL_ON = 'new+confirmed'
+    // A prior run JSON to diff against; empty for none. A path that does not
+    // exist is exit 2.
+    VERIDOR_BASELINE = ''
+    // 'true' marks exit 3 (nothing gating found, but something went
+    // unmeasured) UNSTABLE instead of FAILURE.
+    VERIDOR_ALLOW_UNMEASURED = 'false'
+  }
+
+  stages {
+    stage('Authorization gate') {
+      steps {
+        script {
+          def status = 0
+          withCredentials([
+            string(credentialsId: 'veridor-owner-token', variable: 'VERIDOR_OWNER_TOKEN'),
+            string(credentialsId: 'veridor-other-tenant-token', variable: 'VERIDOR_OTHER_TENANT_TOKEN'),
+            string(credentialsId: 'veridor-admin-token', variable: 'VERIDOR_ADMIN_TOKEN'),
+          ]) {
+            // returnStatus: the exit code comes back here instead of aborting
+            // the stage, so each code gets its own result below. `exec` makes
+            // the step's exit code Veridor's own.
+            status = sh(returnStatus: true, script: '''
+              set -e
+              out=veridor-out   # post { } below names this directory too
+              mkdir -p "$out"
+              set --
+              if [ -n "$VERIDOR_BASE_URL" ]; then set -- "$@" --base-url "$VERIDOR_BASE_URL"; fi
+              if [ -n "$VERIDOR_BASELINE" ]; then set -- "$@" --baseline "$VERIDOR_BASELINE"; fi
+              exec veridor run \
+                --config "$VERIDOR_CONFIG" \
+                --output-dir "$out" \
+                --fail-on "$VERIDOR_FAIL_ON" \
+                --require-complete \
+                --json "$out/veridor-run.json" \
+                --report "junit=$out/veridor-junit.xml" \
+                --report "sarif=$out/veridor.sarif" \
+                --report "markdown=$out/veridor-summary.md" \
+                "$@"
+            ''')
+          }
+          echo "veridor exited ${status}"
+          switch (status) {
+            case 0:
+              echo "Veridor: exit 0: PASS. Nothing that --fail-on ${env.VERIDOR_FAIL_ON} gates on was found. A finding it does not gate on, such as one in the baseline, also exits 0. The log above, veridor-out/veridor-summary.md and the test results list everything measured."
+              break
+            case 1:
+              error('Veridor: exit 1: FAIL. The gate failed on a finding; see the test results and veridor-out/veridor-summary.md.')
+              break
+            case 2:
+              error('Veridor: exit 2: REFUSED. A configuration, credential, path or coverage error; the veridor: line in the log names it. Not a finding and not a pass.')
+              break
+            case 3:
+              if (env.VERIDOR_ALLOW_UNMEASURED == 'true') {
+                unstable('Veridor: exit 3: INCOMPLETE, marked UNSTABLE because VERIDOR_ALLOW_UNMEASURED is true in the Jenkinsfile. No gating finding, but something went unmeasured. This is not a pass.')
+              } else {
+                error('Veridor: exit 3: INCOMPLETE, failing the build. No gating finding, but something the gate needs went unmeasured. Set VERIDOR_ALLOW_UNMEASURED to \'true\' in the Jenkinsfile to mark it UNSTABLE instead.')
+              }
+              break
+            case 70:
+              error('Veridor: exit 70: INTERNAL ERROR. Veridor crashed; the traceback is in the log. A bug in Veridor, not a finding about the target. Nothing was concluded.')
+              break
+            case 130:
+            case 143:
+              error("Veridor: exit ${status}: INTERRUPTED by ${status == 130 ? 'SIGINT' : 'SIGTERM'}. Sequence teardown ran first. Nothing was concluded.")
+              break
+            default:
+              error("Veridor: exit ${status} is not one of Veridor's exit codes (0 1 2 3 70 130 143); failing the build.")
+          }
+        }
+      }
+    }
+  }
+
+  post {
+    always {
+      // Present whenever Veridor got as far as a verdict; absent on an early
+      // exit 2, which has already failed the build.
+      junit testResults: 'veridor-out/veridor-junit.xml', allowEmptyResults: true,
+            skipMarkingBuildUnstable: true, skipPublishingChecks: true
+      archiveArtifacts artifacts: 'veridor-out/**', allowEmptyArchive: true, fingerprint: true
+      // Optional: Warnings NG renders the SARIF. Remove this block if the
+      // plugin is not installed; qualityGates stay empty so it cannot change
+      // the result the gate stage set.
+      recordIssues enabledForFailure: true, qualityGates: [],
+                   tools: [sarif(pattern: 'veridor-out/veridor.sarif', id: 'veridor', name: 'Veridor authorization')]
+    }
+  }
+}

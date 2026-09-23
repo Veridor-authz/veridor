@@ -1,0 +1,463 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://docs.veridor.org/schema/veridor-config-v1.schema.json",
+  "title": "Veridor configuration",
+  "description": "A Veridor configuration declares WHAT EACH IDENTITY IS ALLOWED TO DO. Veridor consumes that declaration and reports where the target disagreed with it. It never invents policy, and a wrong declaration is indistinguishable from a real finding — which is why this file is the thing you review, not the output. Validates the file AS WRITTEN, before ${ENV} expansion. Keys starting with '_' are annotations (`veridor init` writes `_comment`). The loader tolerates other unknown keys in most objects, the root included, but refuses one that is a near-miss of a real key, two swapped letters included (exit 2, at load), at the root and in each identity, session, login-step capture, session capture, inject entry, expectation, sequence, step and teardown entry. It refuses every unknown key, near-miss or not, in each check request, step request, teardown request, marker_probe, login step and session `establishes`, and `map` does the same in `matrix` and each specimen. Whatever measures boundary coverage (`veridor coverage`, `run --openapi`, `map`) does the same in `coverage`, a `null` `denial_statuses` and a `coverage` that is not an object included, and reports coverage as not measured. It does not look for near-misses in `target`, in a check's own keys or in a teardown entry's `expect`; there a misspelt optional key loads as an annotation and its setting is dropped, and a misspelt required key is refused as missing. This schema refuses every unknown key, at the root too, so a typo shows in your editor. Content rules the loader checks and a schema cannot (marker strength, identity references, capture ordering) are left to the loader, which refuses with exit 2 before any request. The $id names this schema; nothing is served at that address, so point an editor at this file.",
+  "type": "object",
+  "required": ["version", "target", "identities"],
+  "additionalProperties": false,
+  "patternProperties": { "^_": true },
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Point your editor at this file for completion and inline validation."
+    },
+    "version": {
+      "enum": [1, 2],
+      "description": "Configuration version. 2 adds `sequences` and is required when `sequences` is present; every other key means the same in both."
+    },
+    "target": {
+      "type": "object",
+      "required": ["base_url"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "properties": {
+        "base_url": {
+          "type": "string",
+          "pattern": "^(https?://[^\\s/?#@]+(/[^\\s?#]*)?|\\$\\{[A-Za-z_][A-Za-z0-9_]*\\}.*)$",
+          "description": "Root of the system under test. http(s) only, no credentials, query or fragment; file://, gopher:// and credentials-in-host forms are refused at load. May be a ${ENV} reference, checked after expansion."
+        },
+        "timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 60,
+          "default": 10,
+          "description": "Per-request timeout. Capped: an unbounded timeout is how a run whose banner promised minutes takes hours against a half-open socket."
+        },
+        "teardown_timeout_seconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "Separate timeout for sequence teardown requests, so a hung cleanup endpoint cannot stall CI for the full probe timeout on every teardown entry."
+        }
+      }
+    },
+    "identities": {
+      "type": "object",
+      "minProperties": 2,
+      "description": "At least two. A single identity cannot express a cross-identity boundary, which is the only thing this tool measures.",
+      "propertyNames": {
+        "pattern": "^[A-Za-z0-9._-]+$",
+        "description": "An identity name is a fingerprint input and is printed to your terminal, so control characters are refused."
+      },
+      "additionalProperties": { "$ref": "#/$defs/identity" }
+    },
+    "checks": {
+      "type": "array",
+      "description": "What you assert. `veridor run` grades these and needs at least one unless the configuration declares `sequences`; `veridor map` needs none.",
+      "items": {
+        "type": "object",
+        "required": ["id", "request", "expect"],
+        "additionalProperties": false,
+        "patternProperties": { "^_": true },
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]+$",
+            "description": "Stable identifier. It is a fingerprint input: changing it re-keys the finding in your baseline."
+          },
+          "name": { "type": "string", "description": "Free text, shown in reports." },
+          "description": { "type": "string" },
+          "request": { "$ref": "#/$defs/request" },
+          "expect": {
+            "type": "object",
+            "minProperties": 2,
+            "description": "One entry per identity, at least two. An expectation accepting BOTH access and denial asserts nothing and is reported as non-asserting.",
+            "additionalProperties": { "$ref": "#/$defs/expectation" }
+          }
+        }
+      }
+    },
+    "sequences": {
+      "type": "array",
+      "maxItems": 64,
+      "description": "Version 2 only. Multi-step checks with response capture and teardown. These WRITE to the target: for systems you own, and `--read-only` refuses them before any request.",
+      "items": {
+        "type": "object",
+        "required": ["id", "steps"],
+        "additionalProperties": false,
+        "patternProperties": { "^_": true },
+        "properties": {
+          "id": { "type": "string", "pattern": "^[A-Za-z0-9._-]+$" },
+          "name": { "type": "string" },
+          "steps": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": { "$ref": "#/$defs/sequence_step" }
+          },
+          "teardown": {
+            "type": "array",
+            "maxItems": 6,
+            "items": { "$ref": "#/$defs/teardown_entry" }
+          }
+        }
+      }
+    },
+    "matrix": {
+      "type": "object",
+      "description": "Settings for `veridor map`. Ignored by `run`. Strict: `map` refuses any key not listed here, annotations included.",
+      "additionalProperties": false,
+      "properties": {
+        "base_path": { "type": "string", "pattern": "^/" },
+        "marker_owner": { "type": "string" },
+        "unauthenticated": {
+          "type": "string",
+          "description": "The identity that presents NO credential. Declaring it stops a 401-everywhere row being read as a rejected credential."
+        },
+        "peer_groups": {
+          "type": "object",
+          "additionalProperties": { "type": "array", "items": { "type": "string" } }
+        },
+        "privilege_order": { "type": "array", "items": { "type": "string" } },
+        "peer_divergence_unanimous": { "type": "boolean", "default": true },
+        "ignore": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\s*([A-Za-z]+ +)?/",
+            "description": "'/path/template' or 'METHOD /path/template'."
+          }
+        },
+        "specimens": {
+          "type": "object",
+          "description": "One real object id per templated route. A route with no specimen is not probed at all.",
+          "propertyNames": { "pattern": "^/" },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["label"],
+              "additionalProperties": false,
+              "properties": {
+                "label": { "type": "string", "minLength": 1, "maxLength": 64 },
+                "values": { "$ref": "#/$defs/specimen_values" },
+                "per_identity": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": { "$ref": "#/$defs/specimen_values" }
+                }
+              },
+              "oneOf": [
+                { "required": ["values"] },
+                { "required": ["per_identity"] }
+              ]
+            }
+          }
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "description": "Read by `veridor coverage`, `run --openapi` and `map`, never by the gate. `denial_statuses` replaces the statuses that count as an authorization denial (403 and 404 by default): a non-empty list of 4xx statuses other than 401 and 407, which are authentication and never count.",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^_": {}
+      },
+      "properties": {
+        "denial_statuses": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "integer",
+            "minimum": 400,
+            "maximum": 499,
+            "not": {
+              "enum": [401, 407]
+            }
+          }
+        }
+      }
+    }
+  },
+  "if": { "required": ["sequences"] },
+  "then": { "properties": { "version": { "const": 2 } } },
+  "$defs": {
+    "http_headers": {
+      "type": "object",
+      "propertyNames": { "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+      "additionalProperties": { "type": "string" }
+    },
+    "statuses": {
+      "description": "Statuses you accept. Narrow to what you actually require — [200, 403, 404] cannot tell allowed from denied. A single integer is read as a one-element list.",
+      "oneOf": [
+        { "$ref": "#/$defs/status" },
+        { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/status" } }
+      ]
+    },
+    "status": { "type": "integer", "minimum": 100, "maximum": 599 },
+    "marker_owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Names the identity whose marker is meant, not the marker value."
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "description": "An identity with none of headers, marker, marker_probe or session is refused: as written it would be probed anonymously under its own name. Declare \"headers\": {} for an anonymous identity.",
+      "anyOf": [
+        { "maxProperties": 0 },
+        { "required": ["headers"] },
+        { "required": ["marker"] },
+        { "required": ["marker_probe"] },
+        { "required": ["session"] }
+      ],
+      "properties": {
+        "headers": {
+          "$ref": "#/$defs/http_headers",
+          "description": "Static credentials. Use ${ENV_VAR} rather than a literal — `veridor capsule` refuses to package a config containing one, with no override."
+        },
+        "marker": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{24,128}$",
+          "description": "A unique value planted in THIS identity's data. If it appears in another identity's response, the string provably crossed. The loader also refuses weak values (too few distinct characters, runs, repeats). Generate one with `veridor new-marker`."
+        },
+        "marker_probe": {
+          "$ref": "#/$defs/request",
+          "description": "A request this identity SHOULD be served, used to prove its marker is live and its credential real. Requires `marker`. Declaring one removes the 'unproven denial' disclosure."
+        },
+        "session": { "$ref": "#/$defs/session" }
+      },
+      "dependentRequired": { "marker_probe": ["marker"] }
+    },
+    "session": {
+      "type": "object",
+      "required": ["establishes"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "description": "For cookie-authenticated targets. Each identity gets its own jar; jars never cross. Needs `login`, `capture`, or both.",
+      "anyOf": [
+        { "required": ["login"] },
+        { "required": ["capture"] }
+      ],
+      "properties": {
+        "login": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 4,
+          "items": { "$ref": "#/$defs/login_step" }
+        },
+        "establishes": {
+          "type": "object",
+          "description": "The proof the login worked: exactly one of `cookie` or `capture`. Without it, 'the session is up' is an assumption.",
+          "additionalProperties": false,
+          "minProperties": 1,
+          "maxProperties": 1,
+          "properties": {
+            "cookie": { "type": "string", "minLength": 1 },
+            "capture": { "type": "string", "minLength": 1 }
+          }
+        },
+        "capture": {
+          "type": "object",
+          "description": "Session-level captures, read LIVE at send time. `cookie` only — the jar is the one source that still holds a value after the login response is gone.",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": {
+            "allOf": [
+              { "$ref": "#/$defs/capture" },
+              { "properties": { "from": { "const": "cookie" } } }
+            ]
+          }
+        },
+        "inject": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["value"],
+            "additionalProperties": false,
+            "patternProperties": { "^_": true },
+            "description": "Exactly one of header, form_field or json_field, and the value to put there.",
+            "oneOf": [
+              { "required": ["header"] },
+              { "required": ["form_field"] },
+              { "required": ["json_field"] }
+            ],
+            "properties": {
+              "header": { "type": "string", "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$" },
+              "form_field": { "type": "string", "minLength": 1 },
+              "json_field": { "type": "string", "minLength": 1 },
+              "value": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "reestablish": {
+          "enum": ["run", "check"],
+          "description": "How often to log in again."
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "not": { "required": ["json", "body"] },
+      "properties": {
+        "method": {
+          "type": "string",
+          "enum": ["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"],
+          "default": "GET",
+          "description": "Upper case. Only GET, HEAD and OPTIONS are safe. Anything else is a write and `--read-only` refuses the whole configuration."
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/([^/]|$)",
+          "description": "Absolute, same-origin path. An unsubstituted {id} is refused by `run` rather than sent."
+        },
+        "headers": { "$ref": "#/$defs/http_headers" },
+        "json": { "description": "JSON request body. Not together with `body`." },
+        "body": { "type": "string", "description": "Raw request body. Not together with `json`." }
+      }
+    },
+    "login_step": {
+      "type": "object",
+      "required": ["path", "expect_status"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "not": { "required": ["json", "body"] },
+      "properties": {
+        "method": { "$ref": "#/$defs/request/properties/method" },
+        "path": { "$ref": "#/$defs/request/properties/path" },
+        "headers": { "$ref": "#/$defs/http_headers" },
+        "json": { "description": "JSON request body." },
+        "body": { "type": "string", "description": "Raw request body." },
+        "expect_status": {
+          "$ref": "#/$defs/statuses",
+          "description": "Required: a 302 login is common, so the login's own success status is declared, not assumed."
+        },
+        "capture": {
+          "type": "object",
+          "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+          "additionalProperties": { "$ref": "#/$defs/capture" }
+        }
+      }
+    },
+    "capture": {
+      "type": "object",
+      "required": ["from"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "description": "Capture names are ONE flat namespace per identity and are single-assignment: declaring the same name on a step and on the session is a load error, not a silent override.",
+      "properties": {
+        "from": { "enum": ["cookie", "header", "json_pointer", "html_meta"] },
+        "name": { "type": "string", "minLength": 1 },
+        "pointer": { "type": "string", "pattern": "^/" }
+      },
+      "if": { "properties": { "from": { "const": "json_pointer" } } },
+      "then": { "required": ["pointer"] },
+      "else": { "required": ["name"] }
+    },
+    "expectation": {
+      "type": "object",
+      "required": ["status"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "not": { "required": ["contains_marker", "excludes_marker"] },
+      "properties": {
+        "status": { "$ref": "#/$defs/statuses" },
+        "contains_marker": {
+          "$ref": "#/$defs/marker_owner",
+          "description": "Identity whose marker MUST appear. Names the owner, not the value."
+        },
+        "excludes_marker": {
+          "$ref": "#/$defs/marker_owner",
+          "description": "Identity whose marker must NOT appear. This is the assertion that produces a `confirmed` grade when it fails."
+        }
+      }
+    },
+    "sequence_request": {
+      "description": "A check request, except that the path may begin with a ${capture} reference; the leading '/' is then enforced on the resolved path before anything is sent.",
+      "allOf": [
+        { "$ref": "#/$defs/request_shape" },
+        {
+          "properties": {
+            "path": { "type": "string", "pattern": "^(/([^/]|$)|\\$\\{)" }
+          }
+        }
+      ]
+    },
+    "request_shape": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "not": { "required": ["json", "body"] },
+      "properties": {
+        "method": { "$ref": "#/$defs/request/properties/method" },
+        "path": { "type": "string" },
+        "headers": { "$ref": "#/$defs/http_headers" },
+        "json": { "description": "JSON request body." },
+        "body": { "type": "string", "description": "Raw request body." }
+      }
+    },
+    "sequence_step": {
+      "type": "object",
+      "required": ["role", "as", "request", "expect"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "properties": {
+        "role": {
+          "enum": ["setup", "assert"],
+          "description": "Required, no default: 'setup' provisions and is never a finding; 'assert' is the probe that can be."
+        },
+        "as": { "type": "string", "description": "The one identity this step is issued as." },
+        "name": { "type": "string" },
+        "request": { "$ref": "#/$defs/sequence_request" },
+        "expect": { "$ref": "#/$defs/expectation" },
+        "capture": {
+          "type": "object",
+          "maxProperties": 8,
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "not": { "const": "run_id" }
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^(\\$(\\.[A-Za-z_][A-Za-z0-9_-]*|\\[(0|[1-9][0-9]*)\\])+|header:[!#$%&'*+.^_`|~0-9A-Za-z-]+)$",
+            "description": "A JSON path ($.id, $.items[0].id) or header:<name>."
+          }
+        }
+      }
+    },
+    "teardown_entry": {
+      "type": "object",
+      "required": ["as", "request"],
+      "additionalProperties": false,
+      "patternProperties": { "^_": true },
+      "properties": {
+        "as": { "type": "string" },
+        "name": { "type": "string" },
+        "request": { "$ref": "#/$defs/sequence_request" },
+        "expect": {
+          "type": "object",
+          "required": ["status"],
+          "additionalProperties": false,
+          "patternProperties": { "^_": true },
+          "properties": { "status": { "$ref": "#/$defs/statuses" } }
+        }
+      }
+    },
+    "specimen_values": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "One value per path parameter of the route.",
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "pattern": "^[^\\s]+$"
+      }
+    }
+  }
+}

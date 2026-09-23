@@ -1,0 +1,91 @@
+{
+  "name": "audiobookshelf-collection-cross-library-read",
+  "advisory": {
+    "id": "CVE-2026-42884",
+    "summary": "Collection endpoints bypassed library access controls, exposing restricted library data.",
+    "url": "https://github.com/advplyr/audiobookshelf/security/advisories/GHSA-rxw2-h55w-ffmh",
+    "note": [
+      "GHSA-rxw2-h55w-ffmh. GET /api/collections/:id loaded the collection by",
+      "primary key and never called checkCanAccessLibrary, so any authenticated",
+      "user could read a collection -- name, description and full book metadata --",
+      "from a library they are not permitted to access. The fix (2.34.0) returns",
+      "404 to a user the library is not shared with; the owner still gets 200.",
+      "Marker and status both move on the fix, but the marker is what grades it:",
+      "the attacker receives 200 carrying the owner's marker on 2.33.2, so the",
+      "leak is confirmed by observed data flow, not inferred from a status code.",
+      "The attacker is legitimately unauthorized -- created with",
+      "accessAllLibraries=false and no libraries, it gets 403 at the proper",
+      "/api/libraries/:id endpoints. checkCanAccessLibrary defaults to true for",
+      "every user type, which is exactly why the provisioner sets it false.",
+      "The advisory's affected range names only v2.32.1, the version reported.",
+      "2.33.2 is the last release before the fix: its CollectionController.js",
+      "calls checkCanAccessLibrary nowhere, and v2.34.0's calls it three times."
+    ]
+  },
+  "image": "advplyr/audiobookshelf",
+  "vulnerable": "2.33.2",
+  "patched": "2.34.0",
+  "vulnerable_digest": "sha256:a44ed89b3e845faa1f7d353f2cc89b2fcd8011737dd14075fa963cf9468da3a5",
+  "patched_digest": "sha256:4143292c530f6ac6700afd13360c04f477e4f1a81c1c97c4224b1c7e4330c5c4",
+  "container_port": 80,
+  "health_path": "/healthcheck",
+  "provision": "audiobookshelf",
+  "marker": "VERIDOR-MARKER-ecc7a8a4690d5764",
+  "control": {
+    "path": "/api/collections/${VERIDOR_PAIR_COLLECTION_ID}",
+    "headers": {
+      "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "library_owner": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_OWNER_TOKEN}"
+        },
+        "marker": "VERIDOR-MARKER-ecc7a8a4690d5764",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/api/collections/${VERIDOR_PAIR_COLLECTION_ID}"
+        }
+      },
+      "restricted_user": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_STRANGER_TOKEN}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "restricted-user-must-not-read-collection-in-inaccessible-library",
+        "name": "A user restricted from a library must not read its collection",
+        "request": {
+          "method": "GET",
+          "path": "/api/collections/${VERIDOR_PAIR_COLLECTION_ID}"
+        },
+        "expect": {
+          "library_owner": {
+            "status": [
+              200
+            ],
+            "contains_marker": "library_owner"
+          },
+          "restricted_user": {
+            "status": [
+              404
+            ],
+            "excludes_marker": "library_owner"
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed"
+}
