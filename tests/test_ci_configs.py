@@ -1410,6 +1410,13 @@ def unwarned_requirements(text: str) -> list[int]:
 #: What the Azure and CodeBuild install steps hold until the first release.
 WHEEL_PLACEHOLDER = "REPLACE_WITH_THE_PATH_OF_A_VERIDOR_WHEEL"
 
+#: pip's refusal of that line as a wheel name, in the wording of pip 26
+#: ("Invalid wheel filename (...): 'NAME'") and of pip 24, which a venv on a
+#: runner's Python can still ship ("NAME.whl is not a valid wheel filename").
+BAD_WHEEL_NAME = re.compile(
+    rf"Invalid wheel filename \([^)]*\): '{WHEEL_PLACEHOLDER}'"
+    rf"|{WHEEL_PLACEHOLDER}\.whl is not a valid wheel filename")
+
 
 def active_requirements(text: str) -> list[str]:
     """Lines that would really install veridor==VERSION: everything but a comment."""
@@ -1681,8 +1688,22 @@ class DocumentationTest(unittest.TestCase):
                  "--quiet", "--disable-pip-version-check", f"./{WHEEL_PLACEHOLDER}.whl"],
                 cwd=directory, capture_output=True, text=True, check=False)
             self.assertEqual(result.returncode, 1, result.stderr)
-            self.assertIn("Invalid wheel filename", result.stderr)
+            self.assertRegex(result.stderr, BAD_WHEEL_NAME)
             self.assertEqual(os.listdir(directory), [])
+
+    def test_control_the_pip_refusal_pattern(self) -> None:
+        """Both wordings pip has used for a bad wheel name match; the refusals a
+        name pip resolved instead would draw do not."""
+        for stderr in ("ERROR: Invalid wheel filename (wrong number of parts): "
+                       f"'{WHEEL_PLACEHOLDER}'",
+                       f"ERROR: {WHEEL_PLACEHOLDER}.whl is not a valid wheel filename."):
+            with self.subTest(stderr=stderr):
+                self.assertRegex(stderr, BAD_WHEEL_NAME)
+        for stderr in ("ERROR: Could not find a version that satisfies the requirement veridor",
+                       f"ERROR: No matching distribution found for {WHEEL_PLACEHOLDER}",
+                       "ERROR: Invalid wheel filename (wrong number of parts): 'other'"):
+            with self.subTest(stderr=stderr):
+                self.assertNotRegex(stderr, BAD_WHEEL_NAME)
 
     def test_control_a_requirement_without_the_warning_is_named(self) -> None:
         for path in PYPI_COPY_SOURCES:
