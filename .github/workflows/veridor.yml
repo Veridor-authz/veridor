@@ -194,17 +194,22 @@ jobs:
         run: |
           nohup python scripts/demo_server.py --vulnerable --port 8765 > "$RUNNER_TEMP/demo-vulnerable.log" 2>&1 &
           nohup python scripts/demo_server.py --port 8766 > "$RUNNER_TEMP/demo-fixed.log" 2>&1 &
+          # On failure, print what each server said: without it, the macOS
+          # stall in HTTPServer's own-name lookup showed only "did not start".
           python - <<'PY'
-          import socket, time
+          import os, socket, time
           deadline = time.monotonic() + 30
           for port in (8765, 8766):
               while True:
                   try:
                       socket.create_connection(("127.0.0.1", port), timeout=1).close()
                       break
-                  except OSError:
+                  except OSError as error:
                       if time.monotonic() > deadline:
-                          raise SystemExit(f"demo server on {port} did not start")
+                          for name in ("demo-vulnerable.log", "demo-fixed.log"):
+                              with open(os.path.join(os.environ["RUNNER_TEMP"], name)) as log:
+                                  print(f"--- {name}\n{log.read()}")
+                          raise SystemExit(f"demo server on {port} did not start: {error!r}")
                       time.sleep(0.2)
           PY
       - name: Gate against the vulnerable API (expected to fail)

@@ -1575,6 +1575,13 @@ something you installed.
 
 ### Fixed
 
+- **`serve` could sit unreachable for about 35s on a Mac whose hostname does
+  not resolve.** `http.server` looks up the server's own name after `bind()`
+  and before `listen()`; where that lookup stalls (every GitHub-hosted macOS
+  runner, actions/runner-images#14409), a browser or client connecting in
+  that window was neither served nor refused, because macOS leaves a SYN to a
+  bound port that is not yet listening unanswered. The UI server, the demo API
+  and the noise-study server no longer make the lookup.
 - **`run --openapi` left a stale coverage file and green badge when the
   configuration did not load.** `run` loads the configuration before it
   reaches coverage, so that refusal exited `2` with the previous run's

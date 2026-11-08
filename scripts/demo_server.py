@@ -8,6 +8,7 @@ import gzip
 import itertools
 import json
 import re
+import socketserver
 import sys
 import threading
 from http import HTTPStatus
@@ -336,6 +337,22 @@ def make_handler(
     return DemoHandler
 
 
+class _ListeningServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer that listens without first looking up its own name.
+
+    HTTPServer.server_bind calls socket.getfqdn() between bind() and listen();
+    on GitHub's macOS runners that stalls about 35s and a client's SYN goes
+    unanswered meanwhile. The same class, with the reasoning, is
+    veridor.server.ListeningServer; this script runs from a checkout without
+    the package installed, so it keeps its own copy.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = self.server_address[1]
+
+
 def create_server(
     host: str,
     port: int,
@@ -343,7 +360,7 @@ def create_server(
     leak_marker: bool = True,
     silent_write: bool = True,
 ) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer(
+    return _ListeningServer(
         (host, port), make_handler(vulnerable, leak_marker, silent_write)
     )
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+import socketserver
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -420,8 +421,26 @@ def make_handler(output_dir: Path, host: str = "127.0.0.1") -> type[BaseHTTPRequ
     return VeridorHandler
 
 
+class ListeningServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without the reverse lookup of its own address.
+
+    ``HTTPServer.server_bind`` calls ``socket.getfqdn(host)`` after ``bind()``
+    and before ``listen()``. Where the machine's own hostname does not resolve
+    that lookup stalls for about 35s -- every GitHub-hosted macOS runner
+    (actions/runner-images#14409, #14568) -- and a client connecting meanwhile
+    is neither served nor refused: macOS leaves a SYN to a port that is bound
+    but not listening unanswered, so `serve` looked hung. ``server_name`` is
+    read only by CGI handlers, and there are none here.
+    """
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        self.server_name = str(self.server_address[0])
+        self.server_port = self.server_address[1]
+
+
 def create_server(output_dir: Path, host: str, port: int) -> ThreadingHTTPServer:
-    return ThreadingHTTPServer((host, port), make_handler(output_dir, host))
+    return ListeningServer((host, port), make_handler(output_dir, host))
 
 
 def serve(output_dir: Path, host: str, port: int) -> None:

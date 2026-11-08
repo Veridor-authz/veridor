@@ -856,9 +856,14 @@ class ZipappRunsTest(unittest.TestCase):
             try:
                 socket.create_connection(("127.0.0.1", port), timeout=1).close()
                 break
-            except OSError:
+            except OSError as error:
                 if time.monotonic() > deadline or process.poll() is not None:
-                    self.fail(f"serve did not start: {process.stderr.read().decode() if process.poll() is not None else 'timeout'}")
+                    alive = process.poll() is None
+                    if alive:  # stop it, or reading stderr waits for it
+                        process.terminate()
+                        process.wait(10)
+                    self.fail(f"serve did not start ({'still running' if alive else 'exited'}, last "
+                              f"connect: {error!r}): {process.stderr.read().decode()}")
                 time.sleep(0.1)
         for asset in ("styles.css", "app.js"):
             with self.subTest(asset=asset):

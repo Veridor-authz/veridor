@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import socket
 import sys
 import tempfile
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 from urllib.error import HTTPError
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -379,6 +382,39 @@ class ArtifactFamilyIsolationTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as raised:
             urlopen(f"{self.base}/api/maps/linked", timeout=HARNESS_TIMEOUT)
         self.assertEqual(raised.exception.code, 404)
+
+
+@slow("binds loopback servers")
+class NoSelfLookupTest(unittest.TestCase):
+    """HTTPServer.server_bind looks up its own address between bind() and
+    listen(). On GitHub's macOS runners that lookup stalls about 35s, so a
+    server started in another process was alive, bound, and unreachable past
+    every deadline: the zipapp `serve` test and the Action job's demo API both
+    failed there. Here the lookup raises, so any server still making it fails."""
+
+    def _no_lookup(self) -> mock._patch:
+        return mock.patch.object(socket, "getfqdn", side_effect=AssertionError("getfqdn called"))
+
+    def test_control_the_stock_server_looks_itself_up(self) -> None:
+        with self._no_lookup(), self.assertRaises(AssertionError):
+            ThreadingHTTPServer(("127.0.0.1", 0), BaseHTTPRequestHandler).server_close()
+
+    def test_no_server_looks_itself_up_before_it_listens(self) -> None:
+        from scripts import demo_server, noisy_server  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as directory:
+            factories = {
+                "veridor serve": lambda: create_server(Path(directory), "127.0.0.1", 0),
+                "demo_server": lambda: demo_server.create_server("127.0.0.1", 0),
+                "noisy_server": lambda: noisy_server.create_server("127.0.0.1", 0, noisy_server.Noise()),
+            }
+            for name, factory in factories.items():
+                with self.subTest(server=name):
+                    with self._no_lookup():
+                        server = factory()
+                    self.addCleanup(server.server_close)
+                    socket.create_connection(server.server_address[:2], timeout=HARNESS_TIMEOUT).close()
+                    self.assertEqual(server.server_name, "127.0.0.1")
 
 
 if __name__ == "__main__":
