@@ -1,0 +1,154 @@
+{
+  "name": "ghost-editor-promotes-an-author-to-editor",
+  "advisory": {
+    "id": "CVE-2026-105678",
+    "summary": "A Ghost Editor could escalate privilege by promoting any lower staff user to Editor, by setting that user's roles to the Editor role id through the Admin API.",
+    "url": "https://github.com/TryGhost/Ghost/security/advisories/GHSA-4pvx-fwjj-8gpc",
+    "note": [
+      "GHSA-4pvx-fwjj-8gpc, filed as CVE-2026-105678 and also CVE-2026-104412.",
+      "core/server/models/user.js permissible() guards role edits. When an",
+      "Editor PUTs a victim's roles to the Editor role id -- the Editor's OWN",
+      "role -- roleId === contextRoleId, so the `else if (roleId !==",
+      "contextRoleId)` branch that would run the assign.role permission check is",
+      "skipped, and the edit falls through to resolve. The Editor thus grants",
+      "another user Editor, a privilege escalation. 6.64.0's guard is `roleId !==",
+      "contextRoleId || editedUserId !== context.user`, true for a victim who is",
+      "not the caller, so canThis().assign.role runs and an Editor, lacking it,",
+      "is refused. Confirmed from the source INSIDE both images: 6.63.0's line",
+      "reads `} else if (roleId !== contextRoleId) {`, 6.64.0's `} else if",
+      "(roleId !== contextRoleId || editedUserId !== context.user) {`. The guard",
+      "that read as enforcing returned permission regardless when the requested",
+      "role equalled the caller's own.",
+      "Status is the oracle: a privilege escalation moves no marker to the",
+      "attacker, so nothing is planted and the pair is graded ungraded, the",
+      "counterpart to gitea-private-org. The marker field is required by the",
+      "schema and unused; the owner control expects no marker.",
+      "Ghost's Admin API authenticates a staff user with a signed session",
+      "cookie, so each identity is a static Cookie header, minted through the",
+      "app's own /session/ endpoint.",
+      "Measured by hand on both tags before this was written: the editor PUTs",
+      "/users/{author_id}/ with roles set to the Editor role id and gets 200",
+      "with the author now an Editor on 6.63.0, and 403 with the author still an",
+      "Author on 6.64.0. The owner PUTs the same and gets 200 on both, so the",
+      "fix adds a check rather than removing the endpoint; the owner GET control",
+      "confirms the user resource is still served on the patched build. The",
+      "editor reads /users/me/ 200 on both, so the 403 is the fix and not a dead",
+      "session; a sham cookie draws 403 on /users/me/ on both, which is why the",
+      "editor's own 200 there is its proof of life -- the attack request is a",
+      "PUT, which no fabricated credential is replayed on.",
+      "The attack check's second identity is anonymous (403 on both), not the",
+      "owner: the bug only fires when the victim's role actually changes to the",
+      "attacker's, so an owner promotion of the same victim in the same check",
+      "would pre-promote the author, and the editor's then-no-op PUT returns 403",
+      "and hides the bug (measured: owner-first in one check -> editor 403 on",
+      "6.63.0). An anonymous caller is refused before it can mutate, so the",
+      "shared victim reaches the editor untouched.",
+      "The PUT is idempotent on both builds: repeating it returns the same",
+      "status and leaves the author's role at the first result, measured by",
+      "sending it twice, so a replayed request cannot exhaust the single victim.",
+      "The {name:'Editor'} body form takes a different branch and is 403 even on",
+      "6.63.0; the leak needs the role id, which is what the attack body sets.",
+      "Reported by Santoshkumarpuppala.",
+      "The image is pinned by digest under its canonical name library/ghost so a",
+      "runtime that configures sqlite can be attached without rebinding the",
+      "shipped ghost runtime; library/ghost and ghost are the same bytes and the",
+      "same ghost@sha256 pin. Ghost 6 defaults to MySQL in production and will",
+      "not boot on the shipped runtime's url-and-tmpfs alone (measured: connect",
+      "ECONNREFUSED 127.0.0.1:3306, then shutdown)."
+    ]
+  },
+  "image": "library/ghost",
+  "vulnerable": "6.63.0",
+  "patched": "6.64.0",
+  "vulnerable_digest": "sha256:e05bc1169fb24afa48229dc4cbf1225ea4f1c250f25bdc36eda27f2f74219536",
+  "patched_digest": "sha256:586821cfebaceae86a7acdcba081e0c04d44a2ef32edafd08e11eb5a61f6265c",
+  "container_port": 2368,
+  "health_path": "/ghost/api/admin/site/",
+  "provision": "ghost_editor_promotes_author",
+  "marker": "VERIDOR-MARKER-5c8e1a07d9b43f62",
+  "control": {
+    "path": "/ghost/api/admin/users/${VERIDOR_PAIR_AUTHOR_ID}/",
+    "headers": {
+      "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_OWNER_SESSION}"
+    },
+    "status": 200,
+    "expect_marker": false
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "owner": {
+        "headers": {
+          "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_OWNER_SESSION}"
+        }
+      },
+      "editor": {
+        "headers": {
+          "Cookie": "ghost-admin-api-session=${VERIDOR_PAIR_EDITOR_SESSION}"
+        }
+      },
+      "anonymous": {
+        "headers": {}
+      }
+    },
+    "checks": [
+      {
+        "id": "editor-must-not-promote-a-user",
+        "name": "An Editor must not promote another user to Editor",
+        "request": {
+          "method": "PUT",
+          "path": "/ghost/api/admin/users/${VERIDOR_PAIR_AUTHOR_ID}/",
+          "json": {
+            "users": [
+              {
+                "roles": [
+                  "${VERIDOR_PAIR_EDITOR_ROLE_ID}"
+                ]
+              }
+            ]
+          }
+        },
+        "expect": {
+          "editor": {
+            "status": [
+              403
+            ]
+          },
+          "anonymous": {
+            "status": [
+              403
+            ]
+          }
+        }
+      },
+      {
+        "id": "editor-session-is-live",
+        "name": "The Editor's session is one Ghost recognises, as the owner's is",
+        "request": {
+          "method": "GET",
+          "path": "/ghost/api/admin/users/me/?include=roles"
+        },
+        "expect": {
+          "owner": {
+            "status": [
+              200
+            ]
+          },
+          "editor": {
+            "status": [
+              200
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "ungraded",
+  "vulnerable_failing_checks": [
+    "editor-must-not-promote-a-user"
+  ]
+}

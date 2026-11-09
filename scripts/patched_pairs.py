@@ -85,6 +85,7 @@ and removed on the way out including on failure.
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import http.client
 import importlib.util
@@ -100,6 +101,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Callable
@@ -249,8 +251,9 @@ def _bearer(
 ) -> tuple[int, str]:
     """Like `_http`, but the `Authorization` scheme is `Bearer`.
 
-    Gitea takes `token <sha1>`; audiobookshelf is a JWT-bearer API. This is only
-    used by that provisioner to stand the target up -- the harness control probe
+    Gitea takes `token <sha1>`; audiobookshelf is a JWT-bearer API and
+    InvoiceShelf a Sanctum-bearer one. This is only used by those provisioners
+    to stand the target up -- the harness control probe
     and Veridor itself still use their own header handling.
     """
     data = None if body is None else json.dumps(body).encode()
@@ -1135,6 +1138,644 @@ def _provision_datasette_private_instance(container: str, base_url: str, marker:
     return {"VERIDOR_PAIR_OWNER_TOKEN": token}
 
 
+# ------------------------------------------------------------ invoiceshelf
+#
+# InvoiceShelf's API authenticates with a Sanctum Bearer token and scopes every
+# request to the company named in a `company` header, so each identity is a
+# static pair of headers. The provisioner stands up two company owners that
+# share no company:
+#
+#   - the ATTACKER owns company A (the seeded "xyz" company) and is a member of
+#     no other company that holds the victim;
+#   - the VICTIM owns company B and is a member of company B only.
+#
+# `UserPolicy::view` on 2.4.0 returns `$user->isOwner()` alone, and `isOwner()`
+# is true for any user who owns the company named in the `company` header. So the
+# attacker, owner of A, reads a user of B through `GET /api/v1/users/{id}` by
+# naming their own company in the header -- the record is loaded by global id.
+# 2.4.1 adds `sharesActiveCompany($model)`, which answers 403 when the target does
+# not belong to the header's company. The victim reading its own record (owner of
+# B, header B) stays 200 on both builds, which is the pair's control.
+#
+# The marker rides in the victim's name and email, so the leak the attacker draws
+# on 2.4.0 is graded by a string the victim planted, and the victim's own read is
+# what proves that string is live on 2.4.1. No token or password reaches an
+# error.
+
+#: The admin the install seed creates: owner of the seeded company (id 1), which
+#: this pair uses as company A. Public, fixed by database/seeders/UsersTableSeeder.
+_INVOICESHELF_ADMIN = ("admin@invoiceshelf.com", "invoiceshelf@123")
+#: A throwaway password for the victim account, minted and used inside this run.
+#: Never printed; it authenticates nothing outside this ephemeral container.
+_INVOICESHELF_VICTIM_PASSWORD = "veridor-pair-not-a-real-secret"
+#: Where the entrypoint created the empty sqlite database (see the runtime).
+_INVOICESHELF_SQLITE = "/var/www/html/storage/app/database.sqlite"
+
+
+def _invoiceshelf_ok(
+    base_url: str, path: str, where: str, *, method: str = "GET", body: Any = None,
+    token: str | None = None, company: str | None = None,
+) -> dict[str, Any]:
+    """One InvoiceShelf API request that must succeed, its JSON body parsed.
+
+    `Accept: application/json` makes Laravel answer a refusal as JSON rather
+    than a redirect. A failure names the route and the response only, never the
+    token.
+    """
+    headers = {"Accept": "application/json"}
+    if company is not None:
+        headers["company"] = company
+    status, payload = _bearer(f"{base_url}{path}", token=token, method=method, body=body, extra_headers=headers)
+    if status not in (200, 201):
+        raise PairError(f"{where}: HTTP {status} {payload[:200]}")
+    try:
+        return json.loads(payload)
+    except ValueError:
+        raise PairError(f"{where}: HTTP {status}, non-JSON response {payload[:120]!r}") from None
+
+
+def _invoiceshelf_login(base_url: str, email: str, password: str) -> str:
+    body = {"username": email, "password": password, "device_name": "veridor-pair"}
+    result = _invoiceshelf_ok(base_url, "/api/v1/auth/login", f"login for {email}", method="POST", body=body)
+    token = result.get("token")
+    if not token:
+        raise PairError(f"login for {email} returned no token")
+    return token
+
+
+def _provision_invoiceshelf_user_cross_company(container: str, base_url: str, marker: str) -> dict[str, str]:
+    """CVE-2026-55610: a company owner could read a user of another company.
+
+    Measured by hand on both tags before this was written. On 2.4.0 the attacker
+    (owner of company A, header A) reads the victim of company B at
+    GET /api/v1/users/{victim} with HTTP 200 and the marker; on 2.4.1 the same
+    request is 403 with no marker. The victim reading its own record (owner of
+    B, header B) is 200 with the marker on both, so the fix is the attacker's
+    403 and not a removed route. A request with a fabricated Bearer token is 401
+    on both, so the attacker's 403 on 2.4.1 is a live credential refused.
+    """
+    # 1. Install: migrate --seed creates the admin and the seeded company A.
+    _invoiceshelf_ok(
+        base_url, "/api/v1/installation/database/config", "install database/config",
+        method="POST",
+        body={"app_url": base_url, "database_connection": "sqlite", "database_name": _INVOICESHELF_SQLITE},
+    )
+
+    # 2. The admin is the attacker: owner of the seeded company A.
+    attacker = _invoiceshelf_login(base_url, *_INVOICESHELF_ADMIN)
+
+    # 3. Company A is the admin's only company at this point; read its id back
+    #    rather than assume 1, so the pair does not depend on the seed's numbering.
+    companies = _invoiceshelf_ok(base_url, "/api/v1/companies", "list the admin's companies",
+                                 token=attacker, company="1").get("data") or []
+    if not companies:
+        raise PairError("the admin owns no company after install")
+    company_a = str(companies[0]["id"])
+
+    # 4. Company B, created by the admin (so owned by the admin for now).
+    company_b = str(
+        _invoiceshelf_ok(base_url, "/api/v1/companies", "create company B", method="POST",
+                         token=attacker, company=company_a,
+                         body={"name": "Veridor Company B", "currency": 1,
+                               "address": {"country_id": 1}})["data"]["id"]
+    )
+
+    # 5. The victim: a member of company B only, carrying the marker in its name
+    #    and email. createFromRequest syncs membership from the `companies` list,
+    #    so the victim never joins company A whatever header is set here.
+    victim_record = _invoiceshelf_ok(
+        base_url, "/api/v1/users", "create the victim user", method="POST",
+        token=attacker, company=company_a,
+        body={
+            "name": marker,
+            "email": f"{marker}@victim.invalid",
+            "password": _INVOICESHELF_VICTIM_PASSWORD,
+            "companies": [{"id": int(company_b), "role": "super admin"}],
+        },
+    )
+    victim_id = str((victim_record.get("data") or victim_record)["id"])
+
+    # 6. Hand company B to the victim, so the victim is its owner (isOwner true
+    #    under header B) and the attacker no longer is. The attacker stays a
+    #    member of B, which does not matter: the fix checks the VICTIM's
+    #    membership of the header's company, not the caller's.
+    _invoiceshelf_ok(base_url, f"/api/v1/transfer/ownership/{victim_id}", "transfer company B to the victim",
+                     method="POST", token=attacker, company=company_b)
+
+    # 7. The victim's own credential, for the control and the marker probe.
+    victim = _invoiceshelf_login(base_url, f"{marker}@victim.invalid", _INVOICESHELF_VICTIM_PASSWORD)
+
+    return {
+        "VERIDOR_PAIR_ATTACKER_TOKEN": attacker,
+        "VERIDOR_PAIR_VICTIM_TOKEN": victim,
+        "VERIDOR_PAIR_VICTIM_ID": victim_id,
+        "VERIDOR_PAIR_COMPANY_A_ID": company_a,
+        "VERIDOR_PAIR_COMPANY_B_ID": company_b,
+    }
+
+
+# ------------------------------------------------------------ hawkbit
+#
+# The target is Eclipse hawkBit's Direct Device Integration (DDI) API. A device
+# authenticates with its own per-target security token
+# (Authorization: TargetToken <token>), and the controllerId in the DDI path
+# must be that token's own target -- hawkBit refuses a token presented against
+# another controllerId with 401. So the owner (device A) can never be probed at
+# the attacker's path, and the marker owner's reachability is established by the
+# identity-level marker_probe rather than a same-check control.
+#
+# The provisioner uses only the Management REST API as admin (Basic admin/admin):
+# it enables per-target token authentication, creates two software modules,
+# uploads artifacts to them, creates two distribution sets and two targets,
+# assigns one set to each target, and returns each target's security token, the
+# module ids and the name of device A's marker-bearing artifact. Device A's
+# module holds two artifacts: one named by the marker, which the DDI listing
+# surfaces, and one with a plain name whose bytes carry the marker, which the
+# DDI download streams. The pair measures both paths. The admin credential is
+# static and never echoed; a failure names the route and the response only.
+
+#: hawkBit's built-in superuser on the default single-tenant image.
+_HAWKBIT_ADMIN = ("admin", "admin")
+#: The DDI tenant of the default image.
+_HAWKBIT_TENANT = "DEFAULT"
+#: The two devices. controllerIds are chosen here (not server-assigned), so
+#: they are fixed strings; the security tokens are read back per run.
+_HAWKBIT_CONTROLLER_A = "veridor-device-a"
+_HAWKBIT_CONTROLLER_B = "veridor-device-b"
+_HAWKBIT_FIRMWARE_A = "device-a-firmware.bin"
+
+
+def _hawkbit_admin_header() -> str:
+    raw = f"{_HAWKBIT_ADMIN[0]}:{_HAWKBIT_ADMIN[1]}".encode()
+    return "Basic " + base64.b64encode(raw).decode()
+
+
+def _hawkbit_mgmt(base_url: str, path: str, *, method: str = "GET", body: Any = None) -> tuple[int, str]:
+    """One hawkBit Management REST call as admin.
+
+    Not `_http`: the images are linux/amd64 only and run emulated on arm64
+    hosts, so this keeps a 30-second timeout rather than `_http`'s 20.
+    """
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(f"{base_url}{path}", data=data, method=method)
+    request.add_header("Authorization", _hawkbit_admin_header())
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    request.add_header("Accept", "application/json")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace")
+
+
+def _hawkbit_upload(base_url: str, path: str, *, filename: str, content: bytes) -> tuple[int, str]:
+    """Multipart artifact upload as admin, built by hand to avoid a dependency."""
+    boundary = f"----veridor{uuid.uuid4().hex}"
+    head = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: application/octet-stream\r\n\r\n"
+    ).encode()
+    tail = f"\r\n--{boundary}--\r\n".encode()
+    data = head + content + tail
+    request = urllib.request.Request(f"{base_url}{path}", data=data, method="POST")
+    request.add_header("Authorization", _hawkbit_admin_header())
+    request.add_header("Content-Type", f"multipart/form-data; boundary={boundary}")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace")
+
+
+def _hawkbit_expect(status: int, body: str, ok: tuple[int, ...], what: str) -> Any:
+    if status not in ok:
+        raise PairError(f"hawkBit: could not {what}: HTTP {status} {body[:200]}")
+    return json.loads(body) if body.strip() else None
+
+
+def _provision_hawkbit_ddi_cross_device(container: str, base_url: str, marker: str) -> dict[str, str]:
+    """CVE-2026-16454: the DDI controller API ignored per-device assignment.
+
+    A device naming another device's software module id, with its own
+    controllerId and token, reached that module's artifacts on 1.0.3: the
+    download `.../softwaremodules/{smId}/artifacts/{fileName}` when the request
+    carried a Range header (the only assignment check ran inside logDownload,
+    which a ranged request skipped), and the listing
+    `.../softwaremodules/{smId}/artifacts` on every request. 1.0.4 checks the
+    assignment on both and answers 404 when the module is not the caller's.
+
+    Device A owns module A and is assigned it; device B owns module B and is
+    assigned it, so device B's token is provably live on the patched build (it
+    lists its own module 200). Measured on both tags: device B's ranged download
+    of device A's artifact is 206 with the marker on 1.0.3 and 404 on 1.0.4; its
+    listing of device A's module is 200 with the marker on 1.0.3 and 404 on
+    1.0.4; a fabricated TargetToken gets 401 on both.
+    """
+    # Per-target security tokens must be enabled for TargetToken auth to work.
+    status, body = _hawkbit_mgmt(
+        base_url,
+        "/rest/v1/system/configs/authentication.targettoken.enabled",
+        method="PUT",
+        body={"value": True},
+    )
+    _hawkbit_expect(status, body, (200, 204), "enable target token authentication")
+
+    def make_module(name: str) -> int:
+        status, body = _hawkbit_mgmt(
+            base_url, "/rest/v1/softwaremodules", method="POST",
+            body=[{"name": name, "version": "1.0", "type": "os"}],
+        )
+        return _hawkbit_expect(status, body, (200, 201), f"create software module {name}")[0]["id"]
+
+    def make_set(name: str, module_id: int) -> int:
+        status, body = _hawkbit_mgmt(
+            base_url, "/rest/v1/distributionsets", method="POST",
+            body=[{"name": name, "version": "1.0", "type": "os",
+                   "modules": [{"id": module_id}]}],
+        )
+        return _hawkbit_expect(status, body, (200, 201), f"create distribution set {name}")[0]["id"]
+
+    module_a = make_module("veridor-module-a")
+    module_b = make_module("veridor-module-b")
+
+    # Device A's module carries two artifacts. The first has the marker in its
+    # filename, which the listing returns verbatim. The second has a plain
+    # filename and the marker only in its bytes, which the download streams:
+    # a marker in the download URL would be a reflected marker, which Veridor
+    # refuses as proof. Device B's artifact carries no marker.
+    status, body = _hawkbit_upload(
+        base_url, f"/rest/v1/softwaremodules/{module_a}/artifacts",
+        filename=f"{marker}.bin", content=b"device A firmware payload",
+    )
+    _hawkbit_expect(status, body, (200, 201), "upload device A's marker-named artifact")
+    status, body = _hawkbit_upload(
+        base_url, f"/rest/v1/softwaremodules/{module_a}/artifacts",
+        filename=_HAWKBIT_FIRMWARE_A, content=f"device A firmware payload {marker}\n".encode(),
+    )
+    _hawkbit_expect(status, body, (200, 201), "upload device A's marker-bearing artifact")
+    status, body = _hawkbit_upload(
+        base_url, f"/rest/v1/softwaremodules/{module_b}/artifacts",
+        filename="device-b-firmware.bin", content=b"device B firmware payload",
+    )
+    _hawkbit_expect(status, body, (200, 201), "upload device B's artifact")
+
+    set_a = make_set("veridor-set-a", module_a)
+    set_b = make_set("veridor-set-b", module_b)
+
+    status, body = _hawkbit_mgmt(
+        base_url, "/rest/v1/targets", method="POST",
+        body=[{"controllerId": _HAWKBIT_CONTROLLER_A, "name": _HAWKBIT_CONTROLLER_A},
+              {"controllerId": _HAWKBIT_CONTROLLER_B, "name": _HAWKBIT_CONTROLLER_B}],
+    )
+    _hawkbit_expect(status, body, (200, 201), "create the two targets")
+
+    def token_of(controller_id: str) -> str:
+        status, body = _hawkbit_mgmt(base_url, f"/rest/v1/targets/{controller_id}")
+        target = _hawkbit_expect(status, body, (200,), f"read {controller_id}'s security token")
+        token = target.get("securityToken")
+        if not token:
+            raise PairError(f"hawkBit: {controller_id} has no security token")
+        return token
+
+    token_a = token_of(_HAWKBIT_CONTROLLER_A)
+    token_b = token_of(_HAWKBIT_CONTROLLER_B)
+
+    def assign(set_id: int, controller_id: str) -> None:
+        status, body = _hawkbit_mgmt(
+            base_url, f"/rest/v1/distributionsets/{set_id}/assignedTargets",
+            method="POST", body=[{"id": controller_id}],
+        )
+        _hawkbit_expect(status, body, (200,), f"assign set {set_id} to {controller_id}")
+
+    assign(set_a, _HAWKBIT_CONTROLLER_A)
+    assign(set_b, _HAWKBIT_CONTROLLER_B)
+
+    return {
+        "VERIDOR_PAIR_A_CONTROLLER": _HAWKBIT_CONTROLLER_A,
+        "VERIDOR_PAIR_B_CONTROLLER": _HAWKBIT_CONTROLLER_B,
+        "VERIDOR_PAIR_A_TOKEN": token_a,
+        "VERIDOR_PAIR_B_TOKEN": token_b,
+        "VERIDOR_PAIR_SM_A_ID": str(module_a),
+        "VERIDOR_PAIR_SM_B_ID": str(module_b),
+        "VERIDOR_PAIR_TENANT": _HAWKBIT_TENANT,
+        "VERIDOR_PAIR_A_FILENAME": _HAWKBIT_FIRMWARE_A,
+    }
+
+
+# ------------------------------------------------------------ domoticz
+#
+# The bug is a missing authorization check (CWE-862). The `udevices` web command
+# (Cmd_UpdateDevices in WebServerCmds.cpp) runs a lua parser script named by the
+# `script` query parameter through CLuaHandler::executeLuaScript. On 2026.2 the
+# handler has no rights gate, so a VIEWER-level session reaches it. Fix commit
+# 73ed0495 adds `if (session.rights == URIGHTS_VIEWER || session.rights ==
+# URIGHTS_NONE) { reply forbidden; return; }` at the top of the handler, so a
+# viewer is answered 403 on 2026.3. The advisory also fixes a path-traversal half
+# (the `..` guard), which is a separate weakness and NOT what this pair claims:
+# the pair exercises only the role gate, so the planted script name is a plain
+# file in the parser directory and never contains `..`.
+#
+# Provisioning is identical on both tags:
+#
+#   - the container is started with -nowwwpwd, which makes loopback a trusted
+#     network (temporary bootstrap admin) so the two users and the one setting can
+#     be created over the API with no credential yet in hand;
+#   - an ADMIN user (rights 2) and a VIEWER user (rights 0) are created through
+#     the adduser command; their passwords are stored as Domoticz stores them, the
+#     md5 hex of the plaintext;
+#   - storesettings turns AllowPlainBasicAuth on (so HTTP Basic auth is accepted
+#     over the loopback, non-HTTPS connection) and clears WebLocalNetworks, which
+#     REMOVES the -nowwwpwd trust again: after this an unauthenticated request is
+#     401, and each identity is just an HTTP Basic header the way gitea's token or
+#     lubelogger's Basic header is;
+#   - a parser script is planted at userdata/scripts/lua_parsers/veridor.lua via
+#     docker exec, identical on both sides. It is needed because executeLuaScript
+#     returns true only when the file loads: without it the vulnerable build's
+#     viewer gets 400 (status ERR) rather than a clean 200, so there would be no
+#     status differential to measure.
+#
+# Measured by hand on both tags before this was written (status only, no marker,
+# so the grade is `ungraded` like gitea-private-org and datasette):
+#
+#   GET /json.htm?type=command&param=udevices&script=veridor.lua
+#     admin  Basic : 200 on 2026.2, 200 on 2026.3  (control: endpoint survives)
+#     viewer Basic : 200 on 2026.2, 403 on 2026.3  (the role gate the fix adds)
+#   A viewer Basic header with a wrong password is 401 on both tags, and an
+#   unauthenticated request is 401 on both, so the viewer's 403 on 2026.3 is a
+#   live credential refused, not a dead session or a removed route.
+
+#: Throwaway credentials, valid only inside this ephemeral container. The
+#: plaintext is base64'd into the identity's Basic header; it is never printed.
+_DOMOTICZ_ADMIN = ("veridor_admin", "veridor-pair-admin-not-a-real-secret")
+_DOMOTICZ_VIEWER = ("veridor_viewer", "veridor-pair-viewer-not-a-real-secret")
+#: The parser script name invoked through the `script` parameter. A plain file
+#: name, no `..`: this pair claims the role gate, not the path-traversal half.
+_DOMOTICZ_SCRIPT = "veridor.lua"
+_DOMOTICZ_PARSER_DIR = "/opt/domoticz/userdata/scripts/lua_parsers"
+
+
+def _domoticz_basic(credential: tuple[str, str]) -> str:
+    return base64.b64encode(f"{credential[0]}:{credential[1]}".encode()).decode()
+
+
+def _domoticz_ok(base_url: str, path: str, where: str) -> dict[str, Any]:
+    """One unauthenticated Domoticz API GET that must answer status OK. A
+    failure names the route and the response only."""
+    status, body = _http(f"{base_url}{path}")
+    if status != 200:
+        raise PairError(f"{where}: HTTP {status} {body[:160]}")
+    try:
+        parsed = json.loads(body)
+    except ValueError:
+        raise PairError(f"{where}: HTTP 200 but non-JSON {body[:120]!r}") from None
+    if parsed.get("status") != "OK":
+        raise PairError(f"{where}: Domoticz answered {parsed.get('status')!r} ({body[:160]})")
+    return parsed
+
+
+def _domoticz_adduser(base_url: str, credential: tuple[str, str], rights: int) -> None:
+    # No credential is sent: this runs during the -nowwwpwd bootstrap window,
+    # when loopback is a trusted network, so the API answers as admin. The
+    # password is stored the way Domoticz stores it, the md5 hex of the
+    # plaintext, so the Basic header (plaintext) authenticates against it later.
+    password = hashlib.md5(credential[1].encode()).hexdigest()
+    path = (
+        "/json.htm?type=command&param=adduser"
+        f"&enabled=true&username={credential[0]}&password={password}"
+        f"&rights={rights}&RemoteSharing=false&TabsEnabled=15"
+    )
+    _domoticz_ok(base_url, path, f"adduser {credential[0]} (rights {rights})")
+
+
+def _provision_domoticz_viewer_lua_parser(container: str, base_url: str, marker: str) -> dict[str, str]:
+    """CVE-2026-75520: a VIEWER could invoke the udevices lua parser command.
+
+    See the section comment above for the measured statuses. `marker` is
+    unused: this is a status-only differential (200 vs 403), graded `ungraded`.
+    """
+    # 1. The two users, created over the trusted-loopback bootstrap window.
+    _domoticz_adduser(base_url, _DOMOTICZ_ADMIN, 2)
+    _domoticz_adduser(base_url, _DOMOTICZ_VIEWER, 0)
+
+    # 2. Allow Basic auth over HTTP, and clear WebLocalNetworks so the -nowwwpwd
+    #    trust is removed: after this an unauthenticated request is 401 and each
+    #    identity is only its Basic credential. Still sent over the bootstrap
+    #    window (Basic auth is not accepted until this call enables it).
+    _domoticz_ok(
+        base_url,
+        "/json.htm?type=command&param=storesettings"
+        "&AllowPlainBasicAuth=on&WebLocalNetworks="
+        "&ShortLogInterval=5&WindUnit=0&TempUnit=0&WeightUnit=0",
+        "storesettings (enable Basic auth, clear trusted networks)",
+    )
+
+    # 3. Confirm Basic auth is now required and works: the admin is served and an
+    #    unauthenticated caller is refused. This proves the trust was dropped, so
+    #    the viewer's later 403 cannot be read as a trusted-network artefact.
+    anon_status, _ = _http(f"{base_url}/json.htm?type=command&param=getusers")
+    if anon_status != 401:
+        raise PairError(f"expected 401 for an unauthenticated API call after clearing trust, got {anon_status}")
+    admin_status, _ = _http(f"{base_url}/json.htm?type=command&param=getusers",
+                            headers={"Authorization": f"Basic {_domoticz_basic(_DOMOTICZ_ADMIN)}"})
+    if admin_status != 200:
+        raise PairError(f"admin Basic auth did not work after enabling it: HTTP {admin_status}")
+
+    # 4. Plant the parser script, identical on both sides, so executeLuaScript
+    #    loads a file and returns true on the vulnerable build (clean 200).
+    _docker(
+        "exec", container, "sh", "-c",
+        f"mkdir -p {_DOMOTICZ_PARSER_DIR} && "
+        f"printf 'print(\"veridor pair\")\\n' > {_DOMOTICZ_PARSER_DIR}/{_DOMOTICZ_SCRIPT}",
+    )
+
+    return {
+        "VERIDOR_PAIR_ADMIN_BASIC": _domoticz_basic(_DOMOTICZ_ADMIN),
+        "VERIDOR_PAIR_VIEWER_BASIC": _domoticz_basic(_DOMOTICZ_VIEWER),
+    }
+
+
+# ------------------------------------------------------------ ghost 6
+#
+# CVE-2026-105678 (also CVE-2026-104412), GHSA-4pvx-fwjj-8gpc. On Ghost 6.63.0 an
+# Editor can promote any lower-privileged staff user to Editor by PUTting that
+# user's roles to the Editor role id -- the Editor's OWN role. 6.64.0 fixes it.
+#
+# Same authentication as the Ghost 4 pair above (a staff session cookie), but not
+# the same helpers: Ghost 6 serves the Admin API unversioned at /ghost/api/admin,
+# and its image bundles better-sqlite3 rather than sqlite3, so the invitation
+# script differs too. The owner's credential and the cookie name are shared.
+#
+# The provisioner does the identical thing on both builds -- no branching on
+# version. It sets up the owner, invites and redeems an Editor and an Author, and
+# returns the attacker (Editor) session, the owner session, the victim (Author)
+# user id and the Editor role id. The marker is accepted for the fixture's schema
+# but not planted: this is a privilege escalation, not a data read, so nothing of
+# the owner's crosses to the attacker. The pair is graded by the status oracle,
+# like gitea-private-org. No password, session or invite token reaches an error.
+
+_GHOST6_EDITOR = ("editor@example.invalid", "Editorpass123!x")
+_GHOST6_AUTHOR = ("author@example.invalid", "Authorpass123!x")
+#: Ghost 6's Admin API, unversioned.
+_GHOST6_API = "/ghost/api/admin"
+
+#: Mark the pending invitation 'sent' and print its token, through the image's
+#: own bundled better-sqlite3. Ghost creates the invite row then emails it, and
+#: a container with no mail server cannot: POST /invites/ answers 500 and leaves
+#: the row 'pending', while the public accept endpoint matches {token, status:
+#: 'sent'}. Nothing about the boundary under test is touched here -- no
+#: permission, role or user is written; the row is only marked sent so Ghost's
+#: own accept endpoint can create the user with the role the invite names. The
+#: token is a credential, so it is printed on its own line and never repeated.
+_GHOST6_INVITE_TOKEN = r"""
+const Database = require("/var/lib/ghost/current/node_modules/better-sqlite3");
+const db = new Database("/var/lib/ghost/content/data/ghost.db");
+const email = process.argv[1];
+const info = db.prepare("update invites set status='sent' where email=?").run(email);
+console.log("GHOST_INVITES_MARKED_SENT=" + info.changes);
+for (const row of db.prepare("select token from invites where email=?").all(email)) {
+  console.log("GHOST_INVITE_TOKEN=" + row.token);
+}
+"""
+
+
+def _ghost6_api(
+    base_url: str, path: str, *, method: str = "GET", body: Any = None, cookie: str | None = None,
+) -> tuple[int, str, Any]:
+    """One Ghost 6 Admin API request: (status, body, response headers). As
+    `_ghost_api`, under Ghost 6's unversioned path."""
+    data = None if body is None else json.dumps(body).encode()
+    request = urllib.request.Request(f"{base_url}{_GHOST6_API}{path}", data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+        request.add_header("Origin", base_url)
+    if cookie:
+        request.add_header("Cookie", f"{_GHOST_SESSION_COOKIE}={cookie}")
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return response.status, response.read().decode("utf-8", "replace"), response.headers
+    except urllib.error.HTTPError as error:
+        return error.code, error.read().decode("utf-8", "replace"), error.headers
+
+
+def _ghost6_session(base_url: str, credential: tuple[str, str]) -> str:
+    """Log in; return the session cookie VALUE. Neither password nor session
+    reaches an error, which names the account only."""
+    status, body, headers = _ghost6_api(
+        base_url, "/session/", method="POST",
+        body={"username": credential[0], "password": credential[1]},
+    )
+    if status != 201:
+        raise PairError(f"ghost login for {credential[0]} failed: HTTP {status} {body[:200]}")
+    for value in headers.get_all("Set-Cookie") or ():
+        found = re.match(rf"{_GHOST_SESSION_COOKIE}=([^;]+)", value)
+        if found:
+            return found.group(1)
+    raise PairError(f"ghost returned no {_GHOST_SESSION_COOKIE} for {credential[0]}")
+
+
+def _ghost6_invite_and_redeem(
+    container: str, base_url: str, owner_cookie: str, role_id: str, credential: tuple[str, str],
+) -> None:
+    # The invitation's mail step answers 500 here; the row it left behind is
+    # what matters, and the token is required below, so a Ghost that destroyed
+    # the invite fails here rather than silently.
+    _ghost6_api(base_url, "/invites/", method="POST", cookie=owner_cookie,
+                body={"invites": [{"role_id": role_id, "email": credential[0]}]})
+    completed = _docker("exec", container, "node", "-e", _GHOST6_INVITE_TOKEN, credential[0], check=False)
+    token = next((line.partition("=")[2].strip() for line in completed.stdout.splitlines()
+                  if line.startswith("GHOST_INVITE_TOKEN=")), None)
+    if not token:
+        # stdout carries the token, so it is not echoed; stderr is the script's
+        # own message and holds nothing secret.
+        raise PairError("ghost left no redeemable invitation for "
+                        f"{credential[0]}: {(completed.stderr or '').strip()[-200:] or '(no stderr)'}")
+    status, body, _ = _ghost6_api(
+        base_url, "/authentication/invitation", method="POST",
+        body={"invitation": [{"token": token, "email": credential[0],
+                              "name": credential[0].split("@")[0], "password": credential[1]}]},
+    )
+    if status != 200:
+        raise PairError(f"{credential[0]} could not redeem the invitation: HTTP {status} {body[:200]}")
+
+
+def _provision_ghost_editor_promotes_author(container: str, base_url: str, marker: str) -> dict[str, str]:
+    """CVE-2026-105678: an Editor may promote a lower user to Editor.
+
+    `core/server/models/user.js` permissible(): when an Editor PUTs a victim's
+    roles to the Editor role id, `roleId === contextRoleId` makes the
+    `else if (roleId !== contextRoleId)` guard false, so the `assign.role`
+    permission check is skipped and the edit falls through to resolve. 6.64.0's
+    guard is `roleId !== contextRoleId || editedUserId !== context.user`, which
+    is true for a victim who is not the caller, so `canThis().assign.role` runs
+    and an Editor, lacking it, is refused. Confirmed from the source inside both
+    images: 6.63.0 line ~1040 reads `else if (roleId !== contextRoleId) {`,
+    6.64.0 `else if (roleId !== contextRoleId || editedUserId !== context.user) {`.
+
+    Two identities, provisioned identically on both tags: the site `owner` from
+    the image's own setup endpoint, and an `editor` redeeming an Editor
+    invitation. The victim is an `author` redeeming an Author invitation; its
+    user id is server-assigned and differs between builds, so it is interpolated
+    into the config rather than hard-coded, as is the Editor role id the attack
+    body sets.
+
+    Measured by hand on both tags before this was written: the editor PUTs the
+    author's roles to the Editor role id and gets 200 with the author now an
+    Editor on 6.63.0, and 403 with the author still an Author on 6.64.0; the
+    owner gets 200 on both (the mutation endpoint is still there and still works
+    for an entitled caller). The editor reads /users/me/ 200 on both, so the 403
+    is the fix and not a dead session. The PUT is idempotent on both builds --
+    repeating it returns the same status and leaves the author's role unchanged
+    from the first result -- so a replayed request cannot exhaust the victim.
+    No fabricated cookie is accepted: /users/me/ refuses a sham cookie on both,
+    which is why the editor's own 200 there is its proof of life.
+    """
+    status, body, _ = _ghost6_api(
+        base_url, "/authentication/setup/", method="POST",
+        body={"setup": [{"name": "Owner", "email": _GHOST_OWNER[0],
+                         "password": _GHOST_OWNER[1], "blogTitle": "Veridor"}]},
+    )
+    if status not in (200, 201):
+        raise PairError(f"could not create the ghost owner: HTTP {status} {body[:200]}")
+    owner = _ghost6_session(base_url, _GHOST_OWNER)
+
+    # Role ids are assigned per install, so they are read back.
+    status, body, _ = _ghost6_api(base_url, "/roles/?permissions=assign", cookie=owner)
+    roles = json.loads(body).get("roles") or [] if status == 200 else []
+    editor_role = next((role["id"] for role in roles if role["name"] == "Editor"), None)
+    author_role = next((role["id"] for role in roles if role["name"] == "Author"), None)
+    if not editor_role or not author_role:
+        raise PairError(f"ghost offered no assignable Editor/Author role: HTTP {status}")
+
+    _ghost6_invite_and_redeem(container, base_url, owner, editor_role, _GHOST6_EDITOR)
+    _ghost6_invite_and_redeem(container, base_url, owner, author_role, _GHOST6_AUTHOR)
+    editor = _ghost6_session(base_url, _GHOST6_EDITOR)
+
+    status, body, _ = _ghost6_api(base_url, "/users/?limit=all&include=roles", cookie=owner)
+    users = {user["email"]: user for user in json.loads(body)["users"]} if status == 200 else {}
+    author = users.get(_GHOST6_AUTHOR[0])
+    if not author:
+        raise PairError(f"ghost did not create the author user: HTTP {status}")
+
+    # The attacker must really be an Editor, not something entitled: without
+    # this the pair would still pass if a future Ghost ignored the invitation's
+    # role and made the account an Administrator, which can assign roles.
+    editor_roles = [role["name"] for role in users.get(_GHOST6_EDITOR[0], {}).get("roles", [])]
+    if editor_roles != ["Editor"]:
+        raise PairError(f"the attacker is {editor_roles or 'HTTP ' + str(status)}, not an Editor")
+    author_roles = [role["name"] for role in author.get("roles", [])]
+    if author_roles != ["Author"]:
+        raise PairError(f"the victim is {author_roles or 'HTTP ' + str(status)}, not an Author")
+
+    return {
+        "VERIDOR_PAIR_OWNER_SESSION": owner,
+        "VERIDOR_PAIR_EDITOR_SESSION": editor,
+        "VERIDOR_PAIR_AUTHOR_ID": author["id"],
+        "VERIDOR_PAIR_EDITOR_ROLE_ID": editor_role,
+    }
+
+
 def _gitea_runtime(base_url: str) -> list[str]:
     return [
         "--tmpfs", "/data:rw,size=512m",
@@ -1223,6 +1864,70 @@ def _datasette_runtime(base_url: str) -> list[str]:
     ]
 
 
+def _invoiceshelf_runtime(base_url: str) -> list[str]:
+    # Single-container sqlite mode. AUTORUN_ENABLED is turned OFF: the image's
+    # default entrypoint otherwise runs `migrate` (no seed) at boot, which would
+    # install the schema with no admin and leave the install wizard blocked. With
+    # it off the 00-setup step still creates the empty sqlite database and an
+    # APP_KEY, and the provisioner drives `installation/database/config`, whose
+    # `migrate --seed` creates the admin and the first company. CACHE_STORE and
+    # SESSION_DRIVER are files so no cache or session table is needed before that
+    # migration. The database lives on the container's own layer, which starts
+    # empty from the image every run and goes with the container, so no tmpfs is
+    # needed for ephemerality. `base_url` is InvoiceShelf's own APP_URL, the
+    # loopback address this container was published on.
+    return [
+        "-e", "AUTORUN_ENABLED=false",
+        "-e", "DB_CONNECTION=sqlite",
+        "-e", f"DB_DATABASE={_INVOICESHELF_SQLITE}",
+        "-e", "CACHE_STORE=file",
+        "-e", "SESSION_DRIVER=file",
+        "-e", f"APP_URL={base_url}",
+    ]
+
+
+def _hawkbit_runtime(base_url: str) -> list[str]:
+    # The image runs embedded H2 and stores artifacts on a container-local
+    # path, which goes with the container. hawkBit derives the DDI artifact URLs
+    # from the request Host header, so no base URL has to be injected. /tmp is a
+    # tmpfs so nothing the run writes there outlives it. base_url is unused.
+    return ["--tmpfs", "/tmp:rw,size=128m"]
+
+
+def _domoticz_runtime(base_url: str) -> list[str]:
+    # userdata (the sqlite db, the planted parser script, logs) is a tmpfs, so
+    # every run starts empty and leaves nothing behind; the image's entrypoint
+    # chowns it to uid 1000, so no uid is set here. EXTRA_CMD_ARG=-nowwwpwd makes
+    # loopback a trusted network at startup and seeds a bootstrap admin, which is
+    # how the provisioner creates the users and the one setting before any
+    # credential exists; the provisioner then clears WebLocalNetworks, which drops
+    # that trust for the rest of the run. `base_url` is unused: the API is
+    # same-origin and needs no external URL.
+    return [
+        "--tmpfs", "/opt/domoticz/userdata:rw,size=128m",
+        "-e", "EXTRA_CMD_ARG=-nowwwpwd",
+    ]
+
+
+def _ghost6_runtime(base_url: str) -> list[str]:
+    # Ghost 6's production default database is MySQL, so `_ghost_runtime`
+    # (url and a tmpfs, enough for Ghost 4, whose default is sqlite) leaves a
+    # 6.x image trying 127.0.0.1:3306, and it shuts down before health
+    # (measured: `connect ECONNREFUSED 127.0.0.1:3306`, then "Ghost has shut
+    # down"). `NODE_ENV=development` and the explicit sqlite settings make it use
+    # a file database on the tmpfs instead. The tmpfs carries uid 1000 so the
+    # image's `node` user can write the db; `url` is Ghost's own site address,
+    # which the Admin API requires the session to be minted against.
+    return [
+        "--tmpfs", "/var/lib/ghost/content:rw,size=512m,uid=1000,gid=1000",
+        "-e", f"url={base_url}",
+        "-e", "NODE_ENV=development",
+        "-e", "database__client=sqlite3",
+        "-e", "database__connection__filename=/var/lib/ghost/content/data/ghost.db",
+        "-e", "database__useNullAsDefault=true",
+    ]
+
+
 #: What `docker run` needs for an image beyond its loopback port: state on a
 #: tmpfs (every run starts empty and leaves nothing behind) and whatever the
 #: image reads to skip its interactive setup. Keyed by image, so a pair names
@@ -1235,6 +1940,16 @@ RUNTIMES = {
     "bugsink/bugsink": _bugsink_runtime,
     "ghost": _ghost_runtime,
     "veridor-pair-build/datasette": _datasette_runtime,
+    "invoiceshelf/invoiceshelf": _invoiceshelf_runtime,
+    "hawkbit/hawkbit-update-server": _hawkbit_runtime,
+    "domoticz/domoticz": _domoticz_runtime,
+    # Ghost 6 needs its own runtime (see _ghost6_runtime), so its pair names the
+    # image by its canonical spelling, `library/ghost`, and this key does not
+    # rebind `ghost`, which the Ghost 4 pair runs under. Docker resolves
+    # `library/ghost` to the same image as `ghost`, and _repository() reads both
+    # as `ghost`, so the pin is checked against the same ghost@sha256 digest:
+    # the image that runs is identical, and only the runtime differs.
+    "library/ghost": _ghost6_runtime,
 }
 
 PROVISIONERS = {
@@ -1247,6 +1962,10 @@ PROVISIONERS = {
     "bugsink_event_cross_project": _provision_bugsink_event_cross_project,
     "ghost_integration_keys": _provision_ghost_integration_keys,
     "datasette_private_instance": _provision_datasette_private_instance,
+    "invoiceshelf_user_cross_company": _provision_invoiceshelf_user_cross_company,
+    "hawkbit_ddi_cross_device": _provision_hawkbit_ddi_cross_device,
+    "domoticz_viewer_lua_parser": _provision_domoticz_viewer_lua_parser,
+    "ghost_editor_promotes_author": _provision_ghost_editor_promotes_author,
 }
 
 

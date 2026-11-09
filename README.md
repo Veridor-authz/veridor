@@ -2376,9 +2376,10 @@ live (served elsewhere in the run, or answered differently from a credential
 Veridor fabricated). Without that last one a dead attacker session that the
 target refuses like any stranger would certify the fix; given a dead Ghost
 contributor session, the pair fails (measured 2026-10-14). Today that is
-nine published advisories in seven applications (Gitea three times, LubeLogger,
-Bugsink, Ghost, Audiobookshelf, Vikunja, Datasette; Go, Python, C# and Node), 63
-assertions: eight carry a CVE id and LubeLogger's carries a GHSA id. Each fixture
+thirteen published advisories in ten applications (Gitea three times, Ghost
+twice, LubeLogger, Bugsink, Audiobookshelf, Vikunja, Datasette, InvoiceShelf,
+Eclipse hawkBit, Domoticz; Go, Python, C#, Node, PHP, Java and C++), 91
+assertions: twelve carry a CVE id and LubeLogger's carries a GHSA id. Each fixture
 cites where its id was published; each Gitea pair links its CVE record, and all
 three cite the one release post that fixed them.
 
@@ -2401,10 +2402,13 @@ pair. The lock carries both architectures' hashes for its two compiled wheels:
 resolved on arm64 alone, it was refused on linux/amd64, which is what a GitHub
 runner is (measured).
 
-For the twelve images and the built pair's base and files, a linux/amd64
-runner downloads 1.12 GB, compressed, each layer and file counted once
-(1,121,022,767 bytes, read by `scripts/pair_sizes.py` on 2026-09-27; the
-Datasette pair is 49,587,267 of them). `pair_sizes.py` reads each pinned index
+For the twenty images and the built pair's base and files, a linux/amd64
+runner downloads 2.42 GB, compressed, each layer and file counted once
+(2,424,520,975 bytes, read from the registries and PyPI on 2026-11-09; the
+Datasette pair is 49,587,267 of them). `pair_sizes.py` measured all of it but
+the two hawkBit images, which hawkBit publishes as single linux/amd64 manifests
+rather than an index, and which it refuses; those two were sized from their
+manifests after their config blobs confirmed linux/amd64. `pair_sizes.py` reads each pinned index
 from Docker Hub or ghcr.io, checks it against its digest, picks the platform's
 manifest (`--platform`, default linux/amd64) and sums its layers; for a built
 pair it reads the base the same way and each pinned file's size from PyPI, by
@@ -2450,16 +2454,17 @@ provisioners, never rebind one the harness ships, and a pair name may not be
 used twice, so a private directory cannot quietly replace a published advisory's
 pair. The run names how many pairs came from where.
 
-It fails when detection breaks; that was measured by breaking it, on all nine
-pairs, last on 2026-10-14. With the status oracle made to accept an undeclared
+It fails when detection breaks; that was measured by breaking it, on the nine
+pairs the set held then, last on 2026-10-14. With the status oracle made to accept an undeclared
 200, the two status-only pairs fail, `gitea-private-org-membership-confirmable`
 and `datasette-private-instance-api-explorer` (each vulnerable build exits 0
 with no finding), and the seven marker pairs still catch their advisory's bug through the
 marker. With a matched marker read as absent, those seven fail, LubeLogger,
 Bugsink and Ghost among them, and the two status-only pairs still pass.
-Either change exits 1. The status oracle's real-advisory coverage rests on those
-two pairs, and `tests/test_workflows.py` keeps at least one pair of each kind
-in the set.
+Either change exits 1. The four pairs added since, InvoiceShelf and hawkBit
+(marker) and Domoticz and Ghost 6 (status only), have not been run with
+detection broken. `tests/test_workflows.py` keeps at least one pair of each
+kind in the set.
 
 ### GitLab CI
 

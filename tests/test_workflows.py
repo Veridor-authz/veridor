@@ -1611,7 +1611,8 @@ class WorkflowShapeTest(unittest.TestCase):
         loaded = {pair.stem: json.loads(pair.read_text(encoding="utf-8"))["advisory"]["id"]
                   for pair in (ROOT / "fixtures" / "pairs").glob("*.json")}
         words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven",
-                 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve"}
+                 8: "eight", 9: "nine", 10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen",
+                 14: "fourteen", 15: "fifteen", 16: "sixteen"}
         cves = sum(value.startswith("CVE-") for value in loaded.values())
         ghsa = [stem for stem, value in loaded.items() if value.startswith("GHSA-")]
         applications = {stem.split("-")[0] for stem in loaded}

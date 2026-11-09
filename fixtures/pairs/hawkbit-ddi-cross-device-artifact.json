@@ -1,0 +1,162 @@
+{
+  "name": "hawkbit-ddi-cross-device-artifact",
+  "advisory": {
+    "id": "CVE-2026-16454",
+    "summary": "hawkBit's DDI controller API served a software module's artifacts to any authenticated device in the tenant, without checking the module was assigned to that device: the artifact download when the request carried a Range header, and the artifact listing on every request.",
+    "url": "https://github.com/eclipse-hawkbit/hawkbit/security/advisories/GHSA-92r3-p8c2-3fpx",
+    "references": [
+      "https://github.com/eclipse-hawkbit/hawkbit/commit/6cb34fd77f6a60cfb0ee5b379093593cbe56591a",
+      "https://github.com/eclipse-hawkbit/hawkbit/commit/914b8b406bd77838cffbef80c1ea4cff5a15c710"
+    ],
+    "note": [
+      "GHSA-92r3-p8c2-3fpx, reported by Santoshkumarpuppala.",
+      "DdiRootController on 1.0.3 served a software module's artifacts by module",
+      "id, with the device's own controllerId and token, and no check that the",
+      "module was assigned to that device. Two paths reached another device's",
+      "firmware: the download GET .../softwaremodules/{smId}/artifacts/{fileName},",
+      "whose only assignment check ran inside logDownload, which ran only when",
+      "the request had no Range header; and the listing GET",
+      ".../softwaremodules/{smId}/artifacts, which had no check at all.",
+      "1.0.4 makes the download check unconditional (commit 6cb34fd,",
+      "getActionForDownloadByTargetAndSoftwareModule before streaming) and adds",
+      "the same check to the listing (commit 914b8b4); a module not assigned to",
+      "the caller answers 404 (SoftwareModuleNotAssignedToTargetException).",
+      "Measured on both tags before this was written. Device B, with its own",
+      "controllerId and token, naming device A's module: the ranged download",
+      "(Range: bytes=0-) is 206 with device A's firmware bytes, which carry the",
+      "marker, on 1.0.3 and 404 on 1.0.4; the listing is 200 with the marker",
+      "filename on 1.0.3 and 404 on 1.0.4. Without a Range header the download",
+      "was already 404 on 1.0.3, which is why the ranged request is the one",
+      "checked.",
+      "Device A's module holds two artifacts: one whose filename is the marker,",
+      "for the listing, and one with a plain filename whose bytes carry the",
+      "marker, for the download, so no marker is ever in a request.",
+      "The owner's marker_probe -- device A listing its own module -- is 200 with",
+      "the marker on both builds. DDI paths the resource by the caller's own",
+      "controllerId, so the owner cannot share the attacker's path in one check;",
+      "the attacker paths' second identity is an unauthenticated caller, 401 on",
+      "both builds. The third check is device B listing its OWN assigned module,",
+      "200 on both, so device B's token is live and the patched 404s are the fix,",
+      "not a dead credential; a fabricated TargetToken gets 401 on both.",
+      "Devices authenticate with their own per-target security token",
+      "(Authorization: TargetToken <token>), enabled by the provisioner. The",
+      "images are linux/amd64 only and run emulated on arm64 hosts."
+    ]
+  },
+  "vulnerable_failing_checks": [
+    "artifact-metadata-must-not-be-cross-device-listable",
+    "artifact-must-not-be-cross-device-downloadable"
+  ],
+  "image": "hawkbit/hawkbit-update-server",
+  "vulnerable": "1.0.3",
+  "patched": "1.0.4",
+  "vulnerable_digest": "sha256:7b115c9fa47f3e8c6ca9332b4fff2f4074b739ef9ec070be8bb66077d09a0d0d",
+  "patched_digest": "sha256:79e3f6c813cd7eeebec1f064d29b9ae5199c8866998c4b072a1fc1347571f9e7",
+  "container_port": 8080,
+  "health_path": "/actuator/health",
+  "provision": "hawkbit_ddi_cross_device",
+  "marker": "VERIDOR-MARKER-16454a7c3e9b2f0d",
+  "control": {
+    "path": "/DEFAULT/controller/v1/${VERIDOR_PAIR_A_CONTROLLER}/softwaremodules/${VERIDOR_PAIR_SM_A_ID}/artifacts",
+    "headers": {
+      "Authorization": "TargetToken ${VERIDOR_PAIR_A_TOKEN}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "device_a": {
+        "headers": {
+          "Authorization": "TargetToken ${VERIDOR_PAIR_A_TOKEN}"
+        },
+        "marker": "VERIDOR-MARKER-16454a7c3e9b2f0d",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/DEFAULT/controller/v1/${VERIDOR_PAIR_A_CONTROLLER}/softwaremodules/${VERIDOR_PAIR_SM_A_ID}/artifacts"
+        }
+      },
+      "device_b": {
+        "headers": {
+          "Authorization": "TargetToken ${VERIDOR_PAIR_B_TOKEN}"
+        }
+      },
+      "unauthenticated": {
+        "headers": {}
+      }
+    },
+    "checks": [
+      {
+        "id": "artifact-metadata-must-not-be-cross-device-listable",
+        "name": "A device must not list another device's module artifact metadata",
+        "request": {
+          "method": "GET",
+          "path": "/DEFAULT/controller/v1/${VERIDOR_PAIR_B_CONTROLLER}/softwaremodules/${VERIDOR_PAIR_SM_A_ID}/artifacts"
+        },
+        "expect": {
+          "device_b": {
+            "status": [
+              404
+            ],
+            "excludes_marker": "device_a"
+          },
+          "unauthenticated": {
+            "status": [
+              401
+            ]
+          }
+        }
+      },
+      {
+        "id": "artifact-must-not-be-cross-device-downloadable",
+        "name": "A device must not download another device's firmware artifact (ranged request)",
+        "request": {
+          "method": "GET",
+          "path": "/DEFAULT/controller/v1/${VERIDOR_PAIR_B_CONTROLLER}/softwaremodules/${VERIDOR_PAIR_SM_A_ID}/artifacts/${VERIDOR_PAIR_A_FILENAME}",
+          "headers": {
+            "Range": "bytes=0-"
+          }
+        },
+        "expect": {
+          "device_b": {
+            "status": [
+              404
+            ],
+            "excludes_marker": "device_a"
+          },
+          "unauthenticated": {
+            "status": [
+              401
+            ]
+          }
+        }
+      },
+      {
+        "id": "device-must-be-able-to-list-its-own-assigned-module",
+        "name": "A device must still list the artifacts of a module assigned to it",
+        "request": {
+          "method": "GET",
+          "path": "/DEFAULT/controller/v1/${VERIDOR_PAIR_B_CONTROLLER}/softwaremodules/${VERIDOR_PAIR_SM_B_ID}/artifacts"
+        },
+        "expect": {
+          "device_b": {
+            "status": [
+              200
+            ]
+          },
+          "unauthenticated": {
+            "status": [
+              401
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "expected_evidence": "confirmed"
+}

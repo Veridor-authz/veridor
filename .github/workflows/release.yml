@@ -181,9 +181,9 @@ jobs:
     # --no-deps). Under VERIDOR_TEST_AGAINST=installed, patched_pairs.py
     # prints which veridor it imports and refuses to start unless an installed
     # distribution's RECORD (here, the wheel's) lists that file and it is
-    # outside src/. It pulls all twelve images by digest and builds the
-    # Datasette pair from its pinned wheels: 1.12 GB compressed for
-    # linux/amd64 (scripts/pair_sizes.py, 2026-09-27). It publishes nothing;
+    # outside src/. It pulls all twenty images by digest and builds the
+    # Datasette pair from its pinned wheels: 2.42 GB compressed for
+    # linux/amd64 (read from the registries, 2026-11-09). It publishes nothing;
     # provenance and pypi need it, so a wheel that no longer catches one of the
     # advisories' bugs is never attested or uploaded.
     name: Detection baseline against the built wheel (every pair)

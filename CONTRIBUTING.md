@@ -411,7 +411,7 @@ maintainers.
    suite on 3.11, 3.12
    and 3.13, builds and checks the dist files, and runs every
    published-advisory pair (`scripts/patched_pairs.py`) against the built wheel,
-   which downloads 1.12 GB of images and package files (compressed,
+   which downloads 2.42 GB of images and package files (compressed,
    linux/amd64). Nothing is
    published before those pass. Then the jobs publish in order: provenance,
    PyPI, the image, the chart, the GitHub release. Each waits in the `release`

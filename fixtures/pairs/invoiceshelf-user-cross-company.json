@@ -1,0 +1,94 @@
+{
+  "name": "invoiceshelf-user-cross-company",
+  "advisory": {
+    "id": "CVE-2026-55610",
+    "summary": "A company owner could read a user belonging to another company through GET /api/v1/users/{id}, because the view check tested only that the caller owned the company named in the header, not that the target belonged to it.",
+    "url": "https://github.com/InvoiceShelf/InvoiceShelf/security/advisories/GHSA-vgx6-6cqr-m8qr",
+    "note": [
+      "GHSA-vgx6-6cqr-m8qr, reported by Santoshkumarpuppala.",
+      "UserPolicy::view on 2.4.0 returns $user->isOwner() alone. isOwner() is",
+      "true when the caller owns the company in the `company` header, so an",
+      "owner of company A reads a user of company B by naming A in the header:",
+      "GET /api/v1/users/{id} loads the target by global id. 2.4.1 adds",
+      "sharesActiveCompany($model) and answers 403 when the target does not",
+      "belong to the header's company.",
+      "Measured by hand on both tags before this pair was written. Attacker is",
+      "the seeded admin, owner of company A; victim owns company B and belongs to",
+      "B only. Attacker (header A) GET /api/v1/users/{victim}: 200 with the",
+      "marker in name and email on 2.4.0, 403 with no marker on 2.4.1. Victim",
+      "(header B) reading its own record is 200 with the marker on both, which is",
+      "the control and the marker probe. A fabricated Bearer token is 401 on",
+      "both tags, so the attacker's 403 on 2.4.1 is a live credential refused,",
+      "not a dead session or a removed route."
+    ]
+  },
+  "image": "invoiceshelf/invoiceshelf",
+  "vulnerable": "2.4.0",
+  "patched": "2.4.1",
+  "vulnerable_digest": "sha256:636626d1d0d70ea3c557198ef38a940d8f5e420526aa039c2bc8365fe2b4fe4b",
+  "patched_digest": "sha256:563ffd1d79e0e1a0bb97691198630022dc0206835d9bb8b3e88972af58f33f7b",
+  "container_port": 8080,
+  "health_path": "/healthcheck",
+  "provision": "invoiceshelf_user_cross_company",
+  "marker": "vdr-OH4bLQSrnyPd2IA1gGawbKDQ",
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "victim": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_VICTIM_TOKEN}",
+          "company": "${VERIDOR_PAIR_COMPANY_B_ID}"
+        },
+        "marker": "vdr-OH4bLQSrnyPd2IA1gGawbKDQ",
+        "marker_probe": {
+          "method": "GET",
+          "path": "/api/v1/users/${VERIDOR_PAIR_VICTIM_ID}"
+        }
+      },
+      "attacker": {
+        "headers": {
+          "Authorization": "Bearer ${VERIDOR_PAIR_ATTACKER_TOKEN}",
+          "company": "${VERIDOR_PAIR_COMPANY_A_ID}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "owner-must-not-read-another-companys-user",
+        "name": "A company owner must not read a user who belongs only to another company",
+        "request": {
+          "method": "GET",
+          "path": "/api/v1/users/${VERIDOR_PAIR_VICTIM_ID}"
+        },
+        "expect": {
+          "victim": {
+            "status": [
+              200
+            ],
+            "contains_marker": "victim"
+          },
+          "attacker": {
+            "status": [
+              403
+            ],
+            "excludes_marker": "victim"
+          }
+        }
+      }
+    ]
+  },
+  "control": {
+    "path": "/api/v1/users/${VERIDOR_PAIR_VICTIM_ID}",
+    "headers": {
+      "Authorization": "Bearer ${VERIDOR_PAIR_VICTIM_TOKEN}",
+      "company": "${VERIDOR_PAIR_COMPANY_B_ID}"
+    },
+    "status": 200,
+    "expect_marker": true
+  },
+  "expected_evidence": "confirmed"
+}

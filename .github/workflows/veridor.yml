@@ -16,7 +16,7 @@ name: CI
 #                    controls)
 #   detection-baseline  every published advisory in fixtures/pairs/: Veridor must
 #                    find each one on the vulnerable build and pass on its
-#                    fix. 1.12 GB of images and files, every run
+#                    fix. 2.42 GB of images and files, every run
 #
 # Every action is pinned to a full commit SHA (tests/test_workflows.py refuses
 # anything else), checkouts keep no credential, and the one job that needs to
@@ -384,14 +384,16 @@ jobs:
     # survive the fix (not "green because gone"), the owner's control probe
     # must still reach the marker, the evidence grade must be the one the pair
     # declares, and every patched denial must have reached a credential the
-    # run proved live. 9 pairs in 7 applications, 63 assertions. Datasette's is
+    # run proved live. 13 pairs in 10 applications, 91 assertions. Datasette's is
     # built from its published wheels (fixtures/pairs/recipes/); the rest pull.
     #
     # Every pair, on every pull request and every push to main; release.yml
     # runs every pair again against the built wheel before PyPI publishes.
-    # There is no lighter subset. The twelve images and the built pair's base
-    # and files are 1.12 GB compressed for linux/amd64, each counted once
-    # (scripts/pair_sizes.py, read from the registries and PyPI on 2026-09-27). The pairs that once made a subset worth
+    # There is no lighter subset. The twenty images and the built pair's base
+    # and files are 2.42 GB compressed for linux/amd64, each counted once
+    # (read from the registries and PyPI on 2026-11-09: scripts/pair_sizes.py
+    # for all but hawkBit's two, which are single-platform manifests it
+    # refuses, sized from those manifests by hand). The pairs that once made a subset worth
     # having, Jellyfin and wger, were replaced by LubeLogger and Bugsink: the
     # same bug shape, a cross-user read, in the same languages (.NET and
     # Python), at 0.22 and 0.31 GB against 1.43 and 0.74. A pair too large for

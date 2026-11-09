@@ -1,0 +1,95 @@
+{
+  "name": "domoticz-viewer-lua-parser",
+  "advisory": {
+    "id": "CVE-2026-75520",
+    "summary": "The udevices web command ran a lua parser script for any authenticated session, so a VIEWER-level user could invoke it; the handler had no rights check.",
+    "url": "https://github.com/domoticz/domoticz/security/advisories/GHSA-8rv5-x8wv-c5c4",
+    "note": [
+      "GHSA-8rv5-x8wv-c5c4, reported by Santoshkumarpuppala.",
+      "Cmd_UpdateDevices (WebServerCmds.cpp) runs the lua parser named by the",
+      "`script` parameter through CLuaHandler::executeLuaScript. On 2026.2 the",
+      "handler has no rights gate, so a viewer session reaches it. Fix commit",
+      "73ed0495 adds `if (session.rights == URIGHTS_VIEWER || session.rights ==",
+      "URIGHTS_NONE) { reply forbidden; return; }` at the top, confirmed by",
+      "reading both images' sources: 2026.2's handler begins at `script =",
+      "findValue(script)`, 2026.3's begins with that rights check.",
+      "Only the role gate (CWE-862) is claimed. The advisory also adds a `..`",
+      "guard for path traversal; that is a separate weakness and is not what",
+      "this pair measures, so the planted script name is a plain file with no",
+      "`..`.",
+      "The advisory text names a SWITCHER role, but the fix blocks VIEWER and",
+      "NONE; the pair uses a VIEWER and measures the gate the code actually adds.",
+      "Status only, no marker (graded ungraded), like gitea-private-org and",
+      "datasette: the vulnerable build answers the viewer 200 and the fix",
+      "answers 403.",
+      "Measured by hand on both tags before this was written.",
+      "GET /json.htm?type=command&param=udevices&script=veridor.lua :",
+      "admin Basic 200 on both tags (control, endpoint survives); viewer Basic",
+      "200 on 2026.2 and 403 on 2026.3. A viewer Basic header with a wrong",
+      "password is 401 on both, and an unauthenticated call is 401 on both, so",
+      "the viewer's 403 on 2026.3 is a live credential refused, not a dead",
+      "session or a removed route. A parser script is planted under",
+      "userdata/scripts/lua_parsers identically on both sides, because",
+      "executeLuaScript returns true (clean 200) only when the file loads."
+    ]
+  },
+  "image": "domoticz/domoticz",
+  "vulnerable": "2026.2",
+  "patched": "2026.3",
+  "vulnerable_digest": "sha256:3274bede448c8702b2864a6cc75dc639b1de656bc1542147fd53b3d2395073ff",
+  "patched_digest": "sha256:ddb77ad45f169f823c75093ffab8a31b7c59c504970a30d3fa8f69ad651def38",
+  "container_port": 8080,
+  "health_path": "/json.htm?type=command&param=getversion",
+  "provision": "domoticz_viewer_lua_parser",
+  "marker": "VERIDOR-MARKER-domoticz-udevices-role",
+  "config": {
+    "version": 1,
+    "target": {
+      "base_url": "PROVISIONED",
+      "timeout_seconds": 10
+    },
+    "identities": {
+      "admin": {
+        "headers": {
+          "Authorization": "Basic ${VERIDOR_PAIR_ADMIN_BASIC}"
+        }
+      },
+      "viewer": {
+        "headers": {
+          "Authorization": "Basic ${VERIDOR_PAIR_VIEWER_BASIC}"
+        }
+      }
+    },
+    "checks": [
+      {
+        "id": "viewer-must-not-invoke-the-lua-parser",
+        "name": "A viewer-level session must not invoke the udevices lua parser command",
+        "request": {
+          "method": "GET",
+          "path": "/json.htm?type=command&param=udevices&script=veridor.lua"
+        },
+        "expect": {
+          "admin": {
+            "status": [
+              200
+            ]
+          },
+          "viewer": {
+            "status": [
+              403
+            ]
+          }
+        }
+      }
+    ]
+  },
+  "control": {
+    "path": "/json.htm?type=command&param=udevices&script=veridor.lua",
+    "headers": {
+      "Authorization": "Basic ${VERIDOR_PAIR_ADMIN_BASIC}"
+    },
+    "status": 200,
+    "expect_marker": false
+  },
+  "expected_evidence": "ungraded"
+}
