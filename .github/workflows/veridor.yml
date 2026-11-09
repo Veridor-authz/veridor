@@ -320,7 +320,9 @@ jobs:
     # took 21 (2026-09-25), 20 of them in a settle loop that waited out its
     # timeout on every leg (fixed since, not yet re-timed); the argocd and
     # kustomize scenarios took 6.5 to 7.7 together in 5 runs. helm runs
-    # alone, the rest together; as of 2026-11-04 neither group has run on GitHub. Every group
+    # alone, the rest together. On GitHub-hosted runners (2026-11-08, one run)
+    # the script took 4.2 minutes for helm and 11 for the rest, which also
+    # ran its 2.7 minute negative control first. Every group
     # installs Argo CD and Rollouts. tests/test_helm_chart.py holds the
     # groups to the script's scenario list: each scenario in exactly one.
     name: Kubernetes end to end (${{ matrix.scenarios }})

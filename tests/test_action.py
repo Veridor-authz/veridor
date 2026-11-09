@@ -297,7 +297,10 @@ class ReadmeActionSectionTest(unittest.TestCase):
         # about an undated one says when it was written.
         prose = " ".join(section.split())
         self.assertRegex(prose, r"As of \d{4}-\d{2}-\d{2}, no release has been tagged\.")
-        self.assertRegex(prose, r"configured, and as of \d{4}-\d{2}-\d{2} no run of that workflow")
+        # The runner claim names the run it rests on and when it happened.
+        ran = r"passed on GitHub-hosted runners on \d{4}-\d{2}-\d{2} \(CI run \d+\)"
+        self.assertRegex(prose, ran)
+        self.assertNotRegex(re.sub(r"\d{4}-\d{2}-\d{2}", "recently", prose), ran)
         self.assertNotRegex(prose, r"(?i)(?:tagged|observed|seen) yet")
         self.assertNotRegex(section, r"Veridor-authz/veridor@v\d")
 

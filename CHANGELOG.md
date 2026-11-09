@@ -644,8 +644,9 @@ something you installed.
   `dist/veridor-<version>.pyz`. Two builds are byte-identical, and the same
   sha256 was measured on macOS arm64 and on Linux arm64 and amd64. It needs
   Python 3.11 or newer.
-- **Continuous integration** in `.github/workflows/veridor.yml`, configured
-  and, as of 2026-11-04, not run on GitHub: both test tiers on Python 3.11, 3.12 and 3.13 and
+- **Continuous integration** in `.github/workflows/veridor.yml`, every job
+  passing on GitHub-hosted runners on 2026-11-08 (CI run 42508338432, private
+  repository): both test tiers on Python 3.11, 3.12 and 3.13 and
   on macOS, with helm, kubectl and shellcheck required; the suite again
   against the installed wheel; the Action through `uses: ./`; actionlint,
   shellcheck and the Helm chart; the kind and GitLab end-to-end scripts, the
@@ -1409,7 +1410,8 @@ something you installed.
   `VERIDOR_TEST_AGAINST=installed` the harness prints which `veridor` it
   imports and refuses to start when it cannot import `veridor.cli`, imports it
   from `src/`, or imports a file no installed distribution's RECORD lists.
-  As of 2026-11-04 neither job has run on GitHub.
+  The CI job passed on a GitHub-hosted runner on 2026-11-08; the release job
+  has not run.
 - **`release_check.py notes` refuses notes that are not release notes**: a
   section with a line starting "Not released." or "Nothing here has been
   released", and a non-empty `[Unreleased]`. `notes v0.1.0` exited `0` and

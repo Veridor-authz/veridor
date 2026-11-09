@@ -330,8 +330,8 @@ publisher to hold the name: check PyPI's documentation, and until the first
 upload treat the name as open to anyone.
 
 Expect to approve each publishing job in turn, since GitHub holds every job
-that uses the environment. As of 2026-11-04 this has not been seen on GitHub,
-because nothing had run there. Rejecting a job stops the jobs after it.
+that uses the environment. As of 2026-11-08 this has not been seen on GitHub,
+because the release workflow has not run there. Rejecting a job stops the jobs after it.
 
 What the workflow checks by itself, before anything is built: the `verify` job
 fails unless `IMAGE` and `CHART_REPOSITORY` sit under `ghcr.io/<owner>/` for

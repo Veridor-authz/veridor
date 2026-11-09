@@ -108,8 +108,9 @@ Veridor has no TLS setting of its own, and a configuration that names one
 
 CI is configured to run the full fast tier on every version that floor allows
 (3.11, 3.12 and 3.13), plus a wheel build and install, because running from a
-checkout proves nothing about installing. As of 2026-11-04 it has not run on GitHub;
-the repository's Actions tab shows any run since.
+checkout proves nothing about installing. Every job passed on GitHub-hosted
+runners on 2026-11-08 (CI run 42508338432, at `38025ed`). The repository is still private,
+so that run is visible only to its members.
 
 Releases are configured to be tagged `vX.Y.Z`. The image gets `X.Y.Z`, plus
 `X.Y` and `latest` for a final release. There is no moving major tag (`v0`,
@@ -121,22 +122,24 @@ an `integrity` hash, not from the tag URL ([GitLab CI](#gitlab-ci) shows how).
 ## CI/CD integrations
 
 What each integration is, and exactly what had been executed for it as of
-2026-11-04. Only the Kubernetes rows have run on the system they target, and only on a
-local kind cluster; **every other row ran outside its platform**.
+2026-11-08. The Kubernetes rows have run on the system they target, on kind
+clusters, locally and in this repository's CI on a GitHub-hosted runner. The
+GitHub Action has run through `uses: ./` in that same CI, which is private;
+**every other row ran outside its platform**.
 Nothing is published, so the image, chart and package names in these files resolve only after the first
 release.
 
 | Integration | Files | What has been executed | Not yet |
 | --- | --- | --- | --- |
-| [GitHub Action](#github-action) | [action.yml](action.yml) | Its steps, run in order by a local harness under the runner's bash flags, against the demo API: vulnerable fails the step with exit 1, fixed passes (`tests/test_action.py`) | A run on GitHub; the `action-e2e` CI job is configured |
-| [GitLab CI/CD component](#gitlab-ci) | [templates/veridor.yml](templates/veridor.yml) | The job's own rendered script in docker against the demo API, last run 2026-09-27, on the Alpine image ([counts and controls](ci/README.md#what-was-tested)), covering exits 0, 1, 2, 3 and 143, every report, every input that changes the script, and proxy variables set as pipeline variables (`scripts/e2e_gitlab_job.sh`); the YAML against GitLab's CI schema | A GitLab runner; the CI/CD Catalog |
-| Argo CD PostSync gate, Helm | [deploy/helm/veridor-gate](deploy/helm/veridor-gate/README.md), [deploy/argocd](deploy/argocd/README.md) | A local kind cluster with Argo CD v3.5.3 (`scripts/e2e_kubernetes.sh`): a vulnerable target fails the sync, a fixed one succeeds, each sync that runs hooks read from a gate Job of its own (`generateName`); a selective or Apply Only sync runs no hook and no gate; also as a Helm hook and a plain Job | Other clusters and Argo CD versions; the chart is not published |
+| [GitHub Action](#github-action) | [action.yml](action.yml) | Its steps, run in order by a local harness under the runner's bash flags, against the demo API: vulnerable fails the step with exit 1, fixed passes (`tests/test_action.py`); the `action-e2e` CI job through `uses: ./` on GitHub-hosted `ubuntu-latest` and `macos-latest`, same result (2026-11-08) | A run from another repository; a SARIF upload to code scanning; Windows runners |
+| [GitLab CI/CD component](#gitlab-ci) | [templates/veridor.yml](templates/veridor.yml) | The job's own rendered script in docker against the demo API, last run locally 2026-09-27, on the Alpine image ([counts and controls](ci/README.md#what-was-tested)), and with its three controls in CI on a GitHub-hosted runner on 2026-11-08, covering exits 0, 1, 2, 3 and 143, every report, every input that changes the script, and proxy variables set as pipeline variables (`scripts/e2e_gitlab_job.sh`); the YAML against GitLab's CI schema | A GitLab runner; the CI/CD Catalog |
+| Argo CD PostSync gate, Helm | [deploy/helm/veridor-gate](deploy/helm/veridor-gate/README.md), [deploy/argocd](deploy/argocd/README.md) | A kind cluster with Argo CD v3.5.3, locally and on a GitHub-hosted runner (`scripts/e2e_kubernetes.sh`): a vulnerable target fails the sync, a fixed one succeeds, each sync that runs hooks read from a gate Job of its own (`generateName`); a selective or Apply Only sync runs no hook and no gate; also as a Helm hook and a plain Job | Other clusters and Argo CD versions; the chart is not published |
 | Argo CD PostSync gate, Kustomize | [deploy/kustomize/veridor-gate](deploy/kustomize/veridor-gate/README.md) | Not provided: Kustomize refuses the `generateName` an Argo CD hook Job needs, so with Argo CD use the Helm chart. The plain overlay ran in the same kind run: vulnerable Job `Failed`, fixed `Complete`, and its README's delete/apply/wait block | Standalone kustomize, Flux |
 | Argo Rollouts analysis | [deploy/argo-rollouts](deploy/argo-rollouts/README.md) | The same kind run with Argo Rollouts v1.10.0: a vulnerable canary is aborted, a fixed one promoted | A traffic router |
 | Jenkins | [ci/Jenkinsfile](ci/Jenkinsfile) | The gate shell, run on a host against the demo API (`tests/test_ci_configs.py`); the file accepted by Jenkins' declarative linter | A Jenkins build |
 | Azure Pipelines | [ci/azure-pipelines.yml](ci/azure-pipelines.yml) | The gate shell, run on a host; the YAML against Azure's pipeline schema | An Azure run |
 | AWS CodeBuild | [ci/buildspec.yml](ci/buildspec.yml) | The gate shell, run on a host; the keys against AWS's buildspec reference | A CodeBuild build |
-| Any CI, container image | [Dockerfile](Dockerfile) | Built locally and run as the job image in the GitLab run above | Publishing; the `image` CI job is configured |
+| Any CI, container image | [Dockerfile](Dockerfile) | Built locally and run as the job image in the GitLab run above; built and run as the gate by the `image` CI job on a GitHub-hosted runner (2026-11-08) | Publishing |
 | Any CI, zipapp | [scripts/build_zipapp.py](scripts/build_zipapp.py) | Built, then run on Python 3.11 against the demo API: vulnerable exits 1, fixed 0 | Publishing as a release asset |
 
 [ci/README.md](ci/README.md#what-was-tested) has the detail for GitLab,
@@ -2250,9 +2253,11 @@ tokens in Actions secrets and reference them through `${NAME}` in the config.
 
 **Runners.** The Action needs bash and Python 3.11 or newer on `PATH`.
 `.github/workflows/veridor.yml` runs it through `uses: ./` on `ubuntu-latest`
-and `macos-latest` (the `action-e2e` job): configured, and as of 2026-11-04 no run of
-that workflow on GitHub has been seen. What has been measured is the
-harness in `tests/action_harness.py`, which executes `action.yml` step by step
+and `macos-latest` (the `action-e2e` job). Both passed on GitHub-hosted runners
+on 2026-11-08 (CI run 42508338432): the vulnerable demo failed the step with exit 1 and
+one finding and wrote SARIF and JUnit; the fixed one passed. That job uploads
+SARIF to code scanning only on a manual run, so no upload has been seen. The
+harness in `tests/action_harness.py` executes `action.yml` step by step
 under the runner's bash flags: on macOS with bash 3.2 and on Linux with bash
 5.2 in a container. Windows runners have not been tried.
 
@@ -2433,8 +2438,9 @@ download and the wheel install, each with its exact inputs (the harness runs
 whatever `fixtures/pairs/` holds when it starts). Timed on one arm64 laptop
 with every image and the Datasette pair's build layers already present
 (2026-10-15, three runs, load average about 2.5 from other work): every pair
-with `--pull` took 53 seconds median (52 to 64). As of 2026-11-04 neither job has been timed on
-a GitHub runner, where the download and the Datasette builds are the new cost.
+with `--pull` took 53 seconds median (52 to 64). On a GitHub-hosted `ubuntu-latest`
+runner the CI job's `--pull` step took 155 seconds (one
+run, 2026-11-08). The release job has not run.
 
 `--pairs-dir DIR` (or `VERIDOR_PAIRS_DIR`) also runs the pairs in a directory
 outside the repository. It is for findings whose details are not public yet: a
@@ -2611,7 +2617,11 @@ source (and two control images the check must fail: one built without the
 step that makes that true, and one with that step as it was before `run` was
 checked). The release workflow is configured to check each platform's image
 the same way before it pushes, and the pushed digest again before it signs.
-As of 2026-11-04 none of it has been observed running on GitHub. The Linux Python 3.12 leg
+Every one of those CI jobs passed on GitHub-hosted runners on 2026-11-08 (CI run 42508338432, at
+`38025ed`); the release workflow has not run. The repository is private, and on
+it the CodeQL and OpenSSF Scorecard workflows fail: CodeQL's upload needs
+Advanced Security enabled, and Scorecard's query of the repository is refused
+("Resource not accessible by integration"). The Linux Python 3.12 leg
 also runs the end-to-end validation:
 
 ```bash

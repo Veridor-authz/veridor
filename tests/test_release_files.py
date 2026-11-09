@@ -113,7 +113,8 @@ class PresenceTest(unittest.TestCase):
         self.assertNotIn("Deterministic", description)
 
     def test_the_classifier_comment_does_not_say_ci_has_run(self) -> None:
-        """GitHub Actions has not run this tree. SUPPORT.md has it right."""
+        """The comment names what CI is set up to test, which a passing run
+        does not widen. SUPPORT.md says the same."""
         text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         self.assertNotIn("was RUN", text)
         self.assertIn("is configured to run the fast tier and a wheel", " ".join(text.replace("#", "").split()))
