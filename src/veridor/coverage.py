@@ -215,8 +215,15 @@ def classify_expectation(
 
     ``denial_only`` -- the only classification that counts toward coverage --
     requires every acceptable outcome to be a refusal and at least one of them
-    to be an *authorization* refusal. A set mixing a 2xx with a denial accepts
-    both access and refusal, asserts nothing, and is ``permissive``.
+    to be an *authorization* refusal. A set mixing a 2xx with any other status
+    accepts both access and refusal, asserts nothing, and is ``permissive``.
+
+    "Any other status", not "a denial status": ``veridor run`` grades every
+    non-2xx as a refusal (``core._target_served``), so [200, 405] or
+    [200, 302] matches whether the target serves the identity or refuses it,
+    exactly as [200, 403] does. Testing for a listed denial here let those
+    through as ``ambiguous`` or ``redirect``, and the run's non-asserting
+    warning, which reuses this function, stayed silent on them.
     """
     values = [
         status
@@ -235,9 +242,7 @@ def classify_expectation(
         return "allow_only"
     if all(item in {"authz_denial", "authn_denial"} for item in classes):
         return "denial_only" if "authz_denial" in classes else "authn_only"
-    if "allow" in classes and (
-        "authz_denial" in classes or "authn_denial" in classes
-    ):
+    if "allow" in classes:
         return "permissive"
     for item in classes:
         if item in {"redirect", "server_error", "ambiguous"}:

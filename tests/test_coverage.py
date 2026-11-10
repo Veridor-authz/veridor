@@ -524,6 +524,10 @@ class ClassificationTest(unittest.TestCase):
         ([407], "authn_only"),
         ([200, 404], "permissive"),
         ([200, 403], "permissive"),
+        # Not a listed denial, but `run` grades it a refusal all the same.
+        ([200, 405], "permissive"),
+        ([200, 302], "permissive"),
+        ([200, 500], "permissive"),
         ([302], "redirect"),
         ([500], "server_error"),
         ([400], "ambiguous"),

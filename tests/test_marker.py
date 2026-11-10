@@ -3063,6 +3063,33 @@ class PassDisclosureTest(unittest.TestCase):
         source = inspect.getsource(core._non_asserting_expectations)
         self.assertIn("classify_expectation", source)
 
+    @fast("asserts on the declaration, not on a live target")
+    def test_a_2xx_mixed_with_any_status_the_run_grades_as_a_refusal_is_flagged(
+        self,
+    ) -> None:
+        """The run grades every non-2xx as a refusal (``_target_served``).
+
+        The check used to know only 401/403/404/407 as denials, so [200, 405]
+        drew no warning although a 405 is graded a refusal: the expectation
+        matched whether the target served the identity or refused it.
+        """
+        mixed = ([200, 405], [200, 400], [204, 302], [200, 500], [200, 403])
+        unmixed = ([200], [200, 204], [403, 405], [405], [400])
+        config = {
+            "checks": [
+                {"id": f"c{index}", "expect": {"outsider": {"status": statuses}}}
+                for index, statuses in enumerate(mixed + unmixed)
+            ]
+        }
+        flagged = [
+            entry["statuses"] for entry in core._non_asserting_expectations(config)
+        ]
+        self.assertEqual(flagged, [list(statuses) for statuses in mixed])
+        # Every status the check now treats as a refusal is one the grader does.
+        for statuses in mixed:
+            refusals = [s for s in statuses if not core._target_served(s)]
+            self.assertTrue(refusals, statuses)
+
     def test_interpretation_scopes_a_pass_as_well_as_a_finding(self) -> None:
         def responder(path, token):
             return (200, {}, _json_body({"ok": True}))
