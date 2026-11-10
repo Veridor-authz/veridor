@@ -297,14 +297,15 @@ class ConfigSchemaTest(unittest.TestCase):
                 self.assertEqual(required - set(config), set())
 
     def test_the_schema_id_is_an_identifier_and_says_so(self) -> None:
-        """A $id names a schema; it need not resolve. Nothing serves this one,
-        so the schema must not read as if something did, and nothing in it may
-        depend on fetching it: every $ref stays inside the file."""
+        """A $id names a schema; it need not resolve. The docs site serves a
+        copy at this one, and the description says so, but nothing in the
+        schema may depend on fetching it: every $ref stays inside the file."""
         self.assertEqual(
             self.schema["$id"],
             "https://docs.veridor.org/schema/veridor-config-v1.schema.json",
         )
-        self.assertIn("nothing is served at that address", self.schema["description"])
+        self.assertIn("the docs site serves a copy of this file at that address", self.schema["description"])
+        self.assertNotIn("nothing is served", self.schema["description"])
         references = re.findall(r'"\$ref": "([^"]+)"', json.dumps(self.schema))
         self.assertTrue(references, "the schema no longer factors anything into $defs")
         self.assertEqual([ref for ref in references if not ref.startswith("#")], [])
