@@ -2164,6 +2164,37 @@ class TargetDisclosureTest(unittest.TestCase):
         self.assertIn("did NOT start", finished.stderr)
         # and it says what that means for whatever the reader runs next
         self.assertIn("probing that other process", finished.stderr)
+        # The fixed demo was asked for: the relaunch it suggests is the fixed
+        # demo too, not --vulnerable (it was, whatever the flags).
+        self.assertIn("python3 scripts/demo_server.py --port 8799 &", finished.stderr)
+        self.assertNotIn("--vulnerable", finished.stderr)
+
+
+class DemoRelaunchHintTest(unittest.TestCase):
+    """docs-start F7. The busy-port message always suggested relaunching with
+    --vulnerable, so a reader running the fixed demo who copied it got the
+    vulnerable one, and a red run where they expected green."""
+
+    @staticmethod
+    def hint(*argv: str, port: int = 8799) -> str:
+        from scripts.demo_server import build_parser, relaunch_hint  # noqa: PLC0415
+
+        return relaunch_hint(build_parser().parse_args(list(argv)), port)
+
+    def test_the_hint_repeats_the_flags_the_demo_was_started_with(self) -> None:
+        cases = {
+            (): "python3 scripts/demo_server.py --port 8799 &",
+            ("--vulnerable",): "python3 scripts/demo_server.py --vulnerable --port 8799 &",
+            ("--vulnerable", "--no-marker-leak", "--noisy-write"):
+                "python3 scripts/demo_server.py --vulnerable --no-marker-leak --noisy-write --port 8799 &",
+            ("--host", "::1"): "python3 scripts/demo_server.py --host ::1 --port 8799 &",
+        }
+        for argv, first in cases.items():
+            with self.subTest(argv=argv):
+                self.assertEqual(self.hint(*argv).splitlines()[0].strip(), first)
+        self.assertNotIn("--vulnerable", self.hint())
+        self.assertIn("--base-url http://[::1]:8799", self.hint("--host", "::1"))
+        self.assertIn("--base-url http://127.0.0.1:8800", self.hint(port=8800))
 
 
 class UnauthenticatedExposureGuardTest(unittest.TestCase):

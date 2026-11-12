@@ -365,7 +365,29 @@ def create_server(
     )
 
 
-def main() -> None:
+def relaunch_hint(args: argparse.Namespace, port: int = 8799) -> str:
+    """The two commands the busy-port message suggests: this demo again, with
+    the flags it was started with, on another port, and the run against it.
+    It used to suggest --vulnerable whatever was asked for, so a reader of the
+    fixed demo who copied it was handed the other demo."""
+    flags = []
+    if args.host != "127.0.0.1":
+        flags += ["--host", args.host]
+    if args.vulnerable:
+        flags.append("--vulnerable")
+    if not args.leak_marker:
+        flags.append("--no-marker-leak")
+    if not args.silent_write:
+        flags.append("--noisy-write")
+    host = f"[{args.host}]" if ":" in args.host else args.host
+    return (
+        f"    python3 scripts/demo_server.py {' '.join(flags + ['--port', str(port)])} &\n"
+        "    veridor run --config fixtures/veridor.demo.json "
+        f"--base-url http://{host}:{port}"
+    )
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
@@ -389,7 +411,11 @@ def main() -> None:
             "answering 403 and deleting the row"
         ),
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     try:
         server = create_server(
             args.host, args.port, args.vulnerable, args.leak_marker, args.silent_write
@@ -409,9 +435,8 @@ def main() -> None:
             "other process, and a green result would say nothing about this "
             "demo.\n"
             "  Free the port, or run somewhere else and point the tool at it:\n"
-            f"    python3 scripts/demo_server.py --vulnerable --port 8799 &\n"
-            "    veridor run --config fixtures/veridor.demo.json "
-            "--base-url http://127.0.0.1:8799",
+            # not the port that was just refused
+            + relaunch_hint(args, 8800 if args.port == 8799 else 8799),
             file=sys.stderr,
             flush=True,
         )
