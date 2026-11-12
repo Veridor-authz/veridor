@@ -1577,6 +1577,15 @@ something you installed.
 
 ### Fixed
 
+- **`mutate` with its target down printed `Mutation score: 0.00`.** Every
+  generated mutant errored, and an errored mutant sits in the denominator as a
+  miss, so the score was `0 / 13`: a measured failure of checks that were never
+  exercised, where the documentation promised `n/a`. When no generated mutant
+  was evaluated, `score` (and `score_of_evaluable`, per operator and per tier-2
+  hook) is now `null`, the text prints `n/a` and says why, the badge is
+  `unknown` in grey, and `serve` shows no score for it, including for a report
+  written before this change. Errored mutants beside at least one evaluated one
+  still count as misses, and the run still exits `2`.
 - **`report` rendered an INCONCLUSIVE capsule verification as "Gate passed
   (exit 0)", and `serve` listed it as a failed run.** `verify` wrote the run of
   the capsule to `--output-dir` as an ordinary run: no gate, no verdict, and a

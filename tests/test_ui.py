@@ -701,6 +701,74 @@ class DriftPanelCoverageTest(unittest.TestCase):
         self.assertTrue(all(printed.values()), printed)
 
 
+#: Runs app.js's mutationScore() and mutationTally() under node on each list
+#: entry / report summary in argv[2], and prints what the viewer would show.
+_MUTATE_SCORE_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const grab = (name) => {
+  const start = src.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`app.js has no function ${name}`);
+  const end = src.indexOf("\nfunction ", start + 1);
+  return src.slice(start, end < 0 ? undefined : end);
+};
+const context = { summaries: JSON.parse(process.argv[2]) };
+vm.createContext(context);
+vm.runInContext(grab("mutationScore") + "\n" + grab("mutationTally") +
+  "\nout = summaries.map((s) => ({ score: mutationScore(s), tally: mutationTally(s) }));",
+  context);
+console.log(JSON.stringify(context.out));
+"""
+
+
+@slow("runs app.js under node in a subprocess")
+class MutateScoreRenderingTest(unittest.TestCase):
+    """The mutate view never shows a number for a run that measured nothing.
+
+    With the target down every generated mutant errored. The report now says
+    ``score: null``; a report written before that says ``0.0``. The list showed
+    ``0.00`` and ``0/13 killed`` for it, which reads as thirteen checks that
+    failed to discriminate. Both must render as no score.
+    """
+
+    def _render(self, summaries: list[dict]) -> list[dict]:
+        node = shutil.which("node")
+        if node is None:
+            if os.environ.get("CI"):
+                self.fail("node is not installed; this check cannot run")
+            self.skipTest("node is not installed")
+        result = subprocess.run(
+            [node, "-e", _MUTATE_SCORE_HARNESS, str(WEB / "app.js"),
+             json.dumps(summaries)],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return json.loads(result.stdout)
+
+    def test_a_run_whose_every_mutant_errored_has_no_score(self) -> None:
+        counts = {"generated": 13, "killed": 0, "survived": 0, "errored": 13}
+        for score in (None, 0.0):
+            with self.subTest(score=score):
+                [shown] = self._render([{**counts, "score": score}])
+                self.assertIsNone(shown["score"])
+                self.assertEqual(shown["tally"], "none evaluated · 13 errored")
+                self.assertNotIn("0/", shown["tally"])
+
+    def test_control_a_measured_zero_is_still_shown(self) -> None:
+        """Every mutant survived: 0.00 is a real measurement and is kept."""
+        [shown] = self._render([
+            {"generated": 4, "killed": 0, "survived": 3, "errored": 1, "score": 0.0},
+        ])
+        self.assertEqual(shown["score"], 0.0)
+        self.assertEqual(shown["tally"], "0/4 killed · 3 surviving")
+
+    def test_the_hero_and_the_list_read_the_same_score(self) -> None:
+        """A second null check beside the shared one would drift from it."""
+        render = APP_JS.split("function renderMutateDetail(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("mutationScore(summary)", render)
+        self.assertIn("mutationTally(entry)", APP_JS)
+
+
 class MutateClaimTest(unittest.TestCase):
     """The score is a property of the DECLARATION, never of the target."""
 

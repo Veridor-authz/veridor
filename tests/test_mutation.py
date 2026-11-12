@@ -1669,7 +1669,8 @@ class Tier2RefusedOwnerTest(unittest.TestCase):
 class ScoreArithmeticTest(unittest.TestCase):
     """The score, on hand-built tallies. No server, no target, no ambiguity."""
 
-    def tally(self, **outcomes: int) -> list[dict]:
+    @staticmethod
+    def tally(**outcomes: int) -> list[dict]:
         """``tally(killed=3, survived=1)`` -- outcomes spread over operators."""
         operators = list(mutation.OPERATORS)
         mutants = []
@@ -1711,6 +1712,39 @@ class ScoreArithmeticTest(unittest.TestCase):
         )
         self.assertEqual(summary["generated"], 0)
         self.assertIsNone(summary["score"])
+
+    def test_a_run_whose_every_mutant_errored_scores_null_not_zero(self) -> None:
+        """REGRESSION. With the target down, 13 errored mutants scored 0.00.
+
+        ``0 / 13`` reads as thirteen checks that failed to discriminate, when
+        none of them was exercised: the baseline never reached the target. The
+        documentation promised ``n/a`` for exactly this run.
+        """
+        summary = mutation.summarize(self.tally(errored=13), checks=2)
+        self.assertEqual(summary["generated"], 13)
+        self.assertIsNone(summary["score"])
+        self.assertIsNone(summary["score_of_evaluable"])
+        for name, tally in summary["by_operator"].items():
+            with self.subTest(operator=name):
+                self.assertIsNone(tally["score"])
+        # Control: one measured mutant beside them and errored is a miss again,
+        # as the scoring rule publishes.
+        summary = mutation.summarize(self.tally(killed=1, errored=3), checks=2)
+        self.assertEqual(summary["score"], 0.25)
+        self.assertEqual(mutation.score(0, 4, errored=3), 0.0)
+        self.assertIsNone(mutation.score(0, 4, errored=4))
+
+    def test_an_errored_hook_has_no_score(self) -> None:
+        """Tier 2 tallies each hook the same way, so it had the same 0.0."""
+        record = mutation._finish_hook({
+            "outcome": mutation.ERRORED, "diagnosis": "the suite did not run",
+        })
+        self.assertEqual(record["generated"], 1)
+        self.assertIsNone(record["score"])
+        killed = mutation._finish_hook({
+            "outcome": mutation.KILLED, "diagnosis": "",
+        })
+        self.assertEqual(killed["score"], 1.0)
 
     def test_zero_checks_does_not_divide_by_zero(self) -> None:
         summary = mutation.summarize([], checks=0)
@@ -1863,6 +1897,76 @@ class EmptyReportTest(unittest.TestCase):
     def test_measuring_nothing_does_not_exit_zero(self) -> None:
         """Exit 0 would tell a CI gate the checks are sound. Nothing was read."""
         self.assertEqual(mutation.exit_code(self.report()), 2)
+
+
+class AllErroredReportTest(unittest.TestCase):
+    """Every generated mutant errored: no score, in every artifact.
+
+    The run ``mutate`` produces with its target down. It printed ``Mutation
+    score: 0.00 (0 killed / 13 generated)`` and badged ``0.0% killed`` in red,
+    a measured failure of checks the engine never exercised.
+    """
+
+    def report(self, **outcomes: int) -> dict:
+        mutants = ScoreArithmeticTest.tally(**outcomes)
+        return {
+            "tier": 1,
+            "target": "http://127.0.0.1:8766",
+            "config": "veridor.json",
+            "summary": mutation.summarize(mutants, checks=2),
+            "baseline_transport": {
+                "requests": 5, "failed": 5,
+                "reasons": ["[Errno 61] Connection refused"],
+            },
+            "survivors": [],
+            "unresolved": [],
+            "checks": [],
+            "operators": mutation.OPERATORS,
+        }
+
+    def test_the_text_prints_n_a_and_says_why(self) -> None:
+        text = mutation.render_text(self.report(errored=13))
+        self.assertIn("Mutation score: n/a  (0 killed / 13 generated)", text)
+        self.assertNotIn("Mutation score: 0.00", text)
+        self.assertIn("All 13 generated mutant(s) errored", prose(text))
+        self.assertIn("neither a pass nor a fail", prose(text))
+
+    def test_the_json_score_is_null(self) -> None:
+        summary = json.loads(json.dumps(self.report(errored=13)))["summary"]
+        self.assertIsNone(summary["score"])
+        self.assertIsNone(mutation.mutation_summary({"summary": summary})["score"])
+
+    def test_the_badge_is_unknown_rather_than_red(self) -> None:
+        badge = mutation.render_badge(self.report(errored=13))
+        self.assertEqual(badge["message"], "unknown")
+        self.assertEqual(badge["color"], "lightgrey")
+        self.assertTrue(badge["isError"])
+
+    def test_it_still_exits_two(self) -> None:
+        self.assertEqual(mutation.exit_code(self.report(errored=13)), 2)
+
+    def test_control_one_kill_restores_the_number(self) -> None:
+        """The control: the same report with one kill is scored and badged."""
+        report = self.report(killed=1, errored=12)
+        self.assertIn("Mutation score: 0.08", mutation.render_text(report))
+        self.assertNotIn("errored, so there is no score",
+                         prose(mutation.render_text(report)))
+        self.assertEqual(mutation.render_badge(report)["message"], "7.6% killed")
+
+
+@slow("runs the engine against an address nothing listens on")
+class TargetDownScoreTest(unittest.TestCase):
+    """The shipped demo config with its target down, end to end."""
+
+    def test_the_documented_n_a_is_what_the_engine_reports(self) -> None:
+        report = mutation.analyze(DEMO_CONFIG, base_url="http://127.0.0.1:1")
+        summary = report["summary"]
+        self.assertGreater(summary["generated"], 0)
+        self.assertEqual(summary[mutation.ERRORED], summary["generated"])
+        self.assertIsNone(summary["score"])
+        self.assertIn("Mutation score: n/a", mutation.render_text(report))
+        self.assertEqual(mutation.render_badge(report)["message"], "unknown")
+        self.assertEqual(mutation.exit_code(report), 2)
 
 
 class BadgeTest(_FixtureTarget):

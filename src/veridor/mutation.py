@@ -464,8 +464,9 @@ SCORING: dict[str, str] = {
         "the wrong way is aberrant and is not a kill"
     ),
     "undefined": (
-        "a suite that generated no mutants scores null, not 0.0 and not 1.0 -- "
-        "both would be a claim about checks that were never measured"
+        "a suite that generated no mutants, or whose every generated mutant "
+        "errored, scores null, not 0.0 and not 1.0 -- both would be a claim "
+        "about checks that were never measured"
     ),
 }
 
@@ -1293,8 +1294,8 @@ class _Budget:
         self.spent += 1
 
 
-def score(killed: int, generated: int) -> float | None:
-    """``killed / generated``, or ``None`` when nothing was generated.
+def score(killed: int, generated: int, *, errored: int = 0) -> float | None:
+    """``killed / generated``, or ``None`` when no generated mutant was evaluated.
 
     ``None`` rather than ``0.0`` or ``1.0``. A suite that generated no mutants
     has no measured discriminating power at all, and either number would be a
@@ -1302,8 +1303,15 @@ def score(killed: int, generated: int) -> float | None:
     direction. Every consumer renders it as ``n/a``, and the badge renders it as
     ``unknown`` in grey. This is the only division in the module, so it is also
     the only place a zero-check suite could divide by zero; it does not.
+
+    ``errored`` is the part of ``generated`` the engine could not evaluate. An
+    errored mutant sits in the denominator as a miss when SOMETHING was
+    measured beside it, but when every generated mutant errored the quotient is
+    ``0 / n`` over nothing: with the target down, 13 errored mutants printed
+    ``Mutation score: 0.00`` -- a measured failure of checks that were never
+    exercised -- while the documentation promised ``n/a``.
     """
-    if generated <= 0:
+    if generated - errored <= 0:
         return None
     return killed / generated
 
@@ -1329,9 +1337,11 @@ def _tally(mutants: Sequence[dict[str, Any]]) -> dict[str, Any]:
     return {
         "generated": generated,
         **counts,
-        "score": score(counts[KILLED], generated),
+        "score": score(counts[KILLED], generated, errored=counts[ERRORED]),
         "limited": limited,
-        "score_of_evaluable": score(counts[KILLED], evaluable),
+        "score_of_evaluable": score(
+            counts[KILLED], evaluable, errored=counts[ERRORED] + limited
+        ),
         "evaluable": evaluable,
     }
 
@@ -2950,6 +2960,18 @@ def render_text(report: dict[str, Any]) -> str:
                 "  ",
             )
         )
+    elif summary["score"] is None:
+        # Every generated mutant errored. The quotient is defined, but it is
+        # 0 / n over nothing, and printing it read as checks that fail to
+        # discriminate when none of them was exercised.
+        lines.extend(
+            _wrap(
+                f"All {summary['generated']} generated mutant(s) errored, so "
+                "there is no score. That is neither a pass nor a fail: nothing "
+                f"here measured whether any {unit} can fail.",
+                "  ",
+            )
+        )
     if tier == 1:
         lines.append(
             f"  requests: {summary['baseline_requests']} baseline, "
@@ -3217,8 +3239,9 @@ def render_badge(
     never round up to ``100.0%``.
 
     A measurement that is not defined never renders a green badge -- a suite
-    that generated no mutants is ``unknown`` in grey with ``isError``, exactly as
-    an unmeasurable coverage report is.
+    that generated no mutants, or whose every generated mutant errored, is
+    ``unknown`` in grey with ``isError``, exactly as an unmeasurable coverage
+    report is.
 
     The label defaults by tier, so a README carrying both badges never shows two
     different measurements under the same words.
@@ -3232,6 +3255,9 @@ def render_badge(
         not isinstance(generated, int)
         or not isinstance(killed, int)
         or generated <= 0
+        # Every generated mutant errored: `0.0% killed` in red was a measured
+        # failure of checks the engine never exercised.
+        or generated - (summary.get(ERRORED) or 0) <= 0
     ):
         return {
             "schemaVersion": 1,
@@ -4026,7 +4052,9 @@ def _finish_hook(record: dict[str, Any]) -> dict[str, Any]:
     # A skipped hook applied nothing and measured nothing, so it stays out of the
     # denominator for the same reason a skipped M4 does.
     record["generated"] = 1 if outcome in _SCORED else 0
-    record["score"] = score(record[KILLED], record["generated"])
+    record["score"] = score(
+        record[KILLED], record["generated"], errored=record[ERRORED]
+    )
     if outcome in _DIAGNOSIS_REQUIRED and not (record["diagnosis"] or "").strip():
         record["diagnosis"] = _default_diagnosis("T1", outcome)
     record["mutants"] = [dict(record)]
