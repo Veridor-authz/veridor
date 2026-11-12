@@ -1472,6 +1472,13 @@ def _write_failure(what: str, path: Path, error: OSError) -> str:
     reason = error.strerror or str(error)
     message = f"could not write {what} to {_shown(path)}: {reason}"
     failed = error.filename
+    # A failed rename names the temporary file AND the path it was renamed
+    # onto. When that second name is the output itself -- `--output` naming an
+    # existing directory -- the parent was writable and the output was the
+    # obstacle, so "writing into its parent directory" pointed at the wrong one.
+    onto = error.filename2
+    if onto is not None and Path(os.fsdecode(onto)) == path:
+        failed = None
     if failed is not None:
         failed = Path(os.fsdecode(failed))
         temporary = (

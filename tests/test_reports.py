@@ -1649,6 +1649,26 @@ class ReportCommandTest(unittest.TestCase):
         self.assertNotIn(temporary.name, message)
         self.assertNotIn("uid:gid", message, "not a permission problem")
 
+    def test_an_output_that_is_a_directory_is_named_as_the_obstacle(self) -> None:
+        """`--output` naming an existing directory fails at the rename, whose
+        OSError names the temporary file and the output. The parent directory
+        was writable, so blaming it sent the operator to the wrong place."""
+        directory = self.root / "reports"
+        directory.mkdir()
+        code, _, stderr = _capture(["report", "--from-run", str(self.run_json),
+                                    "--format", "junit", "--output", str(directory)])
+        self.assertEqual(code, 2, stderr)
+        self.assertIn(f"could not write the JUnit report to {directory}", stderr)
+        self.assertIn("directory", stderr.lower())
+        self.assertNotIn("parent directory", stderr)
+        self.assertNotIn(".tmp", stderr)
+        # Control: a temporary file that could not be created still blames the
+        # parent, which is where the fix is.
+        temporary = self.root / ".r.xml.0123456789abcdef.tmp"
+        refused = PermissionError(13, "Permission denied", str(temporary))
+        self.assertIn("writing into its parent directory",
+                      cli._write_failure("the junit report", self.root / "r.xml", refused))
+
 
 class RunReportFlagTest(unittest.TestCase):
     def setUp(self) -> None:
