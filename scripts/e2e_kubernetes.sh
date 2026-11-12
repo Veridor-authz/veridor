@@ -219,7 +219,10 @@ if [[ -f "${WORK}/kubeconfig" ]]; then
   KUBECTL+=(--kubeconfig "${WORK}/kubeconfig")
   HELM+=(--kubeconfig "${WORK}/kubeconfig")
 elif ! kubectl config get-contexts -o name | grep -qx "$KUBE_CONTEXT"; then
-  refuse "kind has cluster ${KIND_CLUSTER} but the kubeconfig has no context ${KUBE_CONTEXT}. Run: kind export kubeconfig --name ${KIND_CLUSTER}"
+  # Not `kind export kubeconfig`: that writes the user's kubeconfig and
+  # switches its current context, which this script promises never to change.
+  # `kind get kubeconfig` only prints, into the file this script reads first.
+  refuse "kind has cluster ${KIND_CLUSTER} but the kubeconfig has no context ${KUBE_CONTEXT}. Write one for this script alone, leaving your kubeconfig and current context as they are: kind get kubeconfig --name $(printf '%q' "$KIND_CLUSTER") > $(printf '%q' "${WORK}/kubeconfig"), then re-run with E2E_WORKDIR=$(printf '%q' "$WORK")"
 fi
 
 k() { "${KUBECTL[@]}" "$@"; }

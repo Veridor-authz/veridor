@@ -174,7 +174,11 @@ E2E_CREATE_CLUSTER=1 KUBE_CONTEXT=kind-veridor-e2e bash scripts/e2e_kubernetes.s
 `KUBE_CONTEXT` must name a kind cluster; the current context is never read or
 changed. `E2E_CONTROL=gate-passes-wrongly` must end in exit `1`. The script
 uses fixed `vg-e2e-*` namespace names and removes leftovers when it starts, so
-two runs against one cluster at the same time delete each other's objects.
+it first takes a lock in the cluster, the `vg-e2e-lock` namespace. A second run
+against the same cluster while one holds it exits `2`, names the holder and
+touches nothing; run them one at a time, or on separate kind clusters. A lock
+left by a dead run is broken by `E2E_BREAK_LOCK=1` once it is over an hour
+old, or by deleting the namespace yourself.
 
 ## What a good change looks like
 
