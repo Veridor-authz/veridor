@@ -19,8 +19,11 @@ serves no path outside ``output_dir``.
 
 from __future__ import annotations
 
+import errno
+import ipaddress
 import json
 import re
+import socket
 import socketserver
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -206,7 +209,9 @@ def make_handler(output_dir: Path, host: str = "127.0.0.1") -> type[BaseHTTPRequ
     #: Hosts this viewer answers to. Loopback always, plus whatever `serve`
     #: was told to bind, so `--host 0.0.0.0` still works for the operator who
     #: asked for it while a rebound attacker domain does not.
-    _allowed_hosts = {"127.0.0.1", "localhost", "::1", "[::1]", host.lower()}
+    #: Brackets come off the bound name the same way they come off a request's
+    #: Host, so `--host [::1]` and `--host ::1` admit the same requests.
+    _allowed_hosts = {"127.0.0.1", "localhost", "::1", _bare(host).lower()}
 
     class VeridorHandler(BaseHTTPRequestHandler):
         server_version = "VeridorUI/0.2"
@@ -384,8 +389,7 @@ def make_handler(output_dir: Path, host: str = "127.0.0.1") -> type[BaseHTTPRequ
             host = self.headers.get("Host")
             if not host:
                 return False
-            name = host.rsplit(":", 1)[0].strip("[]").lower()
-            return name in _allowed_hosts
+            return _host_name(host) in _allowed_hosts
 
         def send_error(self, code, message=None, explain=None):  # noqa: A003
             """Route errors through the same headers the 200 path sets.
@@ -431,6 +435,54 @@ def make_handler(output_dir: Path, host: str = "127.0.0.1") -> type[BaseHTTPRequ
     return VeridorHandler
 
 
+def _bare(host: str) -> str:
+    """``host`` without the brackets a URL puts around an IPv6 literal."""
+    return host[1:-1] if host.startswith("[") and host.endswith("]") else host
+
+
+def _host_name(header: str) -> str:
+    """The name part of a Host header, lower-cased, brackets removed.
+
+    Splitting on the LAST colon is right for ``name:port`` and wrong for an
+    IPv6 literal without a port: ``[::1]`` came out as ``[:``, which matched
+    nothing, so a browser at ``http://[::1]/`` on port 80 was refused by the
+    viewer it was pointed at.
+    """
+    header = header.strip()
+    if header.startswith("["):
+        return header[1 : header.find("]")].lower() if "]" in header else ""
+    return header.rsplit(":", 1)[0].lower()
+
+
+def _family(host: str) -> socket.AddressFamily:
+    """The socket family ``host`` needs: IPv6 for an IPv6 literal, else IPv4.
+
+    ThreadingHTTPServer is AF_INET whatever it is given, so `--host ::1` --
+    which the exposure guard accepts as loopback -- failed in bind() with
+    "[Errno 8] nodename nor servname provided": an address the CLI calls
+    allowed could not be bound at all. A name (``localhost``) keeps IPv4, which
+    is what it always resolved to here.
+    """
+    try:
+        return (
+            socket.AF_INET6
+            if ipaddress.ip_address(_bare(host)).version == 6
+            else socket.AF_INET
+        )
+    except ValueError:
+        return socket.AF_INET
+
+
+def url_host(host: str) -> str:
+    """``host`` as it goes between ``http://`` and ``:port``."""
+    bare = _bare(host)
+    return f"[{bare}]" if ":" in bare else bare
+
+
+class ListenError(OSError):
+    """The viewer could not take its address; the message says which and why."""
+
+
 class ListeningServer(ThreadingHTTPServer):
     """ThreadingHTTPServer without the reverse lookup of its own address.
 
@@ -443,6 +495,11 @@ class ListeningServer(ThreadingHTTPServer):
     read only by CGI handlers, and there are none here.
     """
 
+    def __init__(self, server_address, handler, address_family=socket.AF_INET) -> None:
+        # Set before TCPServer.__init__, which is where the socket is made.
+        self.address_family = address_family
+        super().__init__(server_address, handler)
+
     def server_bind(self) -> None:
         socketserver.TCPServer.server_bind(self)
         self.server_name = str(self.server_address[0])
@@ -450,12 +507,44 @@ class ListeningServer(ThreadingHTTPServer):
 
 
 def create_server(output_dir: Path, host: str, port: int) -> ThreadingHTTPServer:
-    return ListeningServer((host, port), make_handler(output_dir, host))
+    return ListeningServer(
+        (_bare(host), port), make_handler(output_dir, host), _family(host)
+    )
+
+
+def _cannot_listen(host: str, port: int, error: OSError) -> ListenError:
+    """Turn a bind failure into a sentence naming the address and the way out.
+
+    It was the bare ``[Errno 48] Address already in use``: no address, no
+    port, and nothing saying the viewer had not started -- while a browser
+    already open at the printed URL keeps talking to whatever DOES hold the
+    port, which can be an older `veridor serve` over a different output
+    directory.
+    """
+    address = f"{url_host(host)}:{port}"
+    if error.errno == errno.EADDRINUSE:
+        return ListenError(
+            f"cannot listen on {address}: {error.strerror or error}\n"
+            f"  Another process already holds {address}. The viewer did NOT "
+            "start; a browser open at that address is talking to that other "
+            "process, not to this run history.\n"
+            "  Stop that process, or serve on another port (keep any other "
+            "options you passed; --port 0 takes any free port and the banner "
+            "names it):\n"
+            f"    veridor serve --port {port + 1 if port < 65535 else 0}"
+        )
+    return ListenError(f"cannot listen on {address}: {error}")
 
 
 def serve(output_dir: Path, host: str, port: int) -> None:
-    server = create_server(output_dir, host, port)
-    print(f"Veridor UI: http://{host}:{server.server_port}")
+    try:
+        server = create_server(output_dir, host, port)
+    except OSError as error:
+        raise _cannot_listen(host, port, error) from None
+    # flush: with stdout a pipe or a file (a supervisor, `> serve.log`) the
+    # banner sat in the block buffer until the process exited, so the one line
+    # saying where the viewer is came out only after it had stopped.
+    print(f"Veridor UI: http://{url_host(host)}:{server.server_port}", flush=True)
     try:
         server.serve_forever()
     finally:

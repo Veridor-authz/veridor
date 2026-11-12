@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import selectors
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -18,7 +20,7 @@ import source_path  # noqa: E402,F401 -- src/ first unless VERIDOR_TEST_AGAINST=
 
 import loopback  # noqa: E402
 from tiers import slow  # noqa: E402
-from veridor.server import _run_summary, create_server
+from veridor.server import _host_name, _run_summary, create_server
 
 #: How long the harness waits on its own loopback viewer: a client request, or
 #: the server thread's exit after shutdown(). No test here is about a timeout,
@@ -415,6 +417,131 @@ class NoSelfLookupTest(unittest.TestCase):
                     self.addCleanup(server.server_close)
                     socket.create_connection(server.server_address[:2], timeout=HARNESS_TIMEOUT).close()
                     self.assertEqual(server.server_name, "127.0.0.1")
+
+
+def _ipv6_loopback_bindable() -> bool:
+    """Whether this host can bind ``::1`` at all -- some CI containers cannot."""
+    if not socket.has_ipv6:
+        return False
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_STREAM) as probe:
+            probe.bind(("::1", 0))
+    except OSError:
+        return False
+    return True
+
+
+class HostHeaderParsingTest(unittest.TestCase):
+    """The Host check splits a name from its port, and IPv6 literals hold colons."""
+
+    def test_names_come_out_of_every_host_shape(self) -> None:
+        for header, name in (
+            ("127.0.0.1:8787", "127.0.0.1"),
+            ("LocalHost:8787", "localhost"),
+            ("localhost", "localhost"),
+            ("[::1]:8787", "::1"),
+            # The one the old rsplit got wrong: no port, so the last colon is
+            # inside the literal, and the name came out as "[:".
+            ("[::1]", "::1"),
+            ("[::1", ""),
+        ):
+            with self.subTest(header=header):
+                self.assertEqual(_host_name(header), name)
+
+
+@slow("binds an IPv6 loopback server")
+class Ipv6LoopbackServeTest(unittest.TestCase):
+    """`--host ::1` passes the exposure guard as loopback, and could not bind.
+
+    ListeningServer inherited AF_INET, so getaddrinfo refused ``::1`` with
+    "[Errno 8] nodename nor servname provided" and `serve` exited 2 on an
+    address the CLI calls allowed.
+    """
+
+    def setUp(self) -> None:
+        if not _ipv6_loopback_bindable():
+            self.skipTest("this host cannot bind ::1 (no IPv6 loopback); nothing here was measured")
+
+    def test_an_ipv6_loopback_bind_answers_its_own_browser(self) -> None:
+        import http.client  # noqa: PLC0415
+
+        for spelling in ("::1", "[::1]"):
+            with self.subTest(host=spelling), tempfile.TemporaryDirectory() as directory:
+                (Path(directory) / "runs").mkdir()
+                server = create_server(Path(directory), spelling, 0)
+                thread = loopback.start(server)
+                try:
+                    self.assertEqual(server.socket.family, socket.AF_INET6)
+                    port = server.server_port
+                    # The Host a browser sends at the printed URL, with and
+                    # without a port; a foreign name on the same socket is
+                    # still refused, so the 200s are the allow-list's doing.
+                    for host, status in (
+                        (f"[::1]:{port}", 200),
+                        ("[::1]", 200),
+                        (f"evil.example:{port}", 421),
+                    ):
+                        connection = http.client.HTTPConnection("::1", port, timeout=HARNESS_TIMEOUT)
+                        try:
+                            connection.putrequest("GET", "/api/runs", skip_host=True)
+                            connection.putheader("Host", host)
+                            connection.endheaders()
+                            self.assertEqual(connection.getresponse().status, status, host)
+                        finally:
+                            connection.close()
+                finally:
+                    server.shutdown()
+                    server.server_close()
+                    thread.join(timeout=HARNESS_TIMEOUT)
+
+
+@slow("runs `veridor serve` in a subprocess")
+class ServeProcessTest(unittest.TestCase):
+    """`serve` as an operator or a supervisor meets it: its stdout and its exit."""
+
+    def _serve(self, directory: str, port: int) -> subprocess.Popen:
+        env = source_path.child_env()
+        # PYTHONUNBUFFERED would hide the buffering this checks for.
+        env.pop("PYTHONUNBUFFERED", None)
+        process = subprocess.Popen(
+            [sys.executable, "-m", "veridor", "serve", "--output-dir", directory, "--port", str(port)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=directory,
+        )
+
+        def stop() -> None:
+            if process.poll() is None:
+                process.kill()
+            process.communicate(timeout=HARNESS_TIMEOUT)
+
+        self.addCleanup(stop)
+        return process
+
+    def test_the_banner_reaches_a_pipe_while_the_viewer_is_running(self) -> None:
+        """Block-buffered, the banner arrived only once `serve` had exited."""
+        with tempfile.TemporaryDirectory() as directory:
+            process = self._serve(directory, 0)
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                ready = selector.select(timeout=HARNESS_TIMEOUT * 3)
+            self.assertTrue(ready, "no banner on stdout while `veridor serve` was running")
+            line = process.stdout.readline().decode()
+            self.assertIsNone(process.poll(), "the banner came only because serve exited")
+            self.assertRegex(line, r"^Veridor UI: http://127\.0\.0\.1:[1-9][0-9]*\n$")
+
+    def test_a_busy_port_names_the_address_and_the_way_out(self) -> None:
+        """It was a bare "[Errno 48] Address already in use", nothing else."""
+        with socket.socket() as holder, tempfile.TemporaryDirectory() as directory:
+            holder.bind(("127.0.0.1", 0))
+            holder.listen()
+            port = holder.getsockname()[1]
+            process = self._serve(directory, port)
+            stdout, stderr = process.communicate(timeout=HARNESS_TIMEOUT * 3)
+            stderr = stderr.decode()
+            self.assertEqual(process.returncode, 2, stderr)
+            self.assertEqual(stdout, b"", "a banner was printed for a viewer that never started")
+            self.assertIn(f"cannot listen on 127.0.0.1:{port}", stderr)
+            self.assertIn("did NOT start", stderr)
+            self.assertIn(f"veridor serve --port {port + 1}", stderr)
 
 
 if __name__ == "__main__":
