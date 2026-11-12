@@ -6,6 +6,10 @@ const state = {
   selected: null,
   activeDiff: "new",
   filter: "",
+  // The route a link opened the page on, held until applyRoute() has read it.
+  // Loading a list auto-selects its newest entry, and selecting rewrites the
+  // hash, so without this a link to any older run opened the newest instead.
+  pendingRoute: null,
 };
 
 // Fallbacks only. Every run document written by this Veridor carries its own
@@ -154,7 +158,7 @@ async function loadRuns() {
       state.maps = payload.maps;
       renderRuns();
       setConnection("Local", "safe");
-      if (!state.selected && state.maps.length) {
+      if (!state.selected && !state.pendingRoute && state.maps.length) {
         await selectMap(state.maps[0].map_id);
       }
     } else if (state.verb === "mutate") {
@@ -162,7 +166,7 @@ async function loadRuns() {
       state.mutations = payload.mutations;
       renderRuns();
       setConnection("Local", "safe");
-      if (!state.selected && state.mutations.length) {
+      if (!state.selected && !state.pendingRoute && state.mutations.length) {
         await selectMutation(state.mutations[0].stem);
       }
     } else {
@@ -170,7 +174,7 @@ async function loadRuns() {
       state.runs = payload.runs;
       renderRuns();
       setConnection("Local", "safe");
-      if (!state.selected && state.runs.length) {
+      if (!state.selected && !state.pendingRoute && state.runs.length) {
         await selectRun(state.runs[0].run_id);
       }
     }
@@ -1542,8 +1546,23 @@ filterElement.addEventListener("input", () => {
   state.filter = filterElement.value;
   renderRuns();
 });
-showSkeleton();
-loadRuns().then(() => {
-  renderFreshness();
-  return applyRoute();
-});
+function boot() {
+  showSkeleton();
+  state.pendingRoute = routeFromHash();
+  return loadRuns()
+    .then(() => {
+      renderFreshness();
+      return applyRoute();
+    })
+    .finally(() => {
+      // Only the link the page was opened on is held; a later Refresh or verb
+      // switch selects the newest entry as before. A link to an entry that is
+      // not there falls back to the newest, and the hash then names it.
+      const linked = state.pendingRoute;
+      state.pendingRoute = null;
+      if (linked && !state.selected) return loadRuns();
+      return undefined;
+    });
+}
+
+boot();

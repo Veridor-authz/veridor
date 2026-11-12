@@ -873,5 +873,226 @@ class MutationReportShapeTest(unittest.TestCase):
         self.assertNotIn("summary", keys)
 
 
+# A harness for the functions below that do run under node. It lifts named
+# functions out of app.js verbatim (sync or async), so the code under test is
+# the shipped code, and stubs only the DOM and the network.
+_APP_HARNESS_PRELUDE = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[1], "utf8");
+const grab = (name) => {
+  let start = src.indexOf(`\nasync function ${name}(`);
+  if (start < 0) start = src.indexOf(`\nfunction ${name}(`);
+  if (start < 0) throw new Error(`app.js has no function ${name}`);
+  const end = src.indexOf("\n}\n", start);
+  return src.slice(start, end + 3);
+};
+const grabConst = (name) => {
+  const m = new RegExp(`\nconst ${name} = [^;]+;`).exec(src);
+  if (!m) throw new Error(`app.js has no const ${name}`);
+  return m[0];
+};
+const node = () => {
+  const n = { children: [], textContent: "", className: "", hidden: true, title: "",
+    attrs: {}, style: { setProperty() {} },
+    classList: { add(c) { n.className += ` ${c}`; } },
+    setAttribute(k, v) { n.attrs[k] = v; },
+    append(...c) { for (const x of c) n.children.push(typeof x === "string" ? { textContent: x, children: [] } : x); } };
+  return n;
+};
+const text = (n) => [n.textContent, ...(n.children || []).map(text)].filter(Boolean).join(" ");
+"""
+
+_ROUTE_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const code = ["routeFromHash", "writeHash", "applyRoute", "loadRuns", "selectRun",
+              "selectMap", "selectMutation", "boot"].map(grab).join("\n");
+const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
+                maps: [{ map_id: "M-new" }, { map_id: "M-old" }],
+                mutations: [{ stem: "U-new" }] };
+(async () => {
+  const out = [];
+  for (const hash of JSON.parse(process.argv[2])) {
+    const location = { hash };
+    const context = {
+      location, loadedAt: 0, Date, CSS: { escape: (x) => x },
+      history: { replaceState(_s, _t, path) { location.hash = path; } },
+      document: { querySelector: () => null },
+      filterElement: { value: "" },
+      state: { verb: "run", runs: [], maps: [], mutations: [], selected: null,
+               activeDiff: "new", filter: "", pendingRoute: null },
+      showSkeleton() {}, renderRuns() {}, renderDetail() {}, renderMapDetail() {},
+      renderMutateDetail() {}, renderFreshness() {}, setConnection() {}, showError() {},
+      async request(path) {
+        const [, kind, id] = /^\/api\/(runs|maps|mutations)\/?(.*)$/.exec(path);
+        if (!id) return { [kind]: lists[kind] };
+        const key = { runs: "run_id", maps: "map_id", mutations: "stem" }[kind];
+        const hit = lists[kind].find((e) => e[key] === decodeURIComponent(id));
+        if (!hit) throw new Error("404 Not Found");
+        return { ...hit };
+      },
+    };
+    vm.createContext(context);
+    vm.runInContext(code, context);
+    await vm.runInContext("boot()", context);
+    const sel = context.state.selected || {};
+    out.push({ shown: sel.run_id || sel.map_id || sel.stem || null, hash: location.hash });
+  }
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e); process.exit(1); });
+"""
+
+_GATE_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const code = grabConst("STATUS_TONE") + grab("runTone") + grab("element") + grab("gateBanner");
+const context = { document: { createElement: node } };
+vm.createContext(context);
+vm.runInContext(code, context);
+const out = JSON.parse(process.argv[2]).map((run) => {
+  context.run = run;
+  const b = vm.runInContext("gateBanner(run)", context);
+  return b ? { tone: b.className.replace("gate-banner", "").trim(), text: text(b) } : null;
+});
+console.log(JSON.stringify(out));
+"""
+
+_MATRIX_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const code = grab("element") + grab("accessMatrix");
+const context = { document: { createElement: node, createTextNode: (t) => ({ textContent: t, children: [] }) } };
+vm.createContext(context);
+vm.runInContext(code, context);
+const cellsOf = (n, acc = []) => {
+  if (/\bmatrix-cell\b/.test(n.className || "")) acc.push({ cls: n.className, label: n.attrs["aria-label"], text: text(n) });
+  for (const c of n.children || []) cellsOf(c, acc);
+  return acc;
+};
+const legendOf = (n) => /matrix-legend/.test(n.className || "") ? text(n) : (n.children || []).map(legendOf).find(Boolean) || "";
+const out = JSON.parse(process.argv[2]).map((matrix) => {
+  context.matrix = matrix;
+  const grid = vm.runInContext("accessMatrix(matrix)", context);
+  return grid ? { cells: cellsOf(grid), legend: legendOf(grid) } : null;
+});
+console.log(JSON.stringify(out));
+"""
+
+
+def _run_node(harness: str, payload: list) -> list:
+    node = shutil.which("node")
+    if node is None:
+        if os.environ.get("CI"):
+            raise AssertionError("node is not installed; this check cannot run")
+        raise unittest.SkipTest("node is not installed")
+    result = subprocess.run(
+        [node, "-e", harness, str(WEB / "app.js"), json.dumps(payload)],
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+    if result.returncode != 0:
+        raise AssertionError(result.stderr)
+    return json.loads(result.stdout)
+
+
+@slow("runs app.js under node in a subprocess")
+class LinkOnLoadTest(unittest.TestCase):
+    """A link to an older run, map or report opens that one, not the newest.
+
+    Loading a list auto-selected its newest entry and selecting rewrote the
+    hash, both before applyRoute() read it, so every shared link to anything
+    but the newest run opened the newest instead (measured 2026-11-12 in the
+    browser: #/run/<older passed run> showed the newest failed run, on the
+    viewer as shipped and after its redesign).
+    """
+
+    def test_the_linked_entry_is_the_one_shown(self) -> None:
+        shown = _run_node(_ROUTE_HARNESS, [
+            "#/run/R-old", "#/map/M-old", "", "#/run/R-missing",
+        ])
+        self.assertEqual(shown[0], {"shown": "R-old", "hash": "#/run/R-old"})
+        self.assertEqual(shown[1], {"shown": "M-old", "hash": "#/map/M-old"})
+        # Control: no link still opens the newest run.
+        self.assertEqual(shown[2], {"shown": "R-new", "hash": "#/run/R-new"})
+        # A link to an entry that is not there falls back to the newest, and
+        # the hash then names what is shown rather than what was asked for.
+        self.assertEqual(shown[3], {"shown": "R-new", "hash": "#/run/R-new"})
+
+
+@slow("runs app.js under node in a subprocess")
+class GateBannerTest(unittest.TestCase):
+    """The run view's banner says what the gate did, and only that."""
+
+    @staticmethod
+    def _run(status: str, exit_code, *, baseline=None, **summary) -> dict:
+        base = {"probes": 6, "safe": 6, "vulnerable": 0, "confirmed": 0, "new": 0, "resolved": 0}
+        base.update(summary)
+        gate = {} if exit_code is None else {"exit_code": exit_code, "fail_on": "new+confirmed",
+                                              "reasons": summary.pop("reasons", [])}
+        return {"status": status, "gate": gate, "summary": base,
+                "regression": {"baseline_run_id": baseline}}
+
+    def test_the_banner_reads_the_gate_and_names_a_baseline_only_when_there_is_one(self) -> None:
+        runs = [
+            self._run("failed", 1, safe=5, vulnerable=1, confirmed=1, new=1),
+            self._run("failed", 1, baseline="B", safe=5, vulnerable=1, confirmed=1, new=1),
+            self._run("passed", 0, baseline="B", resolved=1),
+            self._run("passed", 2),
+            self._run("passed", None),
+        ]
+        runs[3]["gate"]["reasons"] = [{"code": "liveness_unproven"}]
+        out = _run_node(_GATE_HARNESS, runs)
+        no_baseline, with_baseline, fixed, gate_only, old_schema = out
+
+        self.assertEqual(no_baseline["tone"], "danger")
+        self.assertIn("Gate fails", no_baseline["text"])
+        self.assertIn("exit 1", no_baseline["text"])
+        self.assertIn("1 confirmed by marker", no_baseline["text"])
+        # Without a baseline every finding is "new"; saying "since the
+        # baseline" would claim a comparison that never ran.
+        self.assertNotIn("baseline", no_baseline["text"])
+        self.assertIn("1 new since the baseline", with_baseline["text"])
+
+        self.assertEqual(fixed["tone"], "safe")
+        self.assertIn("Gate passes", fixed["text"])
+        self.assertIn("1 resolved since the baseline", fixed["text"])
+
+        # A run with no finding that the gate still failed is amber, never green.
+        self.assertEqual(gate_only["tone"], "warn")
+        self.assertIn("Gate fails", gate_only["text"])
+        self.assertIn("failed for: liveness_unproven", gate_only["text"])
+
+        # A document without a gate gets no banner, not a guessed one.
+        self.assertIsNone(old_schema)
+
+
+@slow("runs app.js under node in a subprocess")
+class AccessMatrixTest(unittest.TestCase):
+    """The map's grid draws measured cells and never upgrades a candidate."""
+
+    def test_a_crossed_marker_is_a_candidate_and_an_unprobed_cell_says_so(self) -> None:
+        cell = lambda identity, reach, status, marker=None, reason=None: {
+            "operation": "GET /api/invoices/{id}", "specimen": None, "identity": identity,
+            "reach": reach, "status": status, "marker_scan": marker,
+            "marker_owner": "owner" if marker else None, "unknown_reason": reason,
+        }
+        matrix = {
+            "identities": ["owner", "other", "writer"],
+            "rows": [{"operation": "GET /api/invoices/{id}", "specimen": None}],
+            "cells": [
+                cell("owner", "reached", 200, "present"),
+                cell("other", "reached", 200, "present"),
+                cell("writer", "unknown", None, None, "skipped_mutating"),
+            ],
+        }
+        empty = {"identities": [], "rows": [], "cells": []}
+        grid, nothing = _run_node(_MATRIX_HARNESS, [matrix, empty])
+
+        owner, other, writer = grid["cells"]
+        self.assertNotIn("crossed", owner["cls"])
+        self.assertIn("carries its own marker", owner["label"])
+        self.assertIn("crossed", other["cls"])
+        self.assertIn("carries owner's marker", other["label"])
+        self.assertIn("unknown", writer["cls"])
+        self.assertIn("skipped_mutating", writer["label"])
+        self.assertIn("·", writer["text"])
+        # In a map a crossed marker is a hypothesis; the legend must say so.
+        self.assertIn("not a finding", grid["legend"])
+        self.assertIsNone(nothing)
+
+
 if __name__ == "__main__":
     unittest.main()
