@@ -443,7 +443,16 @@ class HostHeaderParsingTest(unittest.TestCase):
             # The one the old rsplit got wrong: no port, so the last colon is
             # inside the literal, and the name came out as "[:".
             ("[::1]", "::1"),
+            ("[::1]:", "::1"),
             ("[::1", ""),
+            # Only ``:port`` may follow the bracket. Reading up to it and
+            # ignoring the rest let each of these through as ::1; the rsplit
+            # parse refused them, and so must this one.
+            ("[::1].evil.example:8787", ""),
+            ("[::1]evil", ""),
+            ("[::1]@evil.example", ""),
+            ("[::1]:8787x", ""),
+            ("[[::1]]", ""),
         ):
             with self.subTest(header=header):
                 self.assertEqual(_host_name(header), name)
@@ -480,6 +489,8 @@ class Ipv6LoopbackServeTest(unittest.TestCase):
                         (f"[::1]:{port}", 200),
                         ("[::1]", 200),
                         (f"evil.example:{port}", 421),
+                        # Only :port may follow the bracket; this one was 200.
+                        (f"[::1].evil.example:{port}", 421),
                     ):
                         connection = http.client.HTTPConnection("::1", port, timeout=HARNESS_TIMEOUT)
                         try:
