@@ -270,8 +270,8 @@ documentation; as of 2026-11-04 nothing here has been run there.
   report carries `bug` only.
 - **Discussions: off.** Questions go through the "Question" issue form. Turning
   Discussions on means adding it to the code of conduct's scope.
-- **About panel.** Use the `description` in `pyproject.toml`, leave the website
-  empty until a domain serves something, and use its `keywords` as topics.
+- **About panel.** Use the `description` in `pyproject.toml`, its `Homepage`
+  (https://veridor.org/) as the website, and its `keywords` as topics.
 
 Two things that can look like defects and are not. Neither has been seen on
 GitHub yet:

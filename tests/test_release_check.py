@@ -559,8 +559,13 @@ class IdentityTest(_Tree):
                          r"raw\.githubusercontent\.com/veridor/veridor/",
                          r"\"ghcr\\.io\\/veridor\/veridor\"",
                          r"veridor\/veridor",
-                         "https://docs.veridor.org/guide",
                          "Report to someone@veridor.org.",
+                         "security@docs.veridor.org",
+                         r"someone@veridor\.org",
+                         "https://www.veridor.org/",
+                         "https://example.veridor.org/guide",
+                         "https://a.docs.veridor.org/",
+                         r"https://www\.veridor\.org/",
                          "docker.io/veridor/veridor:1",
                          "gh api repos/veridor/veridor",
                          "HTTPS://GitHub.com/Veridor/veridor",
@@ -603,7 +608,9 @@ class IdentityTest(_Tree):
             "veridor/baseline-matrix.json https://pypi.org/p/veridor\n"
             "- uses: Veridor-authz/veridor@0123\n"
             "git@github.com:veridor-dev/veridor.git https://veridor-dev.github.io/x\n"
-            "https://hub.docker.com/r/veridorx/veridor https://img.shields.io/badge/veridor-1-blue\n",
+            "https://hub.docker.com/r/veridorx/veridor https://img.shields.io/badge/veridor-1-blue\n"
+            "https://veridor.org/ https://docs.veridor.org/guide veridor.org's mark\n"
+            "r\"https://docs\\.veridor\\.org/\" veridor.organic example.veridor.orgs\n",
             encoding="utf-8")
         self.assertEqual(release_check.identity_leftovers(root), [])
         with contextlib.redirect_stdout(io.StringIO()):
@@ -630,25 +637,44 @@ class IdentityTest(_Tree):
         self.assertEqual([(path, name) for path, _, name, _ in release_check.identity_leftovers(root)],
                          [("tests/test_x.py", "ghcr.io/veridor")])
 
-    def test_the_domain_stays_only_in_the_two_identifiers(self) -> None:
-        """The same line is fine in the file it identifies and a leftover anywhere else."""
-        schema_id = '  "$id": "https://docs.veridor.org/schema/veridor-config-v1.schema.json",\n'
-        namespace = 'FINDING_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "https://veridor.org/finding-id/v1")\n'
+    def test_the_project_holds_veridor_org_and_docs_veridor_org(self) -> None:
+        """The project holds the domain now: veridor.org serves the product page
+        and docs.veridor.org the docs. This test kept the domain out of every
+        file but the two identifiers, because it served nothing then; the
+        viewer's comments naming veridor.org failed identity for that reason.
+        The held hosts pass in any shipped file; the rest of the domain does not."""
+        held = ('  "$comment": "see https://docs.veridor.org/schema",\n'
+                "/* veridor.org's mark: a shield and a tick. */\n"
+                'Homepage = "https://veridor.org/"\n')
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
-        for path, text in (("schema/veridor-config-v1.schema.json", schema_id),
-                           ("src/veridor/reports/_common.py", namespace),
-                           ("tests/test_x.py", "someone@veridor.org\n")):
+        for path in ("schema/other.json", "src/veridor/web/styles.css", "pyproject.toml"):
             (root / path).parent.mkdir(parents=True, exist_ok=True)
-            (root / path).write_text(text, encoding="utf-8")
+            (root / path).write_text(held, encoding="utf-8")
         self.assertEqual(release_check.identity_leftovers(root), [])
-        (root / "schema/other.json").write_text(schema_id, encoding="utf-8")
-        (root / "src/veridor/core.py").write_text(namespace, encoding="utf-8")
-        with (root / "schema/veridor-config-v1.schema.json").open("a", encoding="utf-8") as schema:
-            schema.write('  "$comment": "see https://docs.veridor.org/schema",\n')
-        self.assertEqual([(path, line) for path, line, *_ in release_check.identity_leftovers(root)],
-                         [("schema/other.json", 1), ("schema/veridor-config-v1.schema.json", 2),
-                          ("src/veridor/core.py", 1)])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(release_check.main(["--root", str(root), "identity"]), 0)
+        # Control: the same files fail on a host or an address the project does not hold.
+        with (root / "src/veridor/web/styles.css").open("a", encoding="utf-8") as styles:
+            styles.write("/* see https://www.veridor.org/ */\n/* or write to someone@veridor.org */\n")
+        self.assertEqual([(path, line, name) for path, line, name, _ in release_check.identity_leftovers(root)],
+                         [("src/veridor/web/styles.css", 4, "host.veridor.org"),
+                          ("src/veridor/web/styles.css", 5, "@veridor.org")])
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(release_check.main(["--root", str(root), "identity"]), 1)
+
+    def test_only_tests_may_plant_an_unheld_veridor_org_name(self) -> None:
+        """tests/ plants an address or another host as a control; outside
+        tests/ the same line is a leftover."""
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        planted = "someone@veridor.org https://www.veridor.org/\n"
+        (root / "tests").mkdir()
+        (root / "tests" / "test_x.py").write_text(planted, encoding="utf-8")
+        self.assertEqual(release_check.identity_leftovers(root), [])
+        (root / "SECURITY.md").write_text(planted, encoding="utf-8")
+        self.assertEqual([(path, name) for path, _, name, _ in release_check.identity_leftovers(root)],
+                         [("SECURITY.md", "@veridor.org")])
 
     def test_the_tree_carries_no_retired_name(self) -> None:
         self.assertEqual(release_check.identity_leftovers(ROOT), [])
@@ -664,12 +690,11 @@ class IdentityTest(_Tree):
         self.assertNotIn("ghcr", block.split("\n", 1)[0], "the block's start moved")
 
         def leftovers(text: str) -> list[str]:
-            return [name for name, pattern in release_check._IDENTITY_RETIRED_RE
-                    if name != "veridor.org" and pattern.search(text)]
+            return [name for name, pattern in release_check._IDENTITY_RETIRED_RE if pattern.search(text)]
 
         self.assertEqual(leftovers(rest), [])
         # Control: the same check, on the block it removed, finds every name.
-        self.assertEqual(len(leftovers(block)), len(release_check.IDENTITY_RETIRED) - 1)
+        self.assertEqual(len(leftovers(block)), len(release_check.IDENTITY_RETIRED))
 
     def test_the_finding_id_namespace_did_not_move(self) -> None:
         """Every finding ID derives from it; the rename must not renumber them."""

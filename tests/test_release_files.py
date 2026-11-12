@@ -97,12 +97,33 @@ class PresenceTest(unittest.TestCase):
             self.assertIn(key, urls)
             self.assertTrue(urls[key].startswith("https://"), key)
 
-    def test_every_metadata_link_is_on_the_repository(self) -> None:
-        """Metadata is fixed once a release is uploaded, and no domain serves
-        anything, so a Homepage or Documentation link has nowhere else to point."""
+    #: The two hosts the project holds, and the pages they serve: the product
+    #: page and the docs. This test said every link had to be on the
+    #: repository, because no domain served anything then; Homepage and
+    #: Documentation pointed at the repository root and a blob/main README.
+    HELD = {"Homepage": "https://veridor.org/", "Documentation": "https://docs.veridor.org/"}
+
+    @classmethod
+    def links_off_what_the_project_holds(cls, urls: dict[str, str]) -> dict[str, str]:
+        return {key: url for key, url in urls.items()
+                if url != cls.HELD.get(key) and not url.startswith(f"https://github.com/{REPOSITORY}/")
+                and url != f"https://github.com/{REPOSITORY}"}
+
+    def test_every_metadata_link_is_on_the_repository_or_a_held_host(self) -> None:
+        """Metadata is fixed once a release is uploaded, so each link names the
+        repository or one of the two hosts the project holds, and Homepage and
+        Documentation name those hosts."""
         urls = PYPROJECT["project"]["urls"]
-        self.assertEqual({key: url for key, url in urls.items()
-                          if not url.startswith(f"https://github.com/{REPOSITORY}")}, {})
+        self.assertEqual({key: urls.get(key) for key in self.HELD}, self.HELD)
+        self.assertEqual(self.links_off_what_the_project_holds(urls), {})
+
+    def test_control_a_link_off_the_held_hosts_is_named(self) -> None:
+        for key, url in (("Documentation", "https://www.veridor.org/"),
+                         ("Homepage", "https://docs.veridor.org/"),
+                         ("Changelog", "https://veridor.org/changelog"),
+                         ("Issues", f"https://github.com/{REPOSITORY}x/issues")):
+            with self.subTest(url=url):
+                self.assertEqual(self.links_off_what_the_project_holds({key: url}), {key: url})
 
     def test_the_metadata_describes_what_the_readme_describes(self) -> None:
         """It opened with "Deterministic", which identical `mutate` runs on a

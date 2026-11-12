@@ -555,6 +555,13 @@ class ReleaseImageTest(unittest.TestCase):
             with self.subTest(label=label):
                 self.assertIn(f'org.opencontainers.image.{label}="{value}"', self.DOCKERFILE)
 
+    def test_the_version_label_defaults_to_the_package_version(self) -> None:
+        """The documented `docker build` passes no build-arg, so the default is
+        the label that image carries. It was 0.0.0+local while the wheel inside
+        said 0.1.0: `docker inspect` and `veridor --version` disagreed."""
+        self.assertEqual(re.findall(r"^ARG VERSION=(.*)$", self.DOCKERFILE, re.M),
+                         [PYPROJECT["project"]["version"]])
+
     def test_the_context_excludes_private_and_non_shipping_trees(self) -> None:
         """A checkout's local files must not reach a builder. This asked for
         these literal lines, which an allowlist does not have, so it now asks

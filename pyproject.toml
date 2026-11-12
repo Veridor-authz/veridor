@@ -34,11 +34,13 @@ classifiers = [
 # Without these a PyPI page carries no link back to the source, the issue
 # tracker, or the security policy -- for a security tool, the three things a
 # reader most wants before installing it. Homepage and Documentation name the
-# repository because no domain serves anything, and metadata is fixed once a
-# release is uploaded.
+# two hosts the project holds, veridor.org (the product page) and
+# docs.veridor.org (the docs); the rest name the repository. Metadata is fixed
+# once a release is uploaded, so nothing here may name a host the project does
+# not hold (scripts/release_check.py `identity`).
 [project.urls]
-Homepage = "https://github.com/Veridor-authz/veridor"
-Documentation = "https://github.com/Veridor-authz/veridor/blob/main/README.md"
+Homepage = "https://veridor.org/"
+Documentation = "https://docs.veridor.org/"
 Repository = "https://github.com/Veridor-authz/veridor"
 Issues = "https://github.com/Veridor-authz/veridor/issues"
 Changelog = "https://github.com/Veridor-authz/veridor/blob/main/CHANGELOG.md"

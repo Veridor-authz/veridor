@@ -30,7 +30,13 @@ RUN printf '%s\n' 'setuptools==84.0.0 --hash=sha256:51a52592b3b99e102b609654876b
       --wheel-dir /dist .
 
 FROM python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111
-ARG VERSION=0.0.0+local
+# The version label's default is the package version, kept in step by
+# scripts/release_check.py (`versions` checks it, `bump` rewrites it), so the
+# documented `docker build` above labels the image with the version
+# `veridor --version` prints inside it. The default was a placeholder local
+# version that disagreed with the wheel the image installs. The release
+# workflow passes the same value as a build-arg.
+ARG VERSION=0.1.0
 ARG REVISION=unknown
 ARG CREATED=unknown
 # Non-root, uid and gid 10001 -- the ids the Helm chart's securityContext

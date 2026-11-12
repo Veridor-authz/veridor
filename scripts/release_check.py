@@ -75,9 +75,11 @@
     release literals name the owner too, and ``versions`` fails on a tree they
     no longer match. It fails on any occurrence of a name in
     ``IDENTITY_RETIRED``, the namespaces this project does not hold, in the
-    spellings that list covers, and on veridor.org outside the two identifiers
-    that keep it. The domain serves nothing, so nothing a user is told to visit
-    or pull may name it.
+    spellings that list covers. The project holds veridor.org, which serves the
+    product page, and docs.veridor.org, which serves the docs, so those two
+    hosts pass. Any other host under the domain still fails, because nothing
+    commits to serving it, and so does any address at it, because the domain
+    publishes no mail exchanger and a report sent there reaches nobody.
 
 ``owner``
     Compare the tree with the repository a release is running in, before
@@ -211,6 +213,7 @@ REGISTRY: tuple[Occurrence, ...] = (
     _occ(".github/ISSUE_TEMPLATE/bug_report.yml", r"placeholder: veridor {V}$", "pep440",
          "`veridor --version` placeholder"),
     _occ("scripts/build_zipapp.py", r"dist/veridor-{V}\.pyz", "pep440", "docstring zipapp name"),
+    _occ("Dockerfile", r"^ARG VERSION={V}$", "pep440", "the image's version label default"),
     # Tests that pin a shipped default. They belong to other files' owners, so
     # bump keeps them in step rather than leaving the suite red after a bump.
     _occ("tests/test_ci_configs.py", r'"ghcr\.io/veridor-authz/veridor:{V}"', "semver", "pins the component default"),
@@ -265,9 +268,10 @@ _IDENTITY = re.compile("|".join(f"(?P<n{index}>{pattern})"
 _IDENTITY_LITERALS = ("veridor", "veridor-authz")
 
 #: Names this project does not hold, so nothing may send a reader to them: the
-#: ``veridor`` owner on the code hosts and registries, the veridor.org domain, and
-#: the maintainer's own account as a home for the project (github.com/<handle>
-#: alone is allowed: GOVERNANCE.md links to the person).
+#: ``veridor`` owner on the code hosts and registries, any veridor.org host but
+#: the two that serve (veridor.org and docs.veridor.org) and any address at the
+#: domain, and the maintainer's own account as a home for the project
+#: (github.com/<handle> alone is allowed: GOVERNANCE.md links to the person).
 #: identity() lists only the names in use, so one of these would otherwise just
 #: not appear. Matched in any case, and with the escapes a regex source adds.
 #: Beyond that, a spelling not written here passes: this is a list, not a proof.
@@ -289,13 +293,18 @@ IDENTITY_RETIRED: tuple[tuple[str, str], ...] = (
     ("Santoshkumarpuppala/veridor", r"(?<![\w-])santoshkumarpuppala\\*/veridor(?![\w-])"),
     ("ghcr.io/santoshkumarpuppala", r"(?<![\w-])ghcr\\*\.io\\*/santoshkumarpuppala(?![\w-])"),
     ("gitlab.com/santoshkumarpuppala", r"(?<![\w-])gitlab\\*\.com(?:\\*/|:)santoshkumarpuppala(?![\w-])"),
-    ("veridor.org", r"(?<![\w-])(?:[\w-]+\\*\.|[\w.+-]+@)?veridor\\*\.org(?![\w-])"),
+    # The domain publishes no MX record (dig, 2026-11-12) and the project
+    # announces no mailbox, so an address at it is a report sent nowhere.
+    ("@veridor.org", r"[\w.+-]*@(?:[\w-]+\\*\.)*veridor\\*\.org(?![\w-])"),
+    # Every host under the domain but docs. The bare domain passes because at
+    # least one label must come before it; the lookbehind starts a match at the
+    # host's first label, so a.docs.veridor.org is matched from "a" instead of
+    # passing as docs.
+    ("host.veridor.org", r"(?<![\w.-])(?!docs\\*\.veridor\\*\.org(?![\w-]))(?:[\w-]+\\*\.)+veridor\\*\.org(?![\w-])"),
 )
-#: Not leftovers, and the only lines outside tests/ that may name the domain.
-#: Changing the first would renumber every recorded finding; the second names
-#: the schema and need not resolve. tests/ may name it: they plant it as a control.
-_IDENTITY_DOMAIN_KEPT = frozenset({("src/veridor/reports/_common.py", "FINDING_ID_NAMESPACE"),
-                                   ("schema/veridor-config-v1.schema.json", '"$id"')})
+#: The retired names tests/ may hold: they plant them as controls. Taken from
+#: the list, so this script names the retired spellings in that list alone.
+_IDENTITY_DOMAIN_RETIRED = frozenset(name for name, _ in IDENTITY_RETIRED if name.endswith("veridor.org"))
 _IDENTITY_RETIRED_RE = [(name, re.compile(pattern, re.IGNORECASE)) for name, pattern in IDENTITY_RETIRED]
 #: Every retired name contains one of these (lowercased), so identity_leftovers()
 #: skips a line without any. "veridor" alone was the filter once, and the two
@@ -738,11 +747,8 @@ def identity(root: Path) -> list[tuple[str, int, str, str]]:
     return found
 
 
-def _identity_keeps(path: str, name: str, line: str) -> bool:
-    if name != "veridor.org":
-        return False
-    return path.startswith("tests/") or any(path == kept and marker in line
-                                            for kept, marker in _IDENTITY_DOMAIN_KEPT)
+def _identity_keeps(path: str, name: str) -> bool:
+    return name in _IDENTITY_DOMAIN_RETIRED and path.startswith("tests/")
 
 
 def identity_leftovers(root: Path) -> list[tuple[str, int, str, str]]:
@@ -757,7 +763,7 @@ def identity_leftovers(root: Path) -> list[tuple[str, int, str, str]]:
             if not any(literal in lowered for literal in _IDENTITY_RETIRED_LITERALS):
                 continue  # no retired name can match here; see _unfilterable_retired_names
             for name, pattern in _IDENTITY_RETIRED_RE:
-                if pattern.search(line) and not _identity_keeps(path, name, line):
+                if pattern.search(line) and not _identity_keeps(path, name):
                     found.append((path, number, name, line.strip()))
                     break
     return found
