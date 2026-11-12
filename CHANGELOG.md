@@ -1577,6 +1577,12 @@ something you installed.
 
 ### Fixed
 
+- **`map --dry-run` exited `0` on a plan the run refuses.** With
+  `--max-requests 5` and a 12-request plan, the dry run printed "Over budget"
+  and exited `0`, while `map --max-requests 5` refuses with exit `2`. The dry
+  run still prints the plan, then gives the same refusal on stderr, says the
+  run refuses it the same way, and exits `2`, as it already did for every
+  other safety gate.
 - **A misspelt check key was refused for something else, or not at all.**
   `"expectt"` was refused as "must expect results for at least two users",
   `"reqeust"` as a missing request, and `"descriptionn"` or `"Name"` loaded and

@@ -651,6 +651,26 @@ class MapSafetyTest(_Workspace):
         self.assertNotIn("this will issue", stdout)
         self.assertFalse(self.output.exists())
 
+    def test_a_dry_run_refuses_an_over_budget_plan_as_the_run_does(self) -> None:
+        """REGRESSION. `--dry-run --max-requests 5` printed "Over budget" and
+        exited 0 on a plan `map --max-requests 5` refuses with exit 2, so a
+        script that dry-runs first was told the plan would go ahead. It still
+        prints the plan, which is what an operator narrows it with, and then
+        gives the run's refusal and its exit code."""
+        code, stdout, stderr = self.run_map("--max-requests", "2")
+        self.assertEqual(code, 2)
+        dry_code, dry_stdout, dry_stderr = self.run_map("--max-requests", "2", "--dry-run")
+        self.assertEqual(dry_code, code, dry_stdout + dry_stderr)
+        self.assertIn(stderr.strip().removeprefix("veridor: "), dry_stderr)
+        self.assertIn("Without --dry-run, `map` refuses this plan", dry_stderr)
+        self.assertIn("this will issue", dry_stdout)
+        self.assertIn("nothing was sent", dry_stdout)
+        self.assertFalse(self.output.exists())
+        # Control: within budget, the same dry run exits 0 and refuses nothing.
+        code, stdout, stderr = self.run_map("--dry-run")
+        self.assertEqual((code, stderr), (0, ""))
+        self.assertIn("budget:", stdout)
+
     def test_an_ignore_that_empties_the_grid_is_refused_before_the_first_request(
         self,
     ) -> None:

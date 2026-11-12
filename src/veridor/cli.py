@@ -2512,20 +2512,25 @@ def _map(args: argparse.Namespace) -> int:
     # Every safety gate -- off-target paths, permitted methods, the two mutating
     # acknowledgements, the target acknowledgement and the request budget -- is
     # re-derived inside plan_matrix and raises here, before a socket is opened.
-    # `--dry-run` sends nothing, so a budget it would exceed is information
-    # rather than a refusal: the plan it prints is exactly what an operator
-    # needs to narrow it, and refusing to print it withheld the fix.
+    # `--dry-run` defers the budget refusal until after the plan is printed:
+    # the plan is exactly what an operator needs to narrow it, and refusing
+    # before printing it withheld the fix. It is still refused, below.
     plan = plan_matrix(
         config, inventory, options=_map_options(args), defer_budget=args.dry_run
     )
     print(plan.banner())
     print()
     if args.dry_run:
+        # Printed, and then refused exactly as the run refuses it. An "Over
+        # budget" paragraph followed by exit 0 told a script, and anyone who
+        # skims for the exit code, that the plan was fine: `--dry-run
+        # --max-requests 5` exited 0 on a plan `map --max-requests 5` refuses
+        # with exit 2, the code every other safety gate already gives a dry run.
+        over_budget: MatrixError | None = None
         try:
             plan.refuse_if_over_budget()
         except MatrixError as error:
-            print(f"Over budget, and nothing was sent:\n  {error}")
-            print()
+            over_budget = error
         # The plan already knows which templates have no specimen, so the fix
         # is available before a single request. Printing it only after the run
         # meant the command the documentation tells you to try FIRST was the
@@ -2544,6 +2549,16 @@ def _map(args: argparse.Namespace) -> int:
             print(advice)
             print()
         print("--dry-run: nothing was sent.")
+        if over_budget is not None:
+            sys.stdout.flush()
+            print(
+                "veridor: " + refusal_text(
+                    f"{over_budget} Without --dry-run, `map` refuses this plan "
+                    "the same way."
+                ),
+                file=sys.stderr,
+            )
+            return 2
         return 0
 
     _preflight_writable("map", _map_destinations(args, baseline is not None))
