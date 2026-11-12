@@ -1014,6 +1014,7 @@ def _swapped(key: str) -> str:
 #: annotated base has one, with the loader's own key set for it.
 _NEAR_MISS_OBJECTS = {
     "identity": ("identities/owner", core._IDENTITY_KEYS),
+    "check": ("checks/0", core._CHECK_KEYS),
     "session": ("identities/owner/session", core._SESSION_KEYS),
     "login-step capture": ("identities/owner/session/login/0/capture/csrf_login",
                            core._CAPTURE_SPEC_KEYS),
@@ -1165,7 +1166,6 @@ class RootDescriptionNearMissTest(unittest.TestCase):
     #: Each place it says a near-miss is not looked for, and one.
     NOT_CHECKED_IN = {
         "`target`": _renamed_at("target", "teardown_timeout_seconds", "Teardown_timeout_seconds"),
-        "a check's own keys": _renamed_at("checks/0", "name", "Name"),
         "a teardown entry's `expect`": _set("sequences/0/teardown/0/expect/Status", [200]),
     }
 
@@ -1300,6 +1300,7 @@ class KeySetTest(unittest.TestCase):
             "/$defs/identity": core._IDENTITY_KEYS,
             "/$defs/request": core._REQUEST_KEYS,
             "/$defs/request_shape": core._REQUEST_KEYS,
+            "/properties/checks/items": core._CHECK_KEYS,
             "/$defs/expectation": core._MARKER_EXPECT_KEYS,
             "/$defs/session": core._SESSION_KEYS,
             "/$defs/login_step": core._LOGIN_STEP_KEYS,

@@ -1577,6 +1577,14 @@ something you installed.
 
 ### Fixed
 
+- **A misspelt check key was refused for something else, or not at all.**
+  `"expectt"` was refused as "must expect results for at least two users",
+  `"reqeust"` as a missing request, and `"descriptionn"` or `"Name"` loaded and
+  was dropped. A check's own keys now get the near-miss refusal every other
+  block has: it names the key and the keys a check takes (`description`,
+  `expect`, `id`, `name`, `request`), exits `2`, and says to start an
+  annotation with `_`. A key that is no slip of a real one still loads as an
+  annotation.
 - **`report --output` into a directory it cannot write named a file nobody
   typed.** It printed `[Errno 13] Permission denied:
   'ro/.j.xml.42f6df0f81e22ee1.tmp'`, the temporary sibling the atomic write

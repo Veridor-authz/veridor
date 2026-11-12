@@ -104,6 +104,64 @@ class MisplacedHeadersTest(unittest.TestCase):
         self.assertIn("defines none of", str(caught.exception))
 
 
+class CheckKeyTypoTest(unittest.TestCase):
+    """A misspelt check key is named, with the keys a check takes.
+
+    ``"expectt"`` was refused as "check 'c' must expect results for at least
+    two users": true of the check once the typo had dropped its expectations,
+    and no help to someone who had declared two. A misspelt ``request`` was
+    reported as a missing request, and ``descriptionn`` loaded silently.
+    """
+
+    def _refusal(self, **keys: object) -> str:
+        config = copy.deepcopy(BASE)
+        check = config["checks"][0]
+        for old, new in keys.items():
+            check[new] = check.pop(old) if old in check else "x"
+        with self.assertRaises(ConfigError) as caught:
+            _load(config)
+        return str(caught.exception)
+
+    def test_a_misspelt_expect_names_the_key_and_the_allowed_keys(self) -> None:
+        message = self._refusal(expect="expectt")
+        self.assertIn("check 'c' has unsupported keys: expectt", message)
+        self.assertIn("description, expect, id, name, request", message)
+        self.assertNotIn("at least two users", message)
+
+    def test_other_slips_are_named_too(self) -> None:
+        for old, new in (("request", "reqeust"), ("name", "Name"),
+                         ("description", "descriptionn")):
+            with self.subTest(key=new):
+                message = self._refusal(**{old: new})
+                self.assertIn(f"unsupported keys: {new}", message)
+                self.assertIn("did you mean one of", message)
+
+    def test_a_check_with_no_id_is_still_named(self) -> None:
+        config = copy.deepcopy(BASE)
+        check = config["checks"][0]
+        check["Id"] = check.pop("id")
+        with self.assertRaises(ConfigError) as caught:
+            _load(config)
+        self.assertIn("a check has unsupported keys: Id", str(caught.exception))
+
+    def test_control_annotations_and_real_keys_still_load(self) -> None:
+        """Unrelated keys stay annotations, as they are on every other block,
+        and `_` keeps a near-miss as one deliberately."""
+        config = copy.deepcopy(BASE)
+        config["checks"][0].update(
+            description="owner reads, outsider is refused",
+            notes="added after the 2026 incident", _expectt="kept on purpose",
+        )
+        loaded = _load(config)
+        self.assertEqual(loaded["checks"][0]["id"], "c")
+        # The two-user rule is unchanged for a check that really declares one.
+        config = copy.deepcopy(BASE)
+        del config["checks"][0]["expect"]["outsider"]
+        with self.assertRaises(ConfigError) as caught:
+            _load(config)
+        self.assertIn("at least two users", str(caught.exception))
+
+
 class MethodCaseTest(unittest.TestCase):
     def test_a_lower_case_method_is_refused_with_the_replacement(self) -> None:
         for written, wanted in (("get", "GET"), ("post", "POST"), ("delete", "DELETE")):
