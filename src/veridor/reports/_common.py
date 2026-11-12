@@ -61,6 +61,12 @@ def gate_of(document: Mapping[str, Any]) -> dict[str, Any]:
     directly -- gets the decision the CLI DEFAULTS would have made, marked
     ``recorded: False`` so every format can say it was re-derived rather than
     read. The real job may have run with other flags.
+
+    A capsule verification (``veridor verify``) carries ``capsule`` beside its
+    gate, and the gate's exit code is the capsule's verdict, not a ``--fail-on``
+    decision; ``capsule`` is passed through so every format can say so.
+    ``core.validate_run`` has already refused a capsule document whose verdict,
+    exit code and gate disagree, or that has no gate to re-derive from.
     """
     recorded = document.get("gate")
     if isinstance(recorded, Mapping):
@@ -72,6 +78,8 @@ def gate_of(document: Mapping[str, Any]) -> dict[str, Any]:
             "reasons": list(recorded.get("reasons") or ()),
             "not_enforced": list(recorded.get("not_enforced") or ()),
             "recorded": True,
+            "capsule": document.get("capsule") if isinstance(
+                document.get("capsule"), Mapping) else None,
         }
     return {**gate_policy.evaluate(document).to_document(), "recorded": False}
 

@@ -950,7 +950,8 @@ const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
 """
 
 _GATE_HARNESS = _APP_HARNESS_PRELUDE + r"""
-const code = grabConst("STATUS_TONE") + grab("runTone") + grab("element") + grab("gateBanner");
+const code = grabConst("STATUS_TONE") + grab("runTone") + grabConst("CAPSULE_EXIT") +
+  grabConst("CAPSULE_TONE") + grab("capsuleStatus") + grab("element") + grab("gateBanner");
 const context = { document: { createElement: node } };
 vm.createContext(context);
 vm.runInContext(code, context);
@@ -960,6 +961,38 @@ const out = JSON.parse(process.argv[2]).map((run) => {
   return b ? { tone: b.className.replace("gate-banner", "").trim(), text: text(b) } : null;
 });
 console.log(JSON.stringify(out));
+"""
+
+# The run list as renderRuns() builds it, with the server's /api/runs entries
+# as input: each row's status dot (class and words) and its summary line, and
+# the rows a filter keeps.
+_RUN_LIST_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const code = grabConst("STATUS_TONE") + grab("runTone") + grabConst("CAPSULE_EXIT") +
+  grabConst("CAPSULE_TONE") + grab("capsuleStatus") + grab("element") +
+  ["listButton", "matchesFilter", "renderRuns", "formatDate", "targetLabel"].map(grab).join("\n");
+const { entries, filter } = JSON.parse(process.argv[2])[0];
+const runs = node();
+runs.replaceChildren = () => { runs.children = []; };
+const context = {
+  document: { createElement: () => Object.assign(node(), { dataset: {}, addEventListener() {} }) },
+  runsElement: runs, emptyElement: {}, noMatchesElement: {},
+  state: { verb: "run", runs: entries, maps: [], mutations: [], selected: null, filter },
+  selectRun() {}, Date, Intl,
+};
+const dots = (n, acc = []) => {
+  if (/\bdot\b/.test(n.className || "")) acc.push({ cls: n.className.replace("dot", "").trim(), text: n.textContent });
+  for (const c of n.children || []) dots(c, acc);
+  return acc;
+};
+const summaries = (n, acc = []) => {
+  if (/\brun-summary\b/.test(n.className || "")) acc.push(n.textContent);
+  for (const c of n.children || []) summaries(c, acc);
+  return acc;
+};
+vm.createContext(context);
+vm.runInContext(code, context);
+vm.runInContext("renderRuns()", context);
+console.log(JSON.stringify([{ dots: dots(runs), summaries: summaries(runs) }]));
 """
 
 _MATRIX_HARNESS = _APP_HARNESS_PRELUDE + r"""
@@ -1070,6 +1103,120 @@ class GateBannerTest(unittest.TestCase):
 
         # A document without a gate gets no banner, not a guessed one.
         self.assertIsNone(old_schema)
+
+
+@slow("runs app.js under node in a subprocess")
+class CapsuleVerificationViewTest(unittest.TestCase):
+    """A capsule verification is shown as one, with its verdict.
+
+    `veridor verify` exits with the capsule's verdict -- 1 CONFIRMED, 0
+    NOT_REPRODUCED, 2 INCONCLUSIVE -- and its run was listed as an ordinary run
+    whose status is computed from findings: an INCONCLUSIVE verification (a
+    probe that drew a 500) read FAILED in red, and its banner said "Gate
+    fails" with no word of the capsule. A run document without `capsule`
+    renders as before.
+    """
+
+    @staticmethod
+    def _run(status: str, verdict, exit_code: int, reason: str = "the reason") -> dict:
+        run = {"status": status, "summary": {"probes": 3, "safe": 2, "vulnerable": 0},
+               "regression": {"baseline_run_id": None},
+               "gate": {"exit_code": exit_code, "fail_on": None, "reasons": []}}
+        if verdict is not None:
+            run["capsule"] = {"verdict": verdict, "exit_code": exit_code, "reason": reason,
+                              "check_id": "invoice-tenant-isolation"}
+        return run
+
+    def test_the_banner_is_headed_by_the_verdict(self) -> None:
+        runs = [
+            self._run("inconclusive", "INCONCLUSIVE", 2, "Identity 'x' received HTTP 500."),
+            self._run("failed", "CONFIRMED", 1),
+            self._run("passed", "NOT_REPRODUCED", 0,
+                      "the declared expectation held on this target. That is not proof"),
+            # Hand-edited: a verdict whose exit code is not the gate's.
+            self._run("passed", "NOT_REPRODUCED", 2),
+            self._run("passed", "LOOKS_FINE", 0),
+            # Control: an ordinary run that failed, no capsule.
+            self._run("failed", None, 1),
+        ]
+        runs[-1]["gate"]["fail_on"] = "new+confirmed"
+        inconclusive, confirmed, not_reproduced, disagreeing, unknown, ordinary = (
+            _run_node(_GATE_HARNESS, runs))
+
+        self.assertEqual(inconclusive["tone"], "warn")
+        self.assertIn("Capsule INCONCLUSIVE", inconclusive["text"])
+        self.assertIn("exit 2", inconclusive["text"])
+        self.assertIn("HTTP 500", inconclusive["text"])
+        self.assertIn("invoice-tenant-isolation", inconclusive["text"])
+        self.assertNotIn("Gate", inconclusive["text"])
+
+        self.assertEqual(confirmed["tone"], "danger")
+        self.assertIn("Capsule CONFIRMED", confirmed["text"])
+
+        self.assertEqual(not_reproduced["tone"], "safe")
+        self.assertIn("Capsule NOT REPRODUCED", not_reproduced["text"])
+        self.assertIn("not proof", not_reproduced["text"])
+        for word in ("passes", "safe", "secure", "verified"):
+            self.assertNotIn(word, not_reproduced["text"].lower())
+
+        # Never green unless the verdict is known and its exit code agrees.
+        self.assertEqual(disagreeing["tone"], "warn")
+        self.assertEqual(unknown["tone"], "warn")
+
+        self.assertEqual(ordinary["tone"], "danger")
+        self.assertIn("Gate fails", ordinary["text"])
+        self.assertIn("fail-on new+confirmed", ordinary["text"])
+        self.assertNotIn("Capsule", ordinary["text"])
+        self.assertNotIn("fail-on null", inconclusive["text"])
+
+    def _list(self, entries: list, filter_text: str = "") -> dict:
+        return _run_node(_RUN_LIST_HARNESS, [{"entries": entries, "filter": filter_text}])[0]
+
+    @staticmethod
+    def _entry(run_id: str, status: str, exit_code: int, verdict=None) -> dict:
+        entry = {"run_id": run_id, "status": status, "gate_exit_code": exit_code,
+                 "started_at": None, "target": "http://127.0.0.1:1",
+                 "summary": {"probes": 3, "new": 1}, "capsule": None}
+        if verdict is not None:
+            entry["capsule"] = {"verdict": verdict, "check_id": "invoice-tenant-isolation"}
+        return entry
+
+    def test_the_run_list_names_a_capsule_verification_by_its_verdict(self) -> None:
+        listed = self._list([
+            self._entry("V-inc", "inconclusive", 2, "INCONCLUSIVE"),
+            self._entry("V-fail", "failed", 2, "INCONCLUSIVE"),
+            self._entry("V-conf", "failed", 1, "CONFIRMED"),
+            self._entry("V-not", "passed", 0, "NOT_REPRODUCED"),
+            self._entry("R-run", "failed", 1),
+            # An entry from a server that predates the field.
+            {key: value for key, value in self._entry("R-old", "passed", 0).items()
+             if key != "capsule"},
+        ])
+        self.assertEqual(listed["dots"], [
+            {"cls": "warn", "text": "capsule · INCONCLUSIVE"},
+            # The status computed from findings said FAILED here, in red.
+            {"cls": "warn", "text": "capsule · INCONCLUSIVE"},
+            {"cls": "danger", "text": "capsule · CONFIRMED"},
+            {"cls": "safe", "text": "capsule · NOT REPRODUCED"},
+            {"cls": "danger", "text": "failed"},
+            {"cls": "safe", "text": "passed"},
+        ])
+        self.assertTrue(listed["summaries"][0].startswith("check invoice-tenant-isolation"))
+        self.assertEqual(listed["summaries"][4], "3 probes · 1 new")
+
+    def test_the_detail_badge_reads_the_capsule_verdict(self) -> None:
+        detail = APP_JS.split("function renderDetail(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("capsuleStatus(run.capsule, gate.exit_code)", detail)
+        self.assertIn("capsule.label", detail)
+        self.assertIn("capsule.tone", detail)
+
+    def test_the_filter_finds_what_the_row_says(self) -> None:
+        entries = [self._entry("V-inc", "inconclusive", 2, "INCONCLUSIVE"),
+                   self._entry("R-run", "failed", 1)]
+        self.assertEqual([d["text"] for d in self._list(entries, "capsule")["dots"]],
+                         ["capsule · INCONCLUSIVE"])
+        self.assertEqual(len(self._list(entries, "invoice-tenant")["dots"]), 1)
+        self.assertEqual(len(self._list(entries, "")["dots"]), 2)
 
 
 @slow("runs app.js under node in a subprocess")

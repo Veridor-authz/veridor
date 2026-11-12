@@ -33,7 +33,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping, Sequence
 
-from veridor.core import CONFIGURATION_UNSENT_ERRORS, probe_answered
+from veridor.core import CAPSULE_EXIT_CODES, CONFIGURATION_UNSENT_ERRORS, probe_answered
 from veridor.terminal import quoted
 
 #: The ``--fail-on`` choices, in the order ``--help`` lists them.
@@ -84,9 +84,31 @@ REASON_CODES: tuple[str, ...] = (
     LIVENESS_UNPROVEN,
 )
 
+# ---------------------------------------------------------------------------
+# Capsule verification. `veridor verify` exits with the capsule's verdict, not
+# with this policy, so its two failing verdicts are reasons of their own. Kept
+# out of REASON_CODES, which is the precedence order of `veridor run` and
+# which evaluate() never produces these from.
+# ---------------------------------------------------------------------------
+
+#: A capsule's claim reproduced on the target. Exit 1. About the target.
+CAPSULE_CONFIRMED = "capsule_confirmed"
+#: A capsule's claim was neither reproduced nor ruled out. Exit 2.
+CAPSULE_INCONCLUSIVE = "capsule_inconclusive"
+
+#: What each capsule reason means. The adjudication's own sentence follows it.
+#: Held to ``coverage.BANNED_CLAIM_WORDS`` like REASON_TEXT.
+CAPSULE_REASON_TEXT: dict[str, str] = {
+    CAPSULE_CONFIRMED: "the capsule's claim reproduced on this target (CONFIRMED)",
+    CAPSULE_INCONCLUSIVE: (
+        "the capsule's claim was neither reproduced nor ruled out on this target "
+        "(INCONCLUSIVE)"
+    ),
+}
+
 #: The reason codes that are about the TARGET. Every other code says something
 #: went unmeasured, and a report must never render one of those as a pass.
-FINDING_REASON_CODES: frozenset[str] = frozenset({FINDINGS})
+FINDING_REASON_CODES: frozenset[str] = frozenset({FINDINGS, CAPSULE_CONFIRMED})
 
 #: What each reason means, in words a report can print after a colon, for a
 #: reason that carries no ``count`` (``coverage_not_measured`` never does; a
@@ -186,6 +208,11 @@ def describe(reason: Mapping[str, Any]) -> str:
     """
     code = str(reason.get("code"))
     count = reason.get("count")
+    if code in CAPSULE_REASON_TEXT:
+        detail = reason.get("detail")
+        if isinstance(detail, str) and detail.strip(" ."):
+            return f"{CAPSULE_REASON_TEXT[code]}: {detail.strip().rstrip('.')}"
+        return CAPSULE_REASON_TEXT[code]
     if code == NOTHING_ANSWERED and reason.get("nothing_graded") is True:
         # Setup steps only: the target may have answered every one, and "not
         # one probe was answered (0 unanswered)" said the opposite.
@@ -1014,6 +1041,36 @@ def evaluate(
         not_enforced=tuple(not_enforced),
         messages=tuple(messages),
     )
+
+
+def capsule_gate(
+    verdict: str, reason: str, finding_ids: Sequence[str] = ()
+) -> dict[str, Any]:
+    """The ``gate`` object ``veridor verify`` writes beside its ``capsule``.
+
+    ``verify`` used to persist the run of the capsule with no gate at all, so
+    every report re-derived one with the ``veridor run`` defaults: an
+    INCONCLUSIVE verification -- exit 2 -- rendered "Gate passed (exit 0)".
+    The exit code here is the one ``verify`` exits with, and the one reason
+    names the verdict; NOT_REPRODUCED is exit 0 with no reason, and the
+    reports word it from the capsule, never as a pass of the target.
+    ``fail_on`` is null: ``verify`` applies no ``--fail-on`` policy.
+    """
+    exit_code = CAPSULE_EXIT_CODES[verdict]
+    reasons: list[dict[str, Any]] = []
+    if verdict == "CONFIRMED":
+        reasons.append(_reason(CAPSULE_CONFIRMED, exit_code, detail=reason,
+                               finding_ids=[str(i) for i in finding_ids]))
+    elif verdict == "INCONCLUSIVE":
+        reasons.append(_reason(CAPSULE_INCONCLUSIVE, exit_code, detail=reason))
+    return {
+        "fail_on": None,
+        "require_complete": False,
+        "require_clean_teardown": False,
+        "exit_code": exit_code,
+        "reasons": reasons,
+        "not_enforced": [],
+    }
 
 
 def non_finding_reasons(gate: Mapping[str, Any]) -> list[Mapping[str, Any]]:

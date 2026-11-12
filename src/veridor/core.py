@@ -5710,6 +5710,16 @@ def _load_baseline(path: Path | None) -> dict[str, Any] | None:
 #: what lets a run reader refuse them by name instead of rendering an empty run.
 RUN_KIND: str = "veridor.run"
 
+#: The exit code of ``veridor verify`` for each capsule verdict. A capsule's
+#: own scale, not a run's: 1 means the claim reproduced. Here, in ``core``,
+#: because the run validator below holds a written document to it and
+#: ``capsule`` and ``gate`` both import from this module.
+CAPSULE_EXIT_CODES: dict[str, int] = {
+    "CONFIRMED": 1,
+    "NOT_REPRODUCED": 0,
+    "INCONCLUSIVE": 2,
+}
+
 
 def load_run(path: Path) -> dict[str, Any]:
     """Load and validate a persisted run for report generation."""
@@ -5809,7 +5819,7 @@ def validate_run(result: Any, *, source: str = "run") -> dict[str, Any]:
         ("liveness", dict), ("sequences", list),
         ("non_asserting_expectations", list), ("gate", dict),
         ("injection_disclosures", list),
-        ("target_wait", dict),
+        ("target_wait", dict), ("capsule", dict),
     ):
         if field in result and not isinstance(result[field], expected):
             raise ConfigError(
@@ -5823,9 +5833,45 @@ def validate_run(result: Any, *, source: str = "run") -> dict[str, Any]:
             if not isinstance(entry, dict):
                 raise ConfigError(f"run {field}[{index}] must be an object")
     _validate_nested_run_fields(result)
+    if "capsule" in result:
+        _validate_capsule_record(result)
     if "gate" in result:
-        _validate_gate_record(result["gate"])
+        _validate_gate_record(result["gate"], capsule="capsule" in result)
     return result
+
+
+def _validate_capsule_record(result: dict[str, Any]) -> None:
+    """The ``capsule`` object ``veridor verify`` writes, and the gate beside it.
+
+    A capsule verification exits with the capsule's verdict, which the
+    findings alone cannot reproduce: an INCONCLUSIVE run can hold no finding
+    the default policy gates on, and was rendered "Gate passed (exit 0)"
+    while ``verify`` had exited 2. So the verdict, its exit code and the
+    recorded gate must agree, and a document where they do not -- or with no
+    gate to agree with -- is refused rather than re-derived as a run.
+    """
+    record = result["capsule"]
+    verdict = record.get("verdict")
+    if verdict not in CAPSULE_EXIT_CODES:
+        raise ConfigError(
+            f"run capsule.verdict must be one of {sorted(CAPSULE_EXIT_CODES)}; "
+            "the run document was edited or is corrupt"
+        )
+    code = record.get("exit_code")
+    if code != CAPSULE_EXIT_CODES[verdict] or isinstance(code, bool):
+        raise ConfigError(
+            f"run capsule.exit_code is {json.dumps(code)} but a {verdict} capsule exits "
+            f"{CAPSULE_EXIT_CODES[verdict]}; the run document was edited or is corrupt"
+        )
+    for key in ("reason", "check_id", "path"):
+        if key in record and not isinstance(record[key], str):
+            raise _shape_error(f"capsule.{key}", record[key], "a string")
+    gate = result.get("gate")
+    if not isinstance(gate, dict) or gate.get("exit_code") != code:
+        raise ConfigError(
+            "run capsule verdict has no gate that records its exit code; the run "
+            "document was edited or is corrupt"
+        )
 
 
 def _shape_error(where: str, value: Any, expected: str) -> ConfigError:
@@ -5893,12 +5939,19 @@ def _require_list_of(value: Any, kind: type, where: str) -> None:
             raise _shape_error(f"{where}[{index}]", item, _KIND_NAMES[kind])
 
 
-def _validate_gate_record(gate: dict[str, Any]) -> None:
-    """The ``gate`` object ``veridor run`` writes. See ``veridor.gate``."""
+def _validate_gate_record(gate: dict[str, Any], *, capsule: bool = False) -> None:
+    """The ``gate`` object ``veridor run`` writes. See ``veridor.gate``.
+
+    ``veridor verify`` takes no ``--fail-on``, so the gate it writes beside a
+    ``capsule`` object carries ``fail_on: null`` rather than a policy it never
+    applied.
+    """
     code = gate.get("exit_code")
     if not isinstance(code, int) or isinstance(code, bool):
         raise ConfigError("run gate.exit_code must be an integer")
-    if not isinstance(gate.get("fail_on"), str):
+    if not isinstance(gate.get("fail_on"), str) and not (
+        capsule and gate.get("fail_on") is None
+    ):
         raise ConfigError("run gate.fail_on must be a string")
     for key in ("reasons", "not_enforced"):
         entries = gate.get(key, [])

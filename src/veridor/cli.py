@@ -43,6 +43,7 @@ from veridor import gate as gate_policy
 from veridor import redaction, reports
 from veridor.reports._common import pass_disclosures
 from veridor.core import (
+    CAPSULE_EXIT_CODES,
     DECLARATION_SCOPE,
     MARKER_UNIQUENESS_REASONS,
     PASS_SCOPE,
@@ -2004,23 +2005,55 @@ def _verify_capsule(
                 )
             )
             return 2
-        if args.json_path or args.sarif:
-            # The run document names the temporary config as its source; the
-            # reader's copy names the capsule they actually ran.
-            document = _relabel(document, str(path), str(args.capsule))
+        # The run document names the temporary config as its source, a file
+        # deleted when this block ends. Every copy names the capsule instead:
+        # the relabel used to apply to --json and --sarif only, so the managed
+        # history -- what `report` and `serve` read -- cited a path that no
+        # longer existed.
+        document = _relabel(document, str(path), str(args.capsule))
 
-    if args.json_path:
-        write_json(args.json_path, document)
+    adjudication = capsule_module.adjudicate(loaded, document)
+    _record_capsule_verdict(args, loaded, document, adjudication)
     if args.sarif:
         write_json(args.sarif, to_sarif(document))
 
-    adjudication = capsule_module.adjudicate(loaded, document)
     print(capsule_module.render(loaded, adjudication, probed))
-    return {
-        capsule_module.CONFIRMED: 1,
-        capsule_module.NOT_REPRODUCED: 0,
-        capsule_module.INCONCLUSIVE: 2,
-    }[adjudication["verdict"]]
+    return document["capsule"]["exit_code"]
+
+
+def _record_capsule_verdict(
+    args: argparse.Namespace,
+    loaded: dict[str, Any],
+    document: dict[str, Any],
+    adjudication: dict[str, Any],
+) -> None:
+    """Write the capsule's verdict, and the exit code it means, into the run.
+
+    The verdict existed only on stdout. ``execute_run`` persisted the run of
+    the capsule as an ordinary run with no gate, so ``report`` re-derived one
+    with the ``veridor run`` defaults -- an INCONCLUSIVE verification, exit 2,
+    rendered "Gate passed (exit 0)" -- and ``serve`` listed it as a plain run
+    whose status was computed from findings. Rewritten everywhere it was
+    written, the way ``_record_gate`` does for ``run``.
+    """
+    verdict = adjudication["verdict"]
+    check_id = (loaded.get("claim") or {}).get("check_id")
+    document["capsule"] = {
+        "verdict": verdict,
+        "exit_code": CAPSULE_EXIT_CODES[verdict],
+        "reason": str(adjudication.get("reason") or ""),
+        "check_id": str(check_id) if check_id is not None else "",
+        "path": str(args.capsule),
+    }
+    reproduced = [
+        str(finding.get("id"))
+        for finding in adjudication.get("findings") or ()
+        if finding.get("verdict") == "vulnerable"
+    ]
+    document["gate"] = gate_policy.capsule_gate(
+        verdict, document["capsule"]["reason"], reproduced
+    )
+    persist_run(document, args.output_dir, extra_paths=_json_paths(args))
 
 
 def _run(args: argparse.Namespace) -> int:

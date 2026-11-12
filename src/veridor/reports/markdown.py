@@ -107,8 +107,34 @@ def _fit(
     return "\n".join(out + marker) + "\n"
 
 
+def _capsule_verdict(gate: Mapping[str, Any], capsule: Mapping[str, Any]) -> str:
+    """The verdict line of a capsule verification (``veridor verify``).
+
+    It used to be the ``veridor run`` verdict re-derived from the findings, so
+    an INCONCLUSIVE verification read "Gate passed (exit 0)" over a command
+    that had exited 2. The capsule answers whether one claim reproduced, so it
+    is said in those words, and NOT_REPRODUCED is never worded as a pass: the
+    adjudication's own sentence, which says what it does not establish,
+    follows it.
+    """
+    verdict = capsule.get("verdict")
+    code = gate.get("exit_code")
+    reason = cell(str(capsule.get("reason") or "").strip().rstrip("."))
+    if verdict == "CONFIRMED":
+        return (f"**Capsule CONFIRMED (exit {code}):** the claim reproduced on this "
+                f"target: {reason}.")
+    if verdict == "NOT_REPRODUCED":
+        return (f"**Capsule NOT\\_REPRODUCED (exit {code}):** the claim did not "
+                f"reproduce here: {reason}.")
+    return (f"**Capsule INCONCLUSIVE (exit {code}):** the claim was neither "
+            f"reproduced nor ruled out: {reason}. This is not a pass.")
+
+
 def _verdict(gate: Mapping[str, Any]) -> str:
     code = gate.get("exit_code")
+    capsule = gate.get("capsule")
+    if isinstance(capsule, Mapping):
+        return _capsule_verdict(gate, capsule)
     reasons = list(gate.get("reasons") or ())
     lead = cell(reason_sentence(reasons[0])) if reasons else ""
     quiet = list(gate.get("not_enforced") or ())
@@ -144,6 +170,15 @@ def _verdict(gate: Mapping[str, Any]) -> str:
 
 
 def _policy(gate: Mapping[str, Any]) -> str:
+    capsule = gate.get("capsule")
+    if isinstance(capsule, Mapping):
+        # `verify` takes no --fail-on; naming one would describe a policy
+        # that was never applied.
+        return (
+            f"Capsule verification of check {_code(capsule.get('check_id'))}: "
+            f"{_code('veridor verify')} exits 1 for CONFIRMED, 0 for "
+            "NOT\\_REPRODUCED and 2 for INCONCLUSIVE."
+        )
     flags = [f"--fail-on {gate.get('fail_on')}"]
     if gate.get("require_complete"):
         flags.append("--require-complete")

@@ -48,6 +48,31 @@ function runTone(status, gateExit) {
     : tone;
 }
 
+// A capsule verification (`veridor verify`) exits with the capsule's verdict,
+// not with a gate over findings, and was listed as an ordinary run: its status
+// is computed from findings, so an INCONCLUSIVE verification -- exit 2, nothing
+// established -- read FAILED in red. These say the verdict instead. The exit
+// code each verdict means is checked against the gate's, and anything that
+// does not agree, or a verdict this viewer does not know, is amber: never the
+// green of NOT_REPRODUCED, which itself says "not reproduced", never "safe".
+const CAPSULE_EXIT = { CONFIRMED: 1, NOT_REPRODUCED: 0, INCONCLUSIVE: 2 };
+const CAPSULE_TONE = { CONFIRMED: "danger", NOT_REPRODUCED: "safe", INCONCLUSIVE: "warn" };
+
+function capsuleStatus(capsule, gateExit) {
+  // null for an ordinary run, including every run document written before
+  // `verify` recorded its verdict.
+  if (!capsule || typeof capsule !== "object") return null;
+  const verdict = typeof capsule.verdict === "string" ? capsule.verdict : "";
+  const agrees =
+    Object.prototype.hasOwnProperty.call(CAPSULE_EXIT, verdict) &&
+    CAPSULE_EXIT[verdict] === gateExit;
+  return {
+    verdict,
+    tone: agrees ? CAPSULE_TONE[verdict] : "warn",
+    label: `capsule · ${verdict ? verdict.replace(/_/g, " ") : "no verdict"}`,
+  };
+}
+
 const DECLARATION_SCOPE =
   "Veridor evaluates the expectations you declared. A finding means observed " +
   "behaviour differed from your declaration; it does not establish that the " +
@@ -251,6 +276,8 @@ function matchesFilter(entry) {
     entry.map_id,
     entry.stem,
     entry.status,
+    capsuleStatus(entry.capsule, entry.gate_exit_code)?.label,
+    entry.capsule?.check_id,
     entry.tier === undefined ? "" : `tier ${entry.tier}`,
     targetLabel(entry.target),
   ]
@@ -327,12 +354,15 @@ function renderRuns() {
     } else {
       const top = element("span", "run-top");
       top.append(element("strong", "", entry.run_id));
+      const capsule = capsuleStatus(entry.capsule, entry.gate_exit_code);
       top.append(
-        element(
-          "span",
-          `dot ${runTone(entry.status, entry.gate_exit_code)}`,
-          entry.status,
-        ),
+        capsule
+          ? element("span", `dot ${capsule.tone}`, capsule.label)
+          : element(
+              "span",
+              `dot ${runTone(entry.status, entry.gate_exit_code)}`,
+              entry.status,
+            ),
       );
       button = listButton(entry.run_id, state.selected?.run_id === entry.run_id, [
         top,
@@ -340,7 +370,9 @@ function renderRuns() {
         element(
           "span",
           "run-summary",
-          `${entry.summary?.probes ?? 0} probes · ${entry.summary?.new ?? 0} new`,
+          capsule
+            ? `check ${entry.capsule.check_id ?? "unnamed"} · ${entry.summary?.probes ?? 0} probes`
+            : `${entry.summary?.probes ?? 0} probes · ${entry.summary?.new ?? 0} new`,
         ),
       ]);
       button.addEventListener("click", () => selectRun(entry.run_id));
@@ -463,20 +495,38 @@ function gateBanner(run) {
      the tone comes from runTone(), the same rule the status badge uses -- a run
      the gate failed for a reason that is not a finding stays amber, never red
      and never green. A document without a gate (an old schema) gets no banner
-     rather than a guessed one. */
+     rather than a guessed one. A capsule verification is headed by its verdict
+     and toned by capsuleStatus(): its exit code is the capsule's, and "Gate
+     passes" over NOT_REPRODUCED would say more than one claim not reproducing
+     establishes. */
   const gate = run.gate || {};
   if (!Number.isInteger(gate.exit_code)) return null;
   const summary = run.summary || {};
-  const tone = runTone(run.status, gate.exit_code);
+  const capsule = capsuleStatus(run.capsule, gate.exit_code);
+  const tone = capsule ? capsule.tone : runTone(run.status, gate.exit_code);
   const banner = element("div", `gate-banner ${tone}`);
   const passed = gate.exit_code === 0;
   const head = element("div", "gate-head");
   head.append(
-    element("span", "gate-word", passed ? "Gate passes" : "Gate fails"),
+    element(
+      "span",
+      "gate-word",
+      capsule
+        ? `Capsule ${capsule.verdict ? capsule.verdict.replace(/_/g, " ") : "without a verdict"}`
+        : passed
+          ? "Gate passes"
+          : "Gate fails",
+    ),
     element("span", "gate-exit", `exit ${gate.exit_code}`),
   );
   banner.append(head);
   const facts = [];
+  if (capsule) {
+    facts.push(`check ${run.capsule.check_id ?? "unnamed"}`);
+    if (typeof run.capsule.reason === "string" && run.capsule.reason) {
+      facts.push(run.capsule.reason);
+    }
+  }
   if (summary.vulnerable) {
     const confirmed = summary.confirmed ?? 0;
     facts.push(
@@ -493,7 +543,10 @@ function gateBanner(run) {
     if (summary.resolved) facts.push(`${summary.resolved} resolved since the baseline`);
     if (summary.new) facts.push(`${summary.new} new since the baseline`);
   }
-  const reasons = (gate.reasons || []).filter((reason) => reason.code !== "findings");
+  // A capsule's own reason is the verdict in the head, already said.
+  const reasons = capsule
+    ? []
+    : (gate.reasons || []).filter((reason) => reason.code !== "findings");
   if (!passed && reasons.length) {
     facts.push(`failed for: ${reasons.map((reason) => reason.code).join(", ")}`);
   }
@@ -721,14 +774,17 @@ function renderDetail() {
   const status = fragment.querySelector('[data-field="run-status"]');
   const gate = run.gate || {};
   const gateFailed = Number.isInteger(gate.exit_code) && gate.exit_code !== 0;
-  status.textContent =
-    gateFailed && run.status === "passed"
+  const capsule = capsuleStatus(run.capsule, gate.exit_code);
+  status.textContent = capsule
+    ? capsule.label
+    : gateFailed && run.status === "passed"
       ? `${run.status} · gate exit ${gate.exit_code}`
       : run.status;
   // Three states, not two. `inconclusive` is a run that measured nothing --
   // amber, because a red FAILED badge over a green exit code told a reader the
-  // opposite of what happened, and a green one would be worse.
-  status.classList.add(runTone(run.status, gate.exit_code));
+  // opposite of what happened, and a green one would be worse. A capsule
+  // verification is toned by its verdict, for the same reason.
+  status.classList.add(capsule ? capsule.tone : runTone(run.status, gate.exit_code));
 
   const summary = run.summary;
   const metrics = fragment.querySelector('[data-field="metrics"]');
@@ -760,9 +816,11 @@ function renderDetail() {
   const findingsField = fragment.querySelector('[data-field="findings"]');
   // Said above the findings: the gate failed this run for a reason that is
   // not a finding, so "no active findings" is true and is not a pass.
-  const gateReasons = (gate.reasons || []).filter(
-    (reason) => reason.code !== "findings",
-  );
+  // A capsule verification's reason is its verdict, said on the badge and
+  // the banner; it is not a gate condition to explain here.
+  const gateReasons = capsule
+    ? []
+    : (gate.reasons || []).filter((reason) => reason.code !== "findings");
   if (gateFailed && gateReasons.length) {
     findingsField.append(
       element(

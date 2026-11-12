@@ -258,12 +258,21 @@ def render(document: Mapping[str, Any], *, root: Path | None = None) -> str:
     case = _case(suite, _GATE_CASE, _GATE_CASE)
     exit_code = gate.get("exit_code")
     reasons = list(gate.get("reasons") or ())
-    lines = [
-        f"Veridor gate exit {exit_code} under --fail-on {gate.get('fail_on')}"
-        + (" --require-complete" if gate.get("require_complete") else "")
-        + (" --require-clean-teardown" if gate.get("require_clean_teardown") else "")
-        + "."
-    ]
+    capsule = gate.get("capsule")
+    if isinstance(capsule, Mapping):
+        # `verify` exits with the capsule's verdict and takes no --fail-on;
+        # "under --fail-on None" named a policy that was never applied.
+        lines = [
+            f"Veridor capsule verification of check {capsule.get('check_id')}: "
+            f"{capsule.get('verdict')}, exit {exit_code}. {capsule.get('reason')}"
+        ]
+    else:
+        lines = [
+            f"Veridor gate exit {exit_code} under --fail-on {gate.get('fail_on')}"
+            + (" --require-complete" if gate.get("require_complete") else "")
+            + (" --require-clean-teardown" if gate.get("require_clean_teardown") else "")
+            + "."
+        ]
     if not gate.get("recorded"):
         lines.append(
             "This run document records no gate decision; this one was re-derived "
@@ -320,6 +329,10 @@ def render(document: Mapping[str, Any], *, root: Path | None = None) -> str:
         ("veridor.gate.fail_on", gate.get("fail_on")),
         ("veridor.gate.recorded", "true" if gate.get("recorded") else "false"),
         ("veridor.gate.reasons", ",".join(str(r.get("code")) for r in reasons)),
+        *(
+            (("veridor.capsule.verdict", capsule.get("verdict")),)
+            if isinstance(capsule, Mapping) else ()
+        ),
         ("veridor.scope", declaration_scope),
         ("veridor.pass_scope", pass_scope),
     ):

@@ -1577,6 +1577,20 @@ something you installed.
 
 ### Fixed
 
+- **`report` rendered an INCONCLUSIVE capsule verification as "Gate passed
+  (exit 0)", and `serve` listed it as a failed run.** `verify` wrote the run of
+  the capsule to `--output-dir` as an ordinary run: no gate, no verdict, and a
+  `config` naming a temporary file deleted before the command returned. The
+  verdict and its exit code existed only on stdout, so `report --from-run`
+  re-derived a gate with the `run` defaults (a `500` grades `inconclusive`,
+  which they do not gate on) and `serve` coloured the row from the status the
+  findings give. `verify` now writes `capsule` (verdict, exit code, reason,
+  check, capsule path) and a `gate` whose exit code is the verdict's into
+  `latest.json`, `runs/` and `--json`, and names the capsule as `config`.
+  Every report format leads with the verdict, `serve` shows
+  `capsule · INCONCLUSIVE` (amber), `CONFIRMED` (red) or `NOT REPRODUCED`, and
+  a document whose verdict, exit code and gate disagree is refused with exit
+  `2`. Run documents without `capsule` render as before.
 - **`serve` could sit unreachable for about 35s on a Mac whose hostname does
   not resolve.** `http.server` looks up the server's own name after `bind()`
   and before `listen()`; where that lookup stalls (every GitHub-hosted macOS

@@ -2231,6 +2231,167 @@ class VerifyFlagTest(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), _v010_capsule())
 
 
+def _failing_handler(method, path, authorization):
+    """The demo target, vulnerable, whose handler fails for the outsider.
+
+    The shape of the verification that rendered "Gate passed (exit 0)": the
+    claimed identity's probe draws a 500, which grades inconclusive -- not a
+    finding the default ``--fail-on`` policy gates on -- so re-deriving a gate
+    from the findings passed what `verify` had exited 2 on.
+    """
+    if path == "/api/invoices/inv-100" and authorization == "Bearer outsider-token":
+        return 500, {"error": "internal"}
+    return _demo_target(vulnerable=True)(method, path, authorization)
+
+
+#: The three verdicts, each with the target that draws it and its exit code.
+_VERDICT_TARGETS = (
+    ("CONFIRMED", 1, _demo_target(vulnerable=True)),
+    ("NOT_REPRODUCED", 0, _demo_target(vulnerable=False)),
+    ("INCONCLUSIVE", 2, _failing_handler),
+)
+
+
+class VerifyRecordsItsVerdictTest(unittest.TestCase):
+    """What `verify` writes says what `verify` exited with.
+
+    The verdict existed only on stdout. `verify` persisted the run of the
+    capsule through execute_run as an ordinary run: no gate, no verdict, and
+    `config` naming a temporary file deleted before the command returned. So
+    `report --from-run .veridor/latest.json` re-derived a gate with the `run`
+    defaults and printed "Gate passed (exit 0)" over an INCONCLUSIVE
+    verification that had exited 2, and `serve` listed it as a plain run.
+    """
+
+    def _verify(self, answer) -> dict:
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        path = root / "proof.json"
+        path.write_text(json.dumps(_v010_capsule()), encoding="utf-8")
+        out = root / "out"
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.dict(os.environ, VERIFIER_ENV), \
+                patch.object(core, "_OPENER", _TargetOpener(answer)):
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                code = veridor_main(["verify", str(path), "--output-dir", str(out),
+                                     "--json", str(root / "run.json")])
+        latest = (out / "latest.json").read_text(encoding="utf-8")
+        history = list((out / "runs").glob("*.json"))
+        self.assertEqual(len(history), 1)
+        return {
+            "code": code, "path": str(path), "root": root, "latest_path": out / "latest.json",
+            "latest_text": latest, "latest": json.loads(latest),
+            "history": json.loads(history[0].read_text(encoding="utf-8")),
+            "json": json.loads((root / "run.json").read_text(encoding="utf-8")),
+            "output": stdout.getvalue() + stderr.getvalue(),
+        }
+
+    def _report(self, path: Path, fmt: str) -> tuple[int, str]:
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = veridor_main(["report", "--from-run", str(path), "--format", fmt])
+        return code, stdout.getvalue() + stderr.getvalue()
+
+    def test_every_verdict_is_written_with_the_exit_code_verify_returned(self) -> None:
+        for verdict, exit_code, answer in _VERDICT_TARGETS:
+            with self.subTest(verdict=verdict):
+                result = self._verify(answer)
+                self.assertEqual(result["code"], exit_code, result["output"])
+                self.assertIn(f"Veridor capsule — {verdict}", result["output"])
+                for where in ("latest", "history", "json"):
+                    document = result[where]
+                    self.assertEqual(document["capsule"]["verdict"], verdict, where)
+                    self.assertEqual(document["capsule"]["exit_code"], exit_code, where)
+                    self.assertEqual(document["capsule"]["check_id"],
+                                     "invoice-tenant-isolation")
+                    self.assertEqual(document["gate"]["exit_code"], exit_code, where)
+                    self.assertIsNone(document["gate"]["fail_on"])
+                    # The capsule that ran, not the temporary config execute_run
+                    # loaded, which no longer exists.
+                    self.assertEqual(document["config"], result["path"], where)
+                    self.assertEqual(document["capsule"]["path"], result["path"], where)
+                self.assertNotIn("capsule-config.json", result["latest_text"])
+                self.assertEqual(result["latest"], result["history"])
+                core.validate_run(result["latest"], source="latest.json")
+
+    def test_report_renders_the_verdict_and_never_a_pass_over_inconclusive(self) -> None:
+        rendered = {}
+        for verdict, exit_code, answer in _VERDICT_TARGETS:
+            result = self._verify(answer)
+            code, text = self._report(result["latest_path"], "markdown")
+            self.assertEqual(code, 0, text)
+            rendered[verdict] = (exit_code, text, result)
+        inconclusive = rendered["INCONCLUSIVE"][1]
+        self.assertIn("**Capsule INCONCLUSIVE (exit 2):**", inconclusive)
+        self.assertIn("This is not a pass.", inconclusive)
+        self.assertIn("HTTP 500", inconclusive)
+        self.assertNotIn("passed", inconclusive)
+        # Re-derived from the findings alone this was "Gate passed": the 500
+        # graded inconclusive, which the default policy does not gate on.
+        self.assertNotIn("re-derived", inconclusive)
+        confirmed = rendered["CONFIRMED"][1]
+        self.assertIn("**Capsule CONFIRMED (exit 1):** the claim reproduced", confirmed)
+        not_reproduced = rendered["NOT_REPRODUCED"][1]
+        verdict_line = next(line for line in not_reproduced.splitlines()
+                            if line.startswith("**Capsule"))
+        self.assertIn("NOT\\_REPRODUCED (exit 0)", verdict_line)
+        self.assertIn("not proof the boundary is enforced", verdict_line)
+        for word in ("passed", "safe", "secure", "verified"):
+            self.assertNotIn(word, verdict_line.lower())
+        for verdict, (exit_code, text, _) in rendered.items():
+            with self.subTest(verdict=verdict):
+                self.assertIn("`veridor verify` exits 1 for CONFIRMED", text)
+                self.assertNotIn("--fail-on", text)
+                self.assertNotIn("**Gate", text)
+
+        # JUnit: the gate case fails exactly when verify did not exit 0.
+        for verdict, (exit_code, _, result) in rendered.items():
+            with self.subTest(verdict=verdict, fmt="junit"):
+                code, xml = self._report(result["latest_path"], "junit")
+                self.assertEqual(code, 0, xml)
+                self.assertIn(f'name="veridor.capsule.verdict" value="{verdict}"', xml)
+                self.assertEqual(f'type="exit-{exit_code}"' in xml, exit_code != 0, xml)
+                self.assertNotIn("--fail-on None", xml)
+
+    def test_a_capsule_document_that_disagrees_with_itself_is_refused(self) -> None:
+        """An edited verdict, exit code or gate is refused rather than rendered:
+        the one thing a reader must not get is a pass the command never gave."""
+        result = self._verify(_failing_handler)
+        edits = {
+            "verdict softened": lambda d: d["capsule"].update(verdict="NOT_REPRODUCED"),
+            "exit code softened": lambda d: d["capsule"].update(exit_code=0),
+            "gate removed": lambda d: d.pop("gate"),
+            "gate softened": lambda d: d["gate"].update(exit_code=0, reasons=[]),
+            "unknown verdict": lambda d: d["capsule"].update(verdict="PROBABLY_FINE"),
+        }
+        path = result["root"] / "edited.json"
+        control = dict(result["latest"])
+        path.write_text(json.dumps(control), encoding="utf-8")
+        code, text = self._report(path, "markdown")
+        self.assertEqual(code, 0, text)
+        for name, edit in edits.items():
+            with self.subTest(edit=name):
+                document = json.loads(result["latest_text"])
+                edit(document)
+                path.write_text(json.dumps(document), encoding="utf-8")
+                code, text = self._report(path, "markdown")
+                self.assertEqual(code, 2, text)
+                self.assertNotIn("passed", text)
+
+    def test_serve_lists_the_verdict_and_an_ordinary_run_lists_none(self) -> None:
+        from veridor import server
+
+        result = self._verify(_failing_handler)
+        summary = server._run_summary(result["latest"])
+        self.assertEqual(summary["capsule"],
+                         {"verdict": "INCONCLUSIVE", "check_id": "invoice-tenant-isolation"})
+        self.assertEqual(summary["gate_exit_code"], 2)
+        ordinary = dict(result["latest"])
+        del ordinary["capsule"]
+        self.assertIsNone(server._run_summary(ordinary)["capsule"])
+
+
 class WriterNamesTest(unittest.TestCase):
     """`veridor capsule` must write what `veridor verify` accepts."""
 

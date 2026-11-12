@@ -1833,6 +1833,9 @@ made one and cut at 600 characters (the file keeps all of it), and every other
 capsule value is cut at 120, so capsule text takes a few rows at most.
 
 `CONFIRMED` exits `1`, `NOT_REPRODUCED` exits `0`, `INCONCLUSIVE` exits `2`.
+`verify` writes the run of the capsule under `--output-dir` (`.veridor/` by
+default) with the verdict and that exit code in it, so `report --from-run`
+leads with the verdict and `serve` lists the run as `capsule · VERDICT`.
 `NOT_REPRODUCED` needs a measurement behind it: every identity the check names
 was answered with a status the capsule declares, every marker the check grades
 was observed where it had to be, and `liveness.unproven` names no denial on the

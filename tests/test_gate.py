@@ -217,6 +217,28 @@ class DecisionTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             gate.evaluate(scenarios()["clean"], fail_on="new-and-confirmed")
 
+    def test_the_capsule_reasons_make_no_claim_and_keep_the_verdict(self) -> None:
+        """`veridor verify` writes these; `run`'s precedence never sees them."""
+        for code, text in gate.CAPSULE_REASON_TEXT.items():
+            for word in BANNED_CLAIM_WORDS:
+                with self.subTest(code=code, word=word):
+                    self.assertNotIn(word, text.lower())
+            self.assertNotIn(code, gate.REASON_CODES)
+        self.assertEqual(gate.capsule_gate("INCONCLUSIVE", "a 500.")["exit_code"], 2)
+        self.assertEqual(gate.capsule_gate("CONFIRMED", "x", ["f1"])["reasons"][0]["finding_ids"],
+                         ["f1"])
+        passed = gate.capsule_gate("NOT_REPRODUCED", "held")
+        self.assertEqual((passed["exit_code"], passed["reasons"]), (0, []))
+        self.assertIsNone(passed["fail_on"])
+        # A CONFIRMED capsule is about the target; INCONCLUSIVE is not, so
+        # every report renders it as unmeasured rather than as a finding.
+        self.assertIn(gate.CAPSULE_CONFIRMED, gate.FINDING_REASON_CODES)
+        self.assertNotIn(gate.CAPSULE_INCONCLUSIVE, gate.FINDING_REASON_CODES)
+        self.assertEqual(
+            gate.describe({"code": gate.CAPSULE_INCONCLUSIVE, "detail": "it drew a 500."}),
+            gate.CAPSULE_REASON_TEXT[gate.CAPSULE_INCONCLUSIVE] + ": it drew a 500",
+        )
+
     def test_the_reason_text_makes_no_claim(self) -> None:
         texts = [(code, text) for code, text in gate.REASON_TEXT.items()]
         texts += [(code, text) for code, pair in gate.REASON_COUNTED.items() for text in pair]

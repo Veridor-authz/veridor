@@ -91,6 +91,24 @@ flags, with the flag that would gate it.
 | `inconclusive` | 3 | `--require-complete` and a probe or step came back `inconclusive` |
 | `liveness_unproven` | 3 | `--require-complete` (and a policy other than `none`) and a denial-only expectation, held by an identity that presents a credential in a check where some identity was served (for a sequence assert step: a static credential header, in a sequence where some identity was served), did not establish who was denied: the identity was not proven live elsewhere in the run (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`), and either a fabricated credential received the same denial, or none was sent to compare with (on a write, which never carries one, on a sequence step, or because no identity declares a credential header to shape one on: only `GET`, `HEAD` and `OPTIONS` requests get one), or its request failed or drew neither a refusal nor a success |
 
+`veridor verify` writes the same object beside a `capsule` one, and its exit
+code is the capsule's verdict rather than a `--fail-on` decision, so
+`fail_on` is `null`:
+
+```json
+"capsule": {"verdict": "INCONCLUSIVE", "exit_code": 2, "reason": "...",
+            "check_id": "invoice-tenant-isolation", "path": "proof.json"},
+"gate": {"fail_on": null, "exit_code": 2, "not_enforced": [],
+         "reasons": [{"code": "capsule_inconclusive", "exit_code": 2, "detail": "..."}]}
+```
+
+`CONFIRMED` is `capsule_confirmed` (exit `1`, a reason about the target, with
+the reproduced `finding_ids`), `INCONCLUSIVE` is `capsule_inconclusive` (exit
+`2`, a non-zero exit that is not a finding), and `NOT_REPRODUCED` is exit `0`
+with no reason. Each format leads with the verdict instead of a policy. A
+document whose verdict, `exit_code` and gate disagree is refused with exit
+`2`, never rendered.
+
 A run document written without `veridor run` has no recorded decision. Each format then re-derives one with
 the CLI defaults and says so; the job may have used other flags, and its own
 exit code decides.

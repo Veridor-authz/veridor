@@ -59,6 +59,12 @@ _MAP_PARTS = {
 _DRIFT_PART = "drift"
 
 
+def _capsule_summary(capsule: object) -> dict | None:
+    if not isinstance(capsule, dict):
+        return None
+    return {"verdict": capsule.get("verdict"), "check_id": capsule.get("check_id")}
+
+
 def _run_summary(run: dict) -> dict:
     gate = run.get("gate")
     return {
@@ -70,6 +76,10 @@ def _run_summary(run: dict) -> dict:
         # list coloured that row green from `status`; the exit code is what
         # tells the two apart. None for a run written without a gate.
         "gate_exit_code": gate.get("exit_code") if isinstance(gate, dict) else None,
+        # A capsule verification (`veridor verify`) was listed as an ordinary
+        # run, its findings-derived status the only word on the row: an
+        # INCONCLUSIVE verification read FAILED. None for an ordinary run.
+        "capsule": _capsule_summary(run.get("capsule")),
         "target": run.get("target"),
         "summary": run.get("summary", {}),
     }
