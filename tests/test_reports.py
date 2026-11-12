@@ -26,6 +26,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 import re
 import sys
 import tempfile
@@ -1603,6 +1604,50 @@ class ReportCommandTest(unittest.TestCase):
                 code, _, stderr = _capture(["report", *extra])
                 self.assertEqual(code, 2)
                 self.assertIn(message, stderr)
+
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root writes through 0555")
+    def test_an_unwritable_output_names_the_output_path(self) -> None:
+        """REGRESSION. Into a read-only directory, `report --output ro/j.xml`
+        printed ``[Errno 13] Permission denied: 'ro/.j.xml.42f6df0f81e22ee1.tmp'``:
+        the temporary sibling write_text creates first, never the path the
+        operator typed."""
+        locked = self.root / "ro"
+        locked.mkdir()
+        locked.chmod(0o555)
+        # Not addCleanup: tearDown removes the tree first, and TemporaryDirectory
+        # already restores permissions on the way out.
+        for target, where in ((locked / "j.xml", "writing into its parent directory"),
+                              (locked / "new" / "j.xml", "creating its parent directory")):
+            with self.subTest(target=target):
+                code, _, stderr = _capture(["report", "--from-run", str(self.run_json),
+                                            "--format", "junit", "--output", str(target)])
+                self.assertEqual(code, 2, stderr)
+                self.assertIn(f"could not write the JUnit report to {target}", stderr)
+                self.assertIn("Permission denied", stderr)
+                self.assertIn(where, stderr)
+                self.assertNotIn(".tmp", stderr)
+                self.assertNotIn("[Errno", stderr)
+                self.assertFalse(target.exists())
+        # Control: the same command into a writable directory writes the file.
+        locked.chmod(0o755)
+        code, stdout, stderr = _capture(["report", "--from-run", str(self.run_json),
+                                         "--format", "junit", "--output",
+                                         str(locked / "j.xml")])
+        self.assertEqual(code, 0, stderr)
+        self.assertIn("Wrote JUnit report", stdout)
+
+    def test_a_failed_write_after_a_run_names_the_report_path(self) -> None:
+        """`run --report` reached the same raw OSError when a write failed after
+        the preflight (a full disk), temporary file name included."""
+        target = self.root / "r.xml"
+        temporary = self.root / ".r.xml.0123456789abcdef.tmp"
+        full = OSError(28, "No space left on device", str(temporary))
+        message = cli._write_failure("the junit report", target, full)
+        self.assertIn(f"could not write the junit report to {target}", message)
+        self.assertIn("No space left on device", message)
+        self.assertNotIn(temporary.name, message)
+        self.assertNotIn("uid:gid", message, "not a permission problem")
 
 
 class RunReportFlagTest(unittest.TestCase):

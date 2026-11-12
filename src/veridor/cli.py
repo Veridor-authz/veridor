@@ -1460,6 +1460,36 @@ def _relative_to(where: Path, path: Path) -> str:
     return str(where)
 
 
+def _write_failure(what: str, path: Path, error: OSError) -> str:
+    """Say which output could not be written, and why, in the operator's terms.
+
+    ``reports.write_text`` writes a temporary sibling first and renames it over
+    ``path``, so the OSError it raises names that sibling, or a parent directory
+    it tried to create. Printed raw, `report --output ro/j.xml` into a read-only
+    directory said ``[Errno 13] Permission denied: 'ro/.j.xml.42f6df0f81e22ee1.tmp'``:
+    a file the operator never named, and no word about the one they did.
+    """
+    reason = error.strerror or str(error)
+    message = f"could not write {what} to {_shown(path)}: {reason}"
+    failed = error.filename
+    if failed is not None:
+        failed = Path(os.fsdecode(failed))
+        temporary = (
+            failed.parent == path.parent
+            and failed.name.startswith(f".{path.name}.")
+            and failed.name.endswith(".tmp")
+        )
+        if temporary:
+            message += f" (writing into {_relative_to(path.parent, path)})"
+        elif failed in path.parents:
+            message += f" (creating {_relative_to(failed, path)})"
+        elif failed != path:
+            message += f" (at {failed})"
+    if isinstance(error, PermissionError):
+        message += f", as uid:gid {_effective_ids()}"
+    return f"{message}. Nothing was written to {path}."
+
+
 def _probe_directory(directory: Path) -> tuple[str, Path, OSError] | None:
     """Create ``directory`` if needed and write, then remove, one file in it.
 
@@ -2162,7 +2192,7 @@ def _write_run_reports(
         except OSError as error:
             failed = True
             print(
-                f"veridor: could not write the {fmt} report to {path}: {error}",
+                f"veridor: {_write_failure(f'the {fmt} report', path, error)}",
                 file=sys.stderr,
             )
             continue
@@ -3770,7 +3800,12 @@ def _report(args: argparse.Namespace) -> int:
         sys.stdout.write(text)
         sys.stdout.flush()
         return 0
-    reports.write_text(destination, text)
+    try:
+        reports.write_text(destination, text)
+    except OSError as error:
+        raise ConfigError(
+            _write_failure(f"the {reports.LABELS[fmt]} report", destination, error)
+        ) from error
     print(f"Wrote {reports.LABELS[fmt]} report to {destination}")
     return 0
 

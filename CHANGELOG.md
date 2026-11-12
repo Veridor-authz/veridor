@@ -1577,6 +1577,13 @@ something you installed.
 
 ### Fixed
 
+- **`report --output` into a directory it cannot write named a file nobody
+  typed.** It printed `[Errno 13] Permission denied:
+  'ro/.j.xml.42f6df0f81e22ee1.tmp'`, the temporary sibling the atomic write
+  creates first. It now says it could not write the report to the `--output`
+  path, the reason, whether it failed writing into or creating the parent
+  directory, and the uid:gid for a permission error, and exits `2`. A `run
+  --report` write that fails after the run (a full disk) says the same.
 - **The Action's drift-mode exit-3 annotation said "no drift was found" over
   a report listing 12 changes.** A baseline recorded with the target down,
   compared with a live run, gains a measurement on every cell, so the report
