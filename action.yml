@@ -656,7 +656,7 @@ runs:
           2) echo "::error title=Veridor refused::Veridor exited 2: it refused its configuration or inputs, or could not write an output, before a verdict. The reason is in this step's log." >&2 ;;
           3)
             if [[ "$INPUT_MODE" == drift ]]; then
-              echo "::error title=Veridor gate incomplete::Veridor exited 3: no drift was found, but the comparison measured too little to be a pass: no cell was measured in both this run and the baseline (a baseline recorded while the target was down is the usual cause), this run's matrix measured nothing, or, with require-complete, a probed cell went unmeasured. The reason is in this step's log." >&2
+              echo "::error title=Veridor gate incomplete::Veridor exited 3: the drift gate did not fire, but the comparison measured too little to be a pass: no cell was measured in both this run and the baseline (a baseline recorded while the target was down is the usual cause), this run's matrix measured nothing, or, with require-complete, a probed cell went unmeasured. Changes may still be listed: cells measured in only one of the two runs, or changes fail-on-drift does not gate on. The reason is in this step's log." >&2
             else
               echo "::error title=Veridor gate incomplete::Veridor exited 3: the security gate passed but something was not measured (an unanswered probe, nothing answered at all, an unauthenticated identity, an unclean teardown, or with require-complete an unproven denial: a denial-only expectation no evidence ties to a live credential). The reason is in this step's log. That is not a pass." >&2
             fi

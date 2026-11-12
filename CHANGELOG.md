@@ -1577,6 +1577,13 @@ something you installed.
 
 ### Fixed
 
+- **The Action's drift-mode exit-3 annotation said "no drift was found" over
+  a report listing 12 changes.** A baseline recorded with the target down,
+  compared with a live run, gains a measurement on every cell, so the report
+  lists those changes while no cell was measured in both runs and `map` exits
+  `3`. The annotation now says the drift gate did not fire and that changes may
+  still be listed: cells measured in only one run, or changes `fail-on-drift`
+  does not gate on.
 - **`mutate` with its target down printed `Mutation score: 0.00`.** Every
   generated mutant errored, and an errored mutant sits in the denominator as a
   miss, so the score was `0 / 13`: a measured failure of checks that were never
