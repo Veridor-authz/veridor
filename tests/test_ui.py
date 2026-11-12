@@ -904,7 +904,7 @@ const text = (n) => [n.textContent, ...(n.children || []).map(text)].filter(Bool
 
 _ROUTE_HARNESS = _APP_HARNESS_PRELUDE + r"""
 const code = ["routeFromHash", "writeHash", "applyRoute", "loadRuns", "selectRun",
-              "selectMap", "selectMutation", "boot"].map(grab).join("\n");
+              "selectMap", "selectMutation", "switchVerb", "boot"].map(grab).join("\n");
 const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
                 maps: [{ map_id: "M-new" }, { map_id: "M-old" }],
                 mutations: [{ stem: "U-new" }] };
@@ -912,10 +912,17 @@ const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
   const out = [];
   for (const hash of JSON.parse(process.argv[2])) {
     const location = { hash };
+    const tabs = ["run", "map", "mutate"].map((verb) => ({ dataset: { verb }, attrs: {},
+      setAttribute(k, v) { this.attrs[k] = v; } }));
+    const heading = { textContent: "Run history" };
     const context = {
+      headingElement: heading, noMatchesElement: {}, emptyElement: {}, detailElement: { replaceChildren() {} },
+      placeholder: () => ({}),
+      VERB_LABELS: { run: { heading: "Run history", empty: "" }, map: { heading: "Map history", empty: "" },
+                     mutate: { heading: "Mutation history", empty: "" } },
       location, loadedAt: 0, Date, CSS: { escape: (x) => x },
       history: { replaceState(_s, _t, path) { location.hash = path; } },
-      document: { querySelector: () => null },
+      document: { querySelector: () => null, querySelectorAll: () => tabs },
       filterElement: { value: "" },
       state: { verb: "run", runs: [], maps: [], mutations: [], selected: null,
                activeDiff: "new", filter: "", pendingRoute: null },
@@ -934,7 +941,9 @@ const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
     vm.runInContext(code, context);
     await vm.runInContext("boot()", context);
     const sel = context.state.selected || {};
-    out.push({ shown: sel.run_id || sel.map_id || sel.stem || null, hash: location.hash });
+    const selectedTab = tabs.find((t) => t.attrs["aria-selected"] === "true");
+    out.push({ shown: sel.run_id || sel.map_id || sel.stem || null, hash: location.hash,
+               tab: selectedTab ? selectedTab.dataset.verb : "run", heading: heading.textContent });
   }
   console.log(JSON.stringify(out));
 })().catch((e) => { console.error(e); process.exit(1); });
@@ -1003,13 +1012,17 @@ class LinkOnLoadTest(unittest.TestCase):
         shown = _run_node(_ROUTE_HARNESS, [
             "#/run/R-old", "#/map/M-old", "", "#/run/R-missing",
         ])
-        self.assertEqual(shown[0], {"shown": "R-old", "hash": "#/run/R-old"})
-        self.assertEqual(shown[1], {"shown": "M-old", "hash": "#/map/M-old"})
+        run_view = {"tab": "run", "heading": "Run history"}
+        self.assertEqual(shown[0], {"shown": "R-old", "hash": "#/run/R-old", **run_view})
+        # A map link shows the map under the map tab and heading, not under
+        # "run" (the state flipped while the screen did not).
+        self.assertEqual(shown[1], {"shown": "M-old", "hash": "#/map/M-old",
+                                    "tab": "map", "heading": "Map history"})
         # Control: no link still opens the newest run.
-        self.assertEqual(shown[2], {"shown": "R-new", "hash": "#/run/R-new"})
+        self.assertEqual(shown[2], {"shown": "R-new", "hash": "#/run/R-new", **run_view})
         # A link to an entry that is not there falls back to the newest, and
         # the hash then names what is shown rather than what was asked for.
-        self.assertEqual(shown[3], {"shown": "R-new", "hash": "#/run/R-new"})
+        self.assertEqual(shown[3], {"shown": "R-new", "hash": "#/run/R-new", **run_view})
 
 
 @slow("runs app.js under node in a subprocess")

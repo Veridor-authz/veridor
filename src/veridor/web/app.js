@@ -205,6 +205,14 @@ function showSkeleton() {
 
 function selectVerb(verb) {
   if (state.verb === verb) return;
+  switchVerb(verb);
+  loadRuns();
+}
+
+// Everything a change of verb changes on screen, for a tab click and for a
+// link alike. A link that opened a map used to flip state.verb alone, so the
+// map was drawn under the "run" tab and a "Run history" heading.
+function switchVerb(verb) {
   state.verb = verb;
   state.selected = null;
   // A filter typed against runs means nothing against maps, and silently
@@ -220,7 +228,6 @@ function selectVerb(verb) {
   }
   detailElement.replaceChildren(placeholder(verb));
   showSkeleton();
-  loadRuns();
 }
 
 // ------------------------------------------------------------------ list
@@ -1459,10 +1466,7 @@ async function applyRoute() {
   const verb = { run: "run", map: "map", mutate: "mutate" }[route.kind];
   if (!verb) return;
   if (state.verb !== verb) {
-    state.verb = verb;
-    state.selected = null;
-    state.filter = "";
-    filterElement.value = "";
+    switchVerb(verb);
     await loadRuns();
   }
   if (verb === "run") await selectRun(route.id, { fromHash: true });
