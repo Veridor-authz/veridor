@@ -13,6 +13,7 @@ import ipaddress
 import json
 import math
 import os
+import posixpath
 import re
 import secrets
 import socket
@@ -4869,6 +4870,65 @@ _DENIAL_REMEDIATION: str = (
     "is wrong, correct the configuration instead."
 )
 
+#: 401 and 407 are authentication statuses: the likeliest reason a declared
+#: grant drew one is the credential the runner sent, not the boundary. A
+#: rotated token produced four unexpected denials whose advice named a route,
+#: a feature and an over-restriction -- everything except the token.
+_CREDENTIAL_STATUSES = frozenset({401, 407})
+
+_CREDENTIAL_DENIAL_REMEDIATION: str = (
+    "Confirm the declared status is the outcome you intend for this identity. "
+    "If it is, investigate why the target refused this request -- an absent "
+    "route, an unshipped feature, an over-restriction, or an expired/invalid "
+    "credential. If the declaration is wrong, correct the configuration "
+    "instead."
+)
+
+
+def denial_remediation(status: int | None) -> str:
+    """The remediation for an unexpected denial, by the status that drew it."""
+    if status in _CREDENTIAL_STATUSES:
+        return _CREDENTIAL_DENIAL_REMEDIATION
+    return _DENIAL_REMEDIATION
+
+
+def credential_suspects(result: Mapping[str, Any]) -> list[str]:
+    """Identities refused with 401/407 on every request they were answered on.
+
+    Counted over everything the identity sent -- check probes, its
+    marker_probe, and sequence steps -- because one 200 anywhere proves the
+    credential worked. An identity whose refusals were all DECLARED (an
+    anonymous caller expected to draw 401) is not named: only one with at
+    least one unexpected_denial is. A request that drew no status (transport
+    error, never sent) says nothing either way and is skipped, never counted
+    as a refusal. This is a hint, not a verdict: no grade or exit code reads it.
+    """
+    statuses: dict[str, list[int]] = {}
+
+    def note(identity: Any, response: Any) -> None:
+        status = response.get("status") if isinstance(response, Mapping) else None
+        if isinstance(identity, str) and isinstance(status, int):
+            statuses.setdefault(identity, []).append(status)
+
+    for probe in result.get("probes") or ():
+        note(probe.get("identity"), probe.get("response"))
+    for control in result.get("marker_controls") or ():
+        note(control.get("identity"), control.get("response"))
+    for record in result.get("sequences") or ():
+        for step in (record.get("steps") or []) + list(record.get("teardown") or ()):
+            note(step.get("as"), step.get("response"))
+    denied = {
+        finding.get("identity")
+        for finding in result.get("findings") or ()
+        if finding.get("verdict") == "unexpected_denial"
+    }
+    return sorted(
+        identity
+        for identity, seen in statuses.items()
+        if identity in denied and all(status in _CREDENTIAL_STATUSES for status in seen)
+    )
+
+
 _LEAK_REMEDIATION: str = (
     "Confirm your declaration that this identity must not receive the other "
     "identity's data. If it holds, remove that data from this response, "
@@ -5330,7 +5390,8 @@ def _grade_check(
                     "message": message,
                     **base,
                     "remediation": (
-                        _DENIAL_REMEDIATION if refused else _AUTHZ_REMEDIATION
+                        denial_remediation(actual_status)
+                        if refused else _AUTHZ_REMEDIATION
                     ),
                 }
             )
@@ -7129,6 +7190,30 @@ def _vacuous_fingerprint(entry: Mapping[str, Any]) -> str:
     return digest.hexdigest()[:20]
 
 
+def _sarif_artifact_location(location: Any) -> dict[str, str]:
+    """Where a SARIF result points: the config, relative to the source root.
+
+    ``--config /abs/path/veridor.json`` used to be written into
+    ``artifactLocation.uri`` verbatim. Code scanning resolves that against the
+    repository, matches nothing, and the uploaded file publishes the runner's
+    home directory and checkout layout to everyone who can read the alert.
+    An absolute path is made relative to the working directory, where the
+    workflow runs; one outside it is reduced to its file name, so a local path
+    is never written. ``uriBaseId`` says what the relative uri is relative to.
+    Fingerprints are untouched: no finding id reads the location.
+    """
+    text = str(location or "")
+    if not text:
+        return {"uri": ""}
+    path = Path(text)
+    if path.is_absolute():
+        try:
+            path = path.resolve().relative_to(Path.cwd().resolve())
+        except (OSError, ValueError):
+            path = Path(path.name)
+    return {"uri": posixpath.normpath(path.as_posix()), "uriBaseId": "%SRCROOT%"}
+
+
 def _sarif_line(finding: Mapping[str, Any]) -> int:
     """The config line this finding graded, or 1 when it is not known.
 
@@ -7186,6 +7271,16 @@ def to_sarif(result: dict[str, Any]) -> dict[str, Any]:
     # the reader never sees the run summary -- so the limit travels with the
     # rule, not only with the run.
     interpretation = result.get("interpretation") or _interpretation()
+    # The same config path rides along in the interpretation block, so it gets
+    # the same treatment as artifactLocation: the run document keeps what the
+    # operator typed, the SARIF never carries a local absolute path.
+    if interpretation.get("policy_source"):
+        interpretation = {
+            **interpretation,
+            "policy_source": _sarif_artifact_location(
+                interpretation["policy_source"]
+            )["uri"],
+        }
     rules = {
         "VERIDOR-AUTHZ-001": {
             "id": "VERIDOR-AUTHZ-001",
@@ -7366,7 +7461,7 @@ def to_sarif(result: dict[str, Any]) -> dict[str, Any]:
                 "locations": [
                     {
                         "physicalLocation": {
-                            "artifactLocation": {"uri": location},
+                            "artifactLocation": _sarif_artifact_location(location),
                             "region": {"startLine": _sarif_line(finding)},
                         }
                     }
@@ -7422,7 +7517,9 @@ def to_sarif(result: dict[str, Any]) -> dict[str, Any]:
                 "locations": [
                     {
                         "physicalLocation": {
-                            "artifactLocation": {"uri": str(result.get("config", ""))},
+                            "artifactLocation": _sarif_artifact_location(
+                                result.get("config")
+                            ),
                             "region": {"startLine": 1},
                         }
                     }

@@ -52,6 +52,7 @@ from veridor.core import (
     _proxy_sentence,
     _validate_http_url,
     announce_proxy,
+    credential_suspects,
     execute_run,
     generate_marker,
     load_config,
@@ -1118,6 +1119,16 @@ def _print_summary(result: dict) -> None:
                 "every entry above is a probe that did not run, not a finding "
                 "about your target."
             )
+    # One line per identity the target refused on every request it answered,
+    # with 401 or 407. Four unexpected denials for one rotated token read as
+    # four boundary problems; the shared cause is the credential, and nothing
+    # in the summary said so. A hint only: the verdicts above are unchanged.
+    for identity in credential_suspects(result):
+        print(
+            f"Credential: {terminal_text(identity)} was refused with 401/407 on "
+            "every request it sent, so its credential looks expired or invalid "
+            "-- check the VERIDOR_* variable that supplies it."
+        )
     unproven = _unproven_liveness(result)
     if unproven:
         print(
@@ -3374,11 +3385,38 @@ def _starter_config(
                 f"Replace {', '.join(tokens)} with a concrete resource owned by "
                 f"'{_OWNER_IDENTITY}'; Veridor sends this path verbatim."
             )
-        notes.append(
-            f"State what this operation promises: '{_OWNER_IDENTITY}' allowed, "
-            f"'{_CHALLENGER_IDENTITY}' denied. Delete the check if this operation "
-            "has no per-identity authorization boundary."
-        )
+        expect: dict[str, Any] = {
+            _OWNER_IDENTITY: {
+                "status": list(_OWNER_STATUSES.get(operation.method, [200]))
+            },
+        }
+        if operation.public:
+            # A denial the spec itself contradicts. `security: []` says anyone
+            # may call this, so 'other_tenant denied' was a guaranteed red
+            # finding against a correct target -- and, read as a scaffold
+            # guess, it taught the operator the wrong policy. A check needs
+            # two identities, so the challenger gets a placeholder accepting
+            # both access and denial: `run` reports it as asserting nothing,
+            # and coverage never counts it as a denial.
+            expect[_CHALLENGER_IDENTITY] = {
+                "status": sorted(
+                    set(expect[_OWNER_IDENTITY]["status"]) | set(_DENIAL_STATUSES)
+                )
+            }
+            notes.append(
+                "The specification marks this operation public (security: []), "
+                f"so no denial is scaffolded for '{_CHALLENGER_IDENTITY}': its "
+                "expectation accepts both access and denial and asserts "
+                "nothing. Narrow it only if this operation does have a "
+                "per-identity authorization boundary; otherwise delete the check."
+            )
+        else:
+            expect[_CHALLENGER_IDENTITY] = {"status": list(_DENIAL_STATUSES)}
+            notes.append(
+                f"State what this operation promises: '{_OWNER_IDENTITY}' allowed, "
+                f"'{_CHALLENGER_IDENTITY}' denied. Delete the check if this operation "
+                "has no per-identity authorization boundary."
+            )
         if operation.deprecated:
             notes.append("The specification marks this operation deprecated.")
         checks.append(
@@ -3387,14 +3425,7 @@ def _starter_config(
                 "name": f"{operation.method} {path}",
                 "_comment": " ".join(notes),
                 "request": {"method": operation.method, "path": path},
-                "expect": {
-                    _OWNER_IDENTITY: {
-                        "status": list(
-                            _OWNER_STATUSES.get(operation.method, [200])
-                        )
-                    },
-                    _CHALLENGER_IDENTITY: {"status": list(_DENIAL_STATUSES)},
-                },
+                "expect": expect,
             }
         )
 

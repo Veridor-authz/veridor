@@ -305,13 +305,19 @@ resource identifiers before you trust anything the run says.
 Two things follow from that, and both are deliberate. The first run of an
 unedited scaffold is red, because the file guesses that `owner` is allowed on
 every operation the specification declares — including admin routes no owner is
-entitled to. And the same scaffold scores 100% boundary coverage, because every
-generated check asserts a denial for `other_tenant`; that is a restatement of
+entitled to. And the same scaffold scores 100% boundary coverage of every
+operation the specification does not mark public, because every such generated
+check asserts a denial for `other_tenant`; that is a restatement of
 the scaffold, not a measurement of anything you decided. So while the file still
 carries the `_generated_by` key that `init` wrote, `veridor coverage` prints
 `THIS NUMBER IS NOT YOURS YET` and `--badge` renders `unreviewed` rather than a
 percentage. Delete the key when you have read the checks, and the number becomes
 yours.
+
+An operation the specification marks public (`security: []`, or a requirement
+list offering `{}`) gets no denial: its `other_tenant` expectation accepts both
+access and denial, so `run` reports it as asserting nothing rather than
+scaffolding a refusal the specification itself contradicts.
 
 ## Map: what would a compromise reach?
 
