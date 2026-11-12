@@ -4896,8 +4896,8 @@ def credential_suspects(result: Mapping[str, Any]) -> list[str]:
     """Identities refused with 401/407 on every request they were answered on.
 
     Counted over everything the identity sent -- check probes, its
-    marker_probe, and sequence steps -- because one 200 anywhere proves the
-    credential worked. An identity whose refusals were all DECLARED (an
+    marker_probe, sequence steps and teardown entries -- because one 200
+    anywhere proves the credential worked. An identity whose refusals were all DECLARED (an
     anonymous caller expected to draw 401) is not named: only one with at
     least one unexpected_denial is. A request that drew no status (transport
     error, never sent) says nothing either way and is skipped, never counted
@@ -4905,18 +4905,26 @@ def credential_suspects(result: Mapping[str, Any]) -> list[str]:
     """
     statuses: dict[str, list[int]] = {}
 
-    def note(identity: Any, response: Any) -> None:
-        status = response.get("status") if isinstance(response, Mapping) else None
+    def note(identity: Any, status: Any) -> None:
         if isinstance(identity, str) and isinstance(status, int):
             statuses.setdefault(identity, []).append(status)
 
+    def answered(entry: Mapping[str, Any]) -> Any:
+        response = entry.get("response")
+        return response.get("status") if isinstance(response, Mapping) else None
+
     for probe in result.get("probes") or ():
-        note(probe.get("identity"), probe.get("response"))
+        note(probe.get("identity"), answered(probe))
     for control in result.get("marker_controls") or ():
-        note(control.get("identity"), control.get("response"))
+        note(control.get("identity"), answered(control))
     for record in result.get("sequences") or ():
-        for step in (record.get("steps") or []) + list(record.get("teardown") or ()):
-            note(step.get("as"), step.get("response"))
+        for step in record.get("steps") or ():
+            note(step.get("as"), answered(step))
+        # A teardown record keeps its status at the top level, not under
+        # "response". Read through answered() it was always None, so a DELETE
+        # the target served as this identity never ruled the hint out.
+        for entry in record.get("teardown") or ():
+            note(entry.get("as"), entry.get("status"))
     denied = {
         finding.get("identity")
         for finding in result.get("findings") or ()

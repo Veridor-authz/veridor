@@ -1126,8 +1126,8 @@ def _print_summary(result: dict) -> None:
     for identity in credential_suspects(result):
         print(
             f"Credential: {terminal_text(identity)} was refused with 401/407 on "
-            "every request it sent, so its credential looks expired or invalid "
-            "-- check the VERIDOR_* variable that supplies it."
+            "every request the target answered for it, so its credential looks "
+            "expired or invalid -- check the VERIDOR_* variable that supplies it."
         )
     unproven = _unproven_liveness(result)
     if unproven:
@@ -3404,7 +3404,8 @@ def _starter_config(
                 )
             }
             notes.append(
-                "The specification marks this operation public (security: []), "
+                "The specification marks this operation public (security: [] "
+                "or an empty requirement {}), "
                 f"so no denial is scaffolded for '{_CHALLENGER_IDENTITY}': its "
                 "expectation accepts both access and denial and asserts "
                 "nothing. Narrow it only if this operation does have a "

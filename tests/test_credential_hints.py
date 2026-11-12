@@ -28,6 +28,10 @@ sys.path.insert(0, str(ROOT / "tests"))
 import source_path  # noqa: E402,F401 -- src/ first unless VERIDOR_TEST_AGAINST=installed
 
 from test_capsule import VERIFIER_ENV, _demo_target, _TargetOpener, _v010_capsule  # noqa: E402
+from test_sequence import OWNER_TOKEN, _JSON, _server, _step  # noqa: E402
+from test_sequence import _config as _sequence_config  # noqa: E402
+from test_sequence import _run as _sequence_run  # noqa: E402
+from tiers import slow  # noqa: E402
 from veridor import core  # noqa: E402
 from veridor.cli import main as veridor_main  # noqa: E402
 
@@ -136,6 +140,19 @@ class CredentialSuspectsTest(unittest.TestCase):
         }
         self.assertEqual(core.credential_suspects(result), [])
 
+    def test_a_served_teardown_entry_rules_the_hint_out(self) -> None:
+        """A teardown record keeps its status at the top level, not in a response."""
+        result = {
+            "probes": [self._probe("a", 401)],
+            "sequences": [{"steps": [], "teardown": [
+                {"as": "a", "status": 204, "state": "executed", "error": None},
+            ]}],
+            "findings": [self._denied("a")],
+        }
+        self.assertEqual(core.credential_suspects(result), [])
+        result["sequences"][0]["teardown"][0]["status"] = 401
+        self.assertEqual(core.credential_suspects(result), ["a"])
+
     def test_a_marker_probe_answered_otherwise_rules_the_hint_out(self) -> None:
         result = {
             "probes": [self._probe("a", 401)],
@@ -162,6 +179,51 @@ class CredentialSuspectsTest(unittest.TestCase):
         for status in (401, 407):
             with self.subTest(status=status):
                 self.assertIn("expired/invalid credential", core.denial_remediation(status))
+
+
+@slow("runs a sequence against a loopback listener")
+class CredentialSuspectsSequenceRunTest(unittest.TestCase):
+    """The record shapes a real sequence run writes, not hand-built ones.
+
+    The owner's assert step draws 401 (an unexpected_denial) and its teardown
+    DELETE is served 204: the credential demonstrably worked, so naming the
+    owner as "refused on every request" would be false.
+    """
+
+    def _suspects(self, teardown_status: int) -> list[str]:
+        def responder(method, path, token, body):
+            if token == OWNER_TOKEN:
+                if method == "DELETE":
+                    return (teardown_status, {}, b"")
+                return (401, _JSON, b"{}")
+            return (403, _JSON, b"{}")
+
+        config = _sequence_config(
+            [{
+                "id": "s",
+                "steps": [
+                    _step("assert", "owner", "GET", "/a", [200]),
+                    _step("assert", "attacker", "GET", "/a", [403]),
+                ],
+                "teardown": [{
+                    "as": "owner",
+                    "request": {"method": "DELETE", "path": "/z"},
+                    "expect": {"status": [204]},
+                }],
+            }],
+            marker=False,
+        )
+        with contextlib.redirect_stderr(io.StringIO()), _server(responder) as url:
+            result = _sequence_run(config, url)
+        self.assertIn(("owner", "unexpected_denial"),
+                      [(f["identity"], f["verdict"]) for f in result["findings"]])
+        return core.credential_suspects(result)
+
+    def test_a_teardown_the_target_served_rules_the_hint_out(self) -> None:
+        self.assertEqual(self._suspects(204), [])
+
+    def test_control_a_refused_teardown_keeps_the_hint(self) -> None:
+        self.assertEqual(self._suspects(401), ["owner"])
 
 
 if __name__ == "__main__":
