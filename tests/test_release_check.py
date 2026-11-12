@@ -566,6 +566,9 @@ class IdentityTest(_Tree):
                          "https://example.veridor.org/guide",
                          "https://a.docs.veridor.org/",
                          r"https://www\.veridor\.org/",
+                         # A dot before the first label is not part of the host.
+                         "see...www.veridor.org",
+                         "the host is .www.veridor.org",
                          "docker.io/veridor/veridor:1",
                          "gh api repos/veridor/veridor",
                          "HTTPS://GitHub.com/Veridor/veridor",
@@ -610,7 +613,8 @@ class IdentityTest(_Tree):
             "git@github.com:veridor-dev/veridor.git https://veridor-dev.github.io/x\n"
             "https://hub.docker.com/r/veridorx/veridor https://img.shields.io/badge/veridor-1-blue\n"
             "https://veridor.org/ https://docs.veridor.org/guide veridor.org's mark\n"
-            "r\"https://docs\\.veridor\\.org/\" veridor.organic example.veridor.orgs\n",
+            "r\"https://docs\\.veridor\\.org/\" veridor.organic example.veridor.orgs\n"
+            "see...veridor.org and ...docs.veridor.org\n",
             encoding="utf-8")
         self.assertEqual(release_check.identity_leftovers(root), [])
         with contextlib.redirect_stdout(io.StringIO()):

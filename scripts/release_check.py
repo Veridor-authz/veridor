@@ -297,10 +297,11 @@ IDENTITY_RETIRED: tuple[tuple[str, str], ...] = (
     # announces no mailbox, so an address at it is a report sent nowhere.
     ("@veridor.org", r"[\w.+-]*@(?:[\w-]+\\*\.)*veridor\\*\.org(?![\w-])"),
     # Every host under the domain but docs. The bare domain passes because at
-    # least one label must come before it; the lookbehind starts a match at the
-    # host's first label, so a.docs.veridor.org is matched from "a" instead of
-    # passing as docs.
-    ("host.veridor.org", r"(?<![\w.-])(?!docs\\*\.veridor\\*\.org(?![\w-]))(?:[\w-]+\\*\.)+veridor\\*\.org(?![\w-])"),
+    # least one label must come before it. A match may start after a dot: the
+    # search tries the leftmost start first, so a.docs.veridor.org is matched
+    # from "a" and never reaches docs. The lookbehind once refused a dot too,
+    # and "see...www.veridor.org" passed, with no label start left to match.
+    ("host.veridor.org", r"(?<![\w-])(?!docs\\*\.veridor\\*\.org(?![\w-]))(?:[\w-]+\\*\.)+veridor\\*\.org(?![\w-])"),
 )
 #: The retired names tests/ may hold: they plant them as controls. Taken from
 #: the list, so this script names the retired spellings in that list alone.
