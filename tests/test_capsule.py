@@ -2263,7 +2263,7 @@ class VerifyRecordsItsVerdictTest(unittest.TestCase):
     verification that had exited 2, and `serve` listed it as a plain run.
     """
 
-    def _verify(self, answer) -> dict:
+    def _verify(self, answer, *, json_flag: bool = True) -> dict:
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
         root = Path(directory.name)
@@ -2271,11 +2271,11 @@ class VerifyRecordsItsVerdictTest(unittest.TestCase):
         path.write_text(json.dumps(_v010_capsule()), encoding="utf-8")
         out = root / "out"
         stdout, stderr = io.StringIO(), io.StringIO()
+        flags = ["--json", str(root / "run.json")] if json_flag else []
         with patch.dict(os.environ, VERIFIER_ENV), \
                 patch.object(core, "_OPENER", _TargetOpener(answer)):
             with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-                code = veridor_main(["verify", str(path), "--output-dir", str(out),
-                                     "--json", str(root / "run.json")])
+                code = veridor_main(["verify", str(path), "--output-dir", str(out), *flags])
         latest = (out / "latest.json").read_text(encoding="utf-8")
         history = list((out / "runs").glob("*.json"))
         self.assertEqual(len(history), 1)
@@ -2283,7 +2283,8 @@ class VerifyRecordsItsVerdictTest(unittest.TestCase):
             "code": code, "path": str(path), "root": root, "latest_path": out / "latest.json",
             "latest_text": latest, "latest": json.loads(latest),
             "history": json.loads(history[0].read_text(encoding="utf-8")),
-            "json": json.loads((root / "run.json").read_text(encoding="utf-8")),
+            "json": (json.loads((root / "run.json").read_text(encoding="utf-8"))
+                     if json_flag else None),
             "output": stdout.getvalue() + stderr.getvalue(),
         }
 
@@ -2314,6 +2315,18 @@ class VerifyRecordsItsVerdictTest(unittest.TestCase):
                 self.assertNotIn("capsule-config.json", result["latest_text"])
                 self.assertEqual(result["latest"], result["history"])
                 core.validate_run(result["latest"], source="latest.json")
+
+    def test_the_history_names_the_capsule_when_no_json_is_asked_for(self) -> None:
+        """The relabel from the temporary config to the capsule used to run only
+        under --json or --sarif, and every other test here passes --json. The
+        reported case had neither: `verify proof.json` alone left latest.json
+        citing a capsule-config.json that no longer existed."""
+        result = self._verify(_failing_handler, json_flag=False)
+        self.assertEqual(result["code"], 2, result["output"])
+        for where in ("latest", "history"):
+            self.assertEqual(result[where]["config"], result["path"], where)
+            self.assertEqual(result[where]["capsule"]["verdict"], "INCONCLUSIVE", where)
+        self.assertNotIn("capsule-config.json", result["latest_text"])
 
     def test_report_renders_the_verdict_and_never_a_pass_over_inconclusive(self) -> None:
         rendered = {}

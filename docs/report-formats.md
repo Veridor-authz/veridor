@@ -105,7 +105,11 @@ code is the capsule's verdict rather than a `--fail-on` decision, so
 `CONFIRMED` is `capsule_confirmed` (exit `1`, a reason about the target, with
 the reproduced `finding_ids`), `INCONCLUSIVE` is `capsule_inconclusive` (exit
 `2`, a non-zero exit that is not a finding), and `NOT_REPRODUCED` is exit `0`
-with no reason. Each format leads with the verdict instead of a policy. A
+with no reason. `markdown` leads with the verdict and `junit` names it on the
+`veridor.gate` case, instead of a policy. `gitlab-sast` and `codequality` show
+`capsule_inconclusive` the way the table below shows any non-zero exit that is
+not a finding, and a CONFIRMED verdict through its findings; neither names a
+NOT_REPRODUCED verdict. `sarif` has no gate, so it carries no verdict. A
 document whose verdict, `exit_code` and gate disagree is refused with exit
 `2`, never rendered.
 

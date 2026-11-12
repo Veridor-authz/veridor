@@ -1587,7 +1587,9 @@ something you installed.
   findings give. `verify` now writes `capsule` (verdict, exit code, reason,
   check, capsule path) and a `gate` whose exit code is the verdict's into
   `latest.json`, `runs/` and `--json`, and names the capsule as `config`.
-  Every report format leads with the verdict, `serve` shows
+  `markdown` and `junit` lead with the verdict (`gitlab-sast` and
+  `codequality` carry an INCONCLUSIVE one as a non-finding gate reason; `sarif`
+  has no gate and carries none), `serve` shows
   `capsule · INCONCLUSIVE` (amber), `CONFIRMED` (red) or `NOT REPRODUCED`, and
   a document whose verdict, exit code and gate disagree is refused with exit
   `2`. Run documents without `capsule` render as before.
