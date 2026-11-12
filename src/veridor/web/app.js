@@ -446,6 +446,136 @@ function proportionBar(reached, refused, unmeasured, total) {
   return bar;
 }
 
+function gateBanner(run) {
+  /* The run's outcome in one line, the way CI acts on it: the gate's exit code
+     and the counts behind it. Every value is read from the run document and
+     the tone comes from runTone(), the same rule the status badge uses -- a run
+     the gate failed for a reason that is not a finding stays amber, never red
+     and never green. A document without a gate (an old schema) gets no banner
+     rather than a guessed one. */
+  const gate = run.gate || {};
+  if (!Number.isInteger(gate.exit_code)) return null;
+  const summary = run.summary || {};
+  const tone = runTone(run.status, gate.exit_code);
+  const banner = element("div", `gate-banner ${tone}`);
+  const passed = gate.exit_code === 0;
+  const head = element("div", "gate-head");
+  head.append(
+    element("span", "gate-word", passed ? "Gate passes" : "Gate fails"),
+    element("span", "gate-exit", `exit ${gate.exit_code}`),
+  );
+  banner.append(head);
+  const facts = [];
+  if (summary.vulnerable) {
+    const confirmed = summary.confirmed ?? 0;
+    facts.push(
+      `${summary.vulnerable} vulnerable` +
+        (confirmed ? ` (${confirmed} confirmed by marker)` : ""),
+    );
+  }
+  if (Number.isInteger(summary.probes)) {
+    facts.push(`${summary.safe ?? 0}/${summary.probes} probes matched their declaration`);
+  }
+  // "new" and "resolved" are relative to a baseline. Without one every finding
+  // counts as new, so naming a baseline would claim a comparison that never ran.
+  if ((run.regression || {}).baseline_run_id) {
+    if (summary.resolved) facts.push(`${summary.resolved} resolved since the baseline`);
+    if (summary.new) facts.push(`${summary.new} new since the baseline`);
+  }
+  const reasons = (gate.reasons || []).filter((reason) => reason.code !== "findings");
+  if (!passed && reasons.length) {
+    facts.push(`failed for: ${reasons.map((reason) => reason.code).join(", ")}`);
+  }
+  if (gate.fail_on) facts.push(`fail-on ${gate.fail_on}`);
+  banner.append(element("p", "gate-facts", facts.join(" · ")));
+  return banner;
+}
+
+function accessMatrix(matrix) {
+  /* The map as the grid it is: one row per operation (and specimen), one
+     column per identity, each cell the status Veridor measured. Colour encodes
+     reach exactly as the matrix document records it; a cell whose response
+     carried ANOTHER identity's planted marker is ringed in amber, not red,
+     because in a map that is an observation to declare and test, never a
+     finding. Cells that were not probed say so instead of looking refused. */
+  const cells = matrix.cells || [];
+  const identities = matrix.identities || [];
+  const rows = matrix.rows || [];
+  if (!cells.length || !identities.length || !rows.length) return null;
+  const key = (operation, specimen, identity) =>
+    `${operation}\u0000${specimen ?? ""}\u0000${identity}`;
+  const index = new Map(
+    cells.map((cell) => [key(cell.operation, cell.specimen, cell.identity), cell]),
+  );
+  const wrap = element("div", "matrix-scroll");
+  const grid = element("div", "matrix");
+  grid.setAttribute("role", "table");
+  grid.setAttribute("aria-label", "Access matrix: each operation as each identity");
+  grid.style.setProperty("--columns", identities.length);
+  const header = element("div", "matrix-row");
+  header.setAttribute("role", "row");
+  header.append(element("span", "matrix-corner", "operation"));
+  for (const identity of identities) {
+    const cell = element("span", "matrix-identity", identity);
+    cell.setAttribute("role", "columnheader");
+    header.append(cell);
+  }
+  grid.append(header);
+  let crossed = 0;
+  for (const row of rows) {
+    const line = element("div", "matrix-row");
+    line.setAttribute("role", "row");
+    const [method, ...rest] = String(row.operation).split(" ");
+    const label = element("span", "matrix-op");
+    label.setAttribute("role", "rowheader");
+    label.append(element("b", "", method), document.createTextNode(` ${rest.join(" ")}`));
+    if (row.specimen) label.append(element("small", "", row.specimen));
+    line.append(label);
+    for (const identity of identities) {
+      const cell = index.get(key(row.operation, row.specimen, identity));
+      const reach = cell?.reach || "unknown";
+      const box = element("span", `matrix-cell ${reach}`);
+      box.setAttribute("role", "cell");
+      const status = Number.isInteger(cell?.status) ? String(cell.status) : "·";
+      box.append(element("span", "", status));
+      let description = `${identity}, ${row.operation}: ${reach}`;
+      if (Number.isInteger(cell?.status)) description += `, HTTP ${cell.status}`;
+      if (cell?.unknown_reason) description += ` (${cell.unknown_reason})`;
+      if (cell?.marker_scan === "present" && cell.marker_owner) {
+        const own = cell.marker_owner === identity;
+        box.append(element("i", own ? "matrix-marker own" : "matrix-marker"));
+        if (!own) {
+          box.classList.add("crossed");
+          crossed += 1;
+        }
+        description += own
+          ? ", carries its own marker"
+          : `, carries ${cell.marker_owner}'s marker`;
+      }
+      box.title = description;
+      box.setAttribute("aria-label", description);
+      line.append(box);
+    }
+    grid.append(line);
+  }
+  wrap.append(grid);
+  const legend = element("div", "matrix-legend");
+  legend.append(
+    element("span", "key-reached", "reached"),
+    element("span", "key-refused", "refused"),
+    element("span", "key-unknown", "not probed or unknown"),
+    element("span", "key-marker", "planted marker in the response"),
+  );
+  if (crossed) {
+    legend.append(
+      element("span", "key-crossed", `${crossed} cell${crossed === 1 ? "" : "s"} carried another identity's marker: a candidate below, not a finding`),
+    );
+  }
+  const container = element("div", "matrix-block");
+  container.append(wrap, legend);
+  return container;
+}
+
 //: How many findings render before the list offers to show the rest. A run
 //: with hundreds -- a first run against a large suite -- rendered every one,
 //: so the page a reader opens to triage the first finding stalls on the last.
@@ -458,7 +588,15 @@ function findingCard(finding, resolved = false) {
   if (finding.id) card.dataset.fingerprint = finding.id;
   const heading = element("div", "finding-heading");
   heading.append(element("strong", "", finding.title || finding.id));
-  heading.append(element("span", "verdict", resolved ? "resolved" : finding.verdict));
+  const chips = element("span", "finding-chips");
+  // The evidence grade travels with the verdict: "confirmed" means the
+  // response carried another identity's planted marker, which is what makes
+  // a 200 more than a status-code disagreement.
+  if (finding.evidence_grade && !resolved) {
+    chips.append(element("span", `grade ${finding.evidence_grade}`, finding.evidence_grade));
+  }
+  chips.append(element("span", "verdict", resolved ? "resolved" : finding.verdict));
+  heading.append(chips);
   card.append(heading);
   card.append(element("p", "", finding.message));
   card.append(
@@ -600,6 +738,9 @@ function renderDetail() {
       summary.escalated ? "danger" : "",
     ),
   );
+
+  const banner = gateBanner(run);
+  if (banner) fragment.querySelector('[data-field="gate"]').append(banner);
 
   renderScope(fragment, run);
 
@@ -822,6 +963,12 @@ function renderMapDetail() {
     document.createTextNode(" · "),
     rawLink(`/api/maps/${encodeURIComponent(map.map_id)}`, "raw JSON"),
   );
+
+  const grid = accessMatrix(matrix);
+  if (grid) {
+    fragment.querySelector('[data-field="matrix"]').append(grid);
+    fragment.querySelector('[data-field="matrix-panel"]').hidden = false;
+  }
 
   const claim = blast.claim || candidates.claim || matrix.claim || {};
   const [claimLead, claimBody] = splitLead(claim.statement || "");

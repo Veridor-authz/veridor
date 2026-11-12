@@ -20,8 +20,10 @@
 :root {
   color-scheme: light dark;
 
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
+  /* The same stacks as veridor.org, so the viewer and the product page read as
+     one product. */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "Segoe UI",
+    Roboto, Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
     "Liberation Mono", monospace;
 
@@ -62,23 +64,25 @@
    daylight; dark follows the system preference and can be forced either way. */
 :root,
 :root[data-theme="light"] {
+  /* veridor.org is dark-only; this is its palette carried onto white, with the
+     site's deeper blue as the accent so it holds 4.5:1 on the light surface. */
   --bg: #ffffff;
-  --bg-sunken: #f6f8fa;
+  --bg-sunken: #f3f7fc;
   --bg-raised: #ffffff;
-  --bg-subtle: #f6f8fa;
-  --bg-inset: #eef1f5;
+  --bg-subtle: #f3f7fc;
+  --bg-inset: #e8f0f8;
 
-  --border: #d8dee6;
-  --border-subtle: #e6eaf0;
-  --border-strong: #c2cbd6;
+  --border: #d3dfeb;
+  --border-subtle: #e3ebf4;
+  --border-strong: #b6c7d9;
 
-  --text: #10151d;
-  --text-muted: #5b6675;
-  --text-subtle: #7b8694;
+  --text: #061224;
+  --text-muted: #4a5d74;
+  --text-subtle: #627489;
 
-  --accent: #0b6f83;
-  --accent-soft: #e2f4f8;
-  --accent-border: #9dd6e2;
+  --accent: #006ddd;
+  --accent-soft: #e5f1fd;
+  --accent-border: #9cc6f0;
 
   --ok: #0f7a52;
   --ok-soft: #e3f5ec;
@@ -87,37 +91,38 @@
   --warn: #92600a;
   --warn-soft: #fdf3dd;
 
-  --shadow-sm: 0 1px 2px rgb(16 21 29 / 6%);
-  --shadow: 0 1px 3px rgb(16 21 29 / 8%), 0 8px 24px -12px rgb(16 21 29 / 14%);
-  --overlay: rgb(16 21 29 / 4%);
+  --shadow-sm: 0 1px 2px rgb(6 18 36 / 6%);
+  --shadow: 0 1px 3px rgb(6 18 36 / 8%), 0 8px 24px -12px rgb(6 18 36 / 14%);
+  --overlay: rgb(6 18 36 / 4%);
 }
 
+/* Dark is veridor.org's own palette, value for value. */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0b0e13;
-    --bg-sunken: #080b10;
-    --bg-raised: #131922;
-    --bg-subtle: #10151d;
-    --bg-inset: #171e29;
+    --bg: #030710;
+    --bg-sunken: #02050b;
+    --bg-raised: #0c1523;
+    --bg-subtle: #0a1220;
+    --bg-inset: #101b2d;
 
-    --border: #26303e;
-    --border-subtle: #1c242f;
-    --border-strong: #35414f;
+    --border: #1d2a42;
+    --border-subtle: #161f34;
+    --border-strong: #2f4b68;
 
-    --text: #eef3f8;
-    --text-muted: #97a3b3;
-    --text-subtle: #6f7c8c;
+    --text: #e5f4ff;
+    --text-muted: #8ea3ba;
+    --text-subtle: #728396;
 
-    --accent: #67e8f9;
-    --accent-soft: rgb(103 232 249 / 10%);
-    --accent-border: rgb(103 232 249 / 32%);
+    --accent: #7fc8ff;
+    --accent-soft: rgb(127 200 255 / 10%);
+    --accent-border: rgb(127 200 255 / 32%);
 
-    --ok: #4ade80;
-    --ok-soft: rgb(74 222 128 / 10%);
-    --alert: #fb7185;
-    --alert-soft: rgb(251 113 133 / 10%);
-    --warn: #fbbf24;
-    --warn-soft: rgb(251 191 36 / 10%);
+    --ok: #5fe3ad;
+    --ok-soft: rgb(95 227 173 / 10%);
+    --alert: #ff8a8a;
+    --alert-soft: rgb(255 138 138 / 10%);
+    --warn: #ffc46b;
+    --warn-soft: rgb(255 196 107 / 10%);
 
     --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
     --shadow: 0 1px 3px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
@@ -126,30 +131,30 @@
 }
 
 :root[data-theme="dark"] {
-  --bg: #0b0e13;
-  --bg-sunken: #080b10;
-  --bg-raised: #131922;
-  --bg-subtle: #10151d;
-  --bg-inset: #171e29;
+  --bg: #030710;
+  --bg-sunken: #02050b;
+  --bg-raised: #0c1523;
+  --bg-subtle: #0a1220;
+  --bg-inset: #101b2d;
 
-  --border: #26303e;
-  --border-subtle: #1c242f;
-  --border-strong: #35414f;
+  --border: #1d2a42;
+  --border-subtle: #161f34;
+  --border-strong: #2f4b68;
 
-  --text: #eef3f8;
-  --text-muted: #97a3b3;
-  --text-subtle: #6f7c8c;
+  --text: #e5f4ff;
+  --text-muted: #8ea3ba;
+  --text-subtle: #728396;
 
-  --accent: #67e8f9;
-  --accent-soft: rgb(103 232 249 / 10%);
-  --accent-border: rgb(103 232 249 / 32%);
+  --accent: #7fc8ff;
+  --accent-soft: rgb(127 200 255 / 10%);
+  --accent-border: rgb(127 200 255 / 32%);
 
-  --ok: #4ade80;
-  --ok-soft: rgb(74 222 128 / 10%);
-  --alert: #fb7185;
-  --alert-soft: rgb(251 113 133 / 10%);
-  --warn: #fbbf24;
-  --warn-soft: rgb(251 191 36 / 10%);
+  --ok: #5fe3ad;
+  --ok-soft: rgb(95 227 173 / 10%);
+  --alert: #ff8a8a;
+  --alert-soft: rgb(255 138 138 / 10%);
+  --warn: #ffc46b;
+  --warn-soft: rgb(255 196 107 / 10%);
 
   --shadow-sm: 0 1px 2px rgb(0 0 0 / 40%);
   --shadow: 0 1px 3px rgb(0 0 0 / 40%), 0 8px 24px -12px rgb(0 0 0 / 60%);
@@ -296,7 +301,7 @@ header {
   flex: none;
   width: 26px;
   height: 26px;
-  color: var(--text);
+  color: var(--accent);
 }
 
 .brand-text {
@@ -1280,6 +1285,415 @@ aside .empty {
 
 .app-footer a {
   color: var(--text-muted);
+}
+
+/* --------------------------------------------------------- product look */
+
+/* veridor.org's visual language carried into the viewer: the blue glow behind
+   the page, the glassy header, tiles with a coloured top edge, and the verdict
+   bar. It changes how things look, never what they say: every tone still comes
+   from the claim-discipline colours above, and a hypothesis is still never
+   painted like a finding. */
+:root {
+  --glow: rgb(0 109 221 / 7%);
+  --glow-strong: rgb(0 109 221 / 12%);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --glow: rgb(0 109 221 / 16%);
+    --glow-strong: rgb(0 109 221 / 30%);
+  }
+}
+
+:root[data-theme="dark"] {
+  --glow: rgb(0 109 221 / 16%);
+  --glow-strong: rgb(0 109 221 / 30%);
+}
+
+body {
+  background:
+    radial-gradient(1100px 520px at 85% -120px, var(--glow), transparent 70%),
+    var(--bg);
+  background-attachment: fixed;
+}
+
+header {
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: saturate(150%) blur(14px);
+}
+
+.brand h1 {
+  font-weight: 500;
+  letter-spacing: -0.015em;
+}
+
+.brand-sub {
+  font-family: var(--font-mono);
+  letter-spacing: 0.08em;
+}
+
+.verbs {
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--bg-raised) 70%, transparent);
+}
+
+.verbs button[aria-selected="true"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-border), 0 10px 30px -18px var(--glow-strong);
+}
+
+.verbs button[aria-selected="true"] .verb-name {
+  color: var(--accent);
+}
+
+.eyebrow {
+  color: var(--accent);
+  font-family: var(--font-mono);
+  letter-spacing: 0.1em;
+}
+
+.detail-header h2 {
+  font-family: var(--font-sans);
+  font-size: var(--text-2xl);
+  font-weight: 400;
+  letter-spacing: -0.025em;
+}
+
+.run-button {
+  transition: border-color 0.2s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.run-button.selected {
+  border-color: var(--accent-border);
+  background: linear-gradient(180deg, var(--accent-soft), transparent), var(--bg-raised);
+  box-shadow: 0 12px 30px -20px var(--glow-strong);
+}
+
+.panel {
+  border-color: var(--border);
+  background:
+    radial-gradient(120% 80% at 100% 0%, var(--glow), transparent 55%),
+    var(--bg-raised);
+  box-shadow: var(--shadow);
+}
+
+.scope {
+  border-left: 3px solid var(--accent-border);
+  background:
+    linear-gradient(90deg, var(--accent-soft), transparent 40%),
+    var(--bg-subtle);
+}
+
+.metric {
+  border-color: var(--border);
+  border-top: 3px solid var(--border-strong);
+  background: linear-gradient(180deg, var(--overlay), transparent), var(--bg-raised);
+}
+
+.metric-value {
+  font-size: 1.75rem;
+  font-weight: 400;
+}
+
+.metric.safe {
+  border-top-color: var(--ok);
+}
+
+.metric.danger {
+  border-top-color: var(--alert);
+  background: linear-gradient(180deg, var(--alert-soft), transparent), var(--bg-raised);
+}
+
+.metric.warn {
+  border-top-color: var(--warn);
+}
+
+.metric.zero {
+  border-top-color: var(--border-subtle);
+}
+
+/* The verdict bar: the line CI acts on, set the way veridor.org's demo sets
+   it. Its tone classes are runTone()'s. */
+.gate-banner {
+  display: grid;
+  gap: var(--space-1);
+  margin-top: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  animation: gate-in 0.45s cubic-bezier(.2, .7, .2, 1) both;
+}
+
+.gate-banner.safe {
+  border-color: color-mix(in srgb, var(--ok) 55%, transparent);
+  background: linear-gradient(90deg, var(--ok-soft), transparent 70%), var(--bg-raised);
+}
+
+.gate-banner.danger {
+  border-color: color-mix(in srgb, var(--alert) 60%, transparent);
+  background: linear-gradient(90deg, var(--alert-soft), transparent 70%), var(--bg-raised);
+}
+
+.gate-banner.warn {
+  border-color: color-mix(in srgb, var(--warn) 55%, transparent);
+  background: linear-gradient(90deg, var(--warn-soft), transparent 70%), var(--bg-raised);
+}
+
+.gate-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+.gate-word {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.gate-banner.safe .gate-word {
+  color: var(--ok);
+}
+
+.gate-banner.danger .gate-word {
+  color: var(--alert);
+}
+
+.gate-banner.warn .gate-word {
+  color: var(--warn);
+}
+
+.gate-exit {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+}
+
+.gate-facts {
+  margin: 0;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+@keyframes gate-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.finding,
+.reach {
+  border-color: var(--border);
+  background: var(--bg-subtle);
+}
+
+.finding.error {
+  background: linear-gradient(90deg, var(--alert-soft), transparent 45%), var(--bg-subtle);
+}
+
+.finding.warning {
+  background: linear-gradient(90deg, var(--warn-soft), transparent 45%), var(--bg-subtle);
+}
+
+.finding-chips {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+.grade {
+  display: inline-flex;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.grade.confirmed {
+  border-color: color-mix(in srgb, var(--alert) 45%, transparent);
+  color: var(--alert);
+}
+
+/* The access matrix, drawn like veridor.org's hero grid. */
+.matrix-block {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.matrix-scroll {
+  overflow-x: auto;
+}
+
+.matrix {
+  display: grid;
+  gap: 6px;
+  min-width: min-content;
+}
+
+.matrix-row {
+  display: grid;
+  grid-template-columns: minmax(13rem, 1.6fr) repeat(var(--columns), minmax(5.5rem, 1fr));
+  gap: 6px;
+  align-items: center;
+}
+
+.matrix-corner,
+.matrix-identity {
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  text-align: center;
+}
+
+.matrix-corner {
+  text-align: left;
+}
+
+.matrix-op {
+  display: block;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.matrix-op b {
+  display: inline;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.matrix-op small {
+  display: block;
+  color: var(--text-subtle);
+}
+
+.matrix-cell {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 2.4rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.matrix-cell.reached {
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--accent) 60%, transparent),
+    color-mix(in srgb, var(--accent) 38%, transparent));
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.matrix-cell.refused {
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  background: var(--accent-soft);
+  color: var(--text-muted);
+}
+
+.matrix-cell.unknown,
+.matrix-cell.indeterminate {
+  border: 1px dashed var(--border-strong);
+  color: var(--text-subtle);
+}
+
+.matrix-cell.crossed {
+  box-shadow: 0 0 0 2px var(--warn), 0 0 22px color-mix(in srgb, var(--warn) 35%, transparent);
+}
+
+.matrix-marker {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--warn);
+  box-shadow: 0 0 0 2px var(--bg-raised);
+}
+
+.matrix-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  color: var(--text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+}
+
+.matrix-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.matrix-legend span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.matrix-legend .key-reached::before {
+  background: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.matrix-legend .key-refused::before {
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--accent-soft);
+}
+
+.matrix-legend .key-unknown::before {
+  border: 1px dashed var(--text-subtle);
+}
+
+.matrix-legend .key-marker::before {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--warn);
+}
+
+.matrix-legend .key-crossed {
+  color: var(--warn);
+}
+
+.matrix-legend .key-crossed::before {
+  box-shadow: 0 0 0 2px var(--warn);
+}
+
+/* The reach bar used the "matched" green for refused cells. A refusal is not a
+   match, and the matrix above draws it as a pale outline, so the bar and its
+   key now use the same tone. */
+.bar-refused,
+.key-refused::before {
+  background: color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gate-banner {
+    animation: none;
+  }
 }
 
 /* ------------------------------------------------------------- responsive */

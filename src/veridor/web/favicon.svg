@@ -3,15 +3,10 @@
      naturalWidth 0 and renders nothing. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32"
      role="img" aria-label="Veridor">
-  <!--
-    The mark is the product: a boundary, and a marker that crossed it. The
-    vertical rule is the authorization boundary; the filled dot sits on the far
-    side of it, where it does not belong. Nothing here is a shield or a padlock
-    -- Veridor does not claim to protect anything, it claims to observe.
-  -->
-  <rect width="32" height="32" rx="7" fill="#0d1117"/>
-  <path d="M16 6.5v19" stroke="#67e8f9" stroke-width="1.75" stroke-linecap="round" opacity=".55"/>
-  <path d="M6.5 11.5l5 9 5-9" fill="none" stroke="#ecf2f8" stroke-width="2.4"
+  <!-- veridor.org's mark: a shield and a tick on the site's dark plate. -->
+  <rect width="32" height="32" rx="7" fill="#030710"/>
+  <path d="M16 5l9 3.6v6.2c0 5.6-3.7 10.4-9 12.2-5.3-1.8-9-6.6-9-12.2V8.6L16 5z"
+        fill="none" stroke="#7fc8ff" stroke-width="2.2"/>
+  <path d="M11.5 16.2l3.1 3.1 6-6.2" fill="none" stroke="#7fc8ff" stroke-width="2.4"
         stroke-linecap="round" stroke-linejoin="round"/>
-  <circle cx="23" cy="16" r="3.1" fill="#fb7185"/>
 </svg>
