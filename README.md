@@ -106,8 +106,7 @@ python3.12 scripts/run_tests.py --tier slow --jobs 4   # before merge
 
 [CONTRIBUTING.md](CONTRIBUTING.md) covers the test tiers, the end-to-end checks
 and the claim discipline a change has to stay inside. New commits are signed off
-under the DCO, and [AI-assisted commits and provenance](CONTRIBUTING.md#ai-assisted-commits-and-provenance)
-are covered there too. See also [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
+under the DCO. See also [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md),
 [GOVERNANCE.md](GOVERNANCE.md) and [SUPPORT.md](SUPPORT.md). Using Veridor? Add
 yourself to [ADOPTERS.md](ADOPTERS.md).
 
