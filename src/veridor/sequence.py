@@ -1364,6 +1364,19 @@ class IdentitySession:
         #: no longer reads is a cookie that expired or was cleared, which is
         #: the target's doing, not a misspelt capture.
         self._seen: set[str] = set()
+        #: Which credential this session is sending, as a counter: bumped by
+        #: every login, and whenever a response changes the value of the
+        #: cookie that proved the session. Liveness evidence -- a marker_probe
+        #: that came back, a 2xx where a caller without the credential was
+        #: refused -- is evidence about the epoch it was sent under and no
+        #: other: a response that replaced ``sid=attacker`` with ``sid=guest``
+        #: on the same path looks exactly like rotation from here.
+        self.epoch = 0
+        #: request key -> the epoch it was sent under. Keys are ``("marker",)``,
+        #: ``("check", check_id)``, ``("step", sequence_id, index)`` and
+        #: ``("teardown", sequence_id, index)``. Kept across logins: the
+        #: counter never goes back, so an old key never matches a new epoch.
+        self.sent_epochs: dict[tuple[Any, ...], int] = {}
         self._injecting = False
         for capture_name, spec in (self.declaration.get("capture") or {}).items():
             self._session_cookies[capture_name] = spec["name"]
@@ -1479,11 +1492,21 @@ class IdentitySession:
         ]
 
     def harvest(self, response: Any, request: Request) -> None:
+        before = set(self._proof_values()) if self.state == "established" else None
         try:
             self.jar.extract_cookies(response, request)
         except Exception:
             self.note = COOKIE_ERROR
         self._note_cookies()
+        if before is not None and set(self._proof_values()) != before:
+            # The target gave the proof cookie another value. Rotation and a
+            # downgrade to an anonymous session look the same from here, so
+            # what proved the old value live proves nothing about this one.
+            self.epoch += 1
+
+    def stamp(self, key: tuple[Any, ...]) -> None:
+        """Record the epoch the request ``key`` names is about to be sent under."""
+        self.sent_epochs[key] = self.epoch
 
     def _note_cookies(self) -> None:
         """Remember which cookies the jar holds a usable value for, by name."""
@@ -1720,6 +1743,7 @@ class IdentitySession:
         self._live_cookies = dict(self._session_cookies)
         self._proof = frozenset()
         self._seen = set()
+        self.epoch += 1
         self.steps = []
         self.note = None
         self.reason = None
@@ -2575,6 +2599,8 @@ class _SequenceRun:
         owner = self._needles_owner(step, planted)
         marker = self.markers.get(owner) if owner else None
         sink: dict[str, Any] = {}
+        if session is not None:
+            session.stamp(("step", self.sequence["id"], index))
         result = core._perform_request(
             self.base_url,
             self.timeout,
@@ -3236,6 +3262,8 @@ class _SequenceRun:
         # not refuse the request. Teardown is never graded, so the fail-closed
         # refusal a graded probe gets would only orphan the fixture this entry
         # exists to remove; the request is sent and the drop is noted instead.
+        if session is not None:
+            session.stamp(("teardown", self.sequence["id"], record["index"]))
         result = core._perform_request(
             self.base_url,
             self.teardown_timeout,

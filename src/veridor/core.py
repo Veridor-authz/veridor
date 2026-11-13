@@ -3754,6 +3754,10 @@ def _execute_marker_controls(
         # Login ran before this, in this identity's own jar, so a marker control
         # works against a cookie-authenticated target -- which it could not do
         # before, because the probe was issued with no session and got a 401.
+        if session is not None:
+            # What this control proves, it proves about this session cookie
+            # value; execute_run compares epochs before counting it.
+            session.stamp(("marker",))
         result = _perform_request(
             base_url,
             timeout,
@@ -4177,6 +4181,30 @@ def _proven_live_by_service(
 ) -> set[str]:
     """Identities a 2xx in this run proves live: served where somebody was refused.
 
+    See :func:`_served_where_refused`, which also names the request that did it.
+    """
+    return {
+        identity
+        for identity, _request in _served_where_refused(
+            config, probes, liveness, sequence_records, credentialed
+        )
+    }
+
+
+def _served_where_refused(
+    config: Mapping[str, Any],
+    probes: Iterable[Mapping[str, Any]],
+    liveness: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+    sequence_records: Iterable[Mapping[str, Any]],
+    credentialed: Iterable[str],
+) -> list[tuple[str, tuple[Any, ...]]]:
+    """``(identity, request)`` for each 2xx that proves a credential live.
+
+    ``request`` names the request that drew it the way a session's
+    ``sent_epochs`` keys it -- ``("check", check_id)``, ``("step",
+    sequence_id, index)`` or ``("teardown", sequence_id, index)`` -- so the
+    caller can tell which session cookie value it proves.
+
     A 2xx proves a credential live only on a request that discriminates --
     where an identity with no credential, or the fabricated credential, was
     refused on that same request. Any 2xx anywhere used to count, so one check
@@ -4193,22 +4221,25 @@ def _proven_live_by_service(
     credentialed = set(credentialed)
     checks = {check.get("id"): check for check in config.get("checks") or ()}
     refused: set[tuple] = set()
-    served: list[tuple[tuple, str]] = []
+    served: list[tuple[tuple, str, tuple]] = []
 
-    def observe(key: tuple, identity: Any, status: Any, error: Any) -> None:
+    def observe(
+        key: tuple, identity: Any, status: Any, error: Any, request: tuple
+    ) -> None:
         if error or not isinstance(identity, str):
             return
         if identity not in credentialed and _refused(status):
             refused.add(key)
         elif _target_served(status):
-            served.append((key, identity))
+            served.append((key, identity, request))
 
     for probe in probes:
         check = checks.get(probe.get("check_id"))
         if check is None:
             continue
         observe(("check", *_liveness_key(check)), probe.get("identity"),
-                (probe.get("response") or {}).get("status"), probe.get("error"))
+                (probe.get("response") or {}).get("status"), probe.get("error"),
+                ("check", probe.get("check_id")))
     for (method, path), control in (liveness or {}).items():
         if not control.get("error") and _refused(
             (control.get("response") or {}).get("status")
@@ -4220,12 +4251,13 @@ def _proven_live_by_service(
             request = step.get("request") or {}
             observe(("sequence", sequence_id, request.get("method"), request.get("url")),
                     step.get("as"), (step.get("response") or {}).get("status"),
-                    step.get("error"))
+                    step.get("error"), ("step", sequence_id, step.get("index")))
         for entry in record.get("teardown") or ():
             request = entry.get("request") or {}
             observe(("sequence", sequence_id, request.get("method"), request.get("url")),
-                    entry.get("as"), entry.get("status"), entry.get("error"))
-    return {identity for key, identity in served if key in refused}
+                    entry.get("as"), entry.get("status"), entry.get("error"),
+                    ("teardown", sequence_id, entry.get("index")))
+    return [(identity, request) for key, identity, request in served if key in refused]
 
 
 #: Advice on an unproven denial for an identity whose session logs in again
@@ -4239,6 +4271,20 @@ RELOGGED_LIVENESS_REMEDIATION: str = (
     "the marker_probe proves the login every request uses; inside a sequence, "
     "a step where it is served and an identity with no credential is refused "
     "on the same request proves that sequence's login."
+)
+
+#: Advice on an unproven denial for an identity proven live only under an
+#: earlier value of its session cookie: a response replaced the cookie that
+#: established the session, and nothing proved the new value.
+STALE_COOKIE_LIVENESS_REMEDIATION: str = (
+    "{identity} was proven live (by its marker_probe, or a 2xx where a caller "
+    "without its credential was refused) before a response gave the cookie "
+    "that established its session a different value, and nothing proved the "
+    "new value live. Veridor cannot tell a target rotating the session from "
+    "one replacing it with an anonymous session. Find which response sets it; "
+    "a check or sequence step sent with the new value, where {identity} is "
+    "served and an identity with no credential is refused on the same "
+    "request, proves it, or stop the target replacing the cookie during the run."
 )
 
 
@@ -6938,6 +6984,19 @@ def execute_run(
         for name, control in marker_controls.items()
         if control.get("state") == "verified" and name not in relogged
     }
+
+    # Proof of a session cookie value is proof of that value only. A response
+    # can replace the proof cookie (same name, domain and path) with another
+    # value, which Veridor treats as rotation and keeps sending; a target that
+    # downgraded the session to an anonymous one looks exactly the same. The
+    # marker control taken before it, and a 2xx drawn before it, said nothing
+    # about the new value, and a denial drawn under it was graded safe with
+    # liveness.unproven empty. So each piece of evidence counts only for
+    # requests sent under the same session epoch (IdentitySession.epoch).
+    def sent_under(identity: str, request: tuple[Any, ...]) -> int | None:
+        """The session epoch ``request`` went out under; None without a session."""
+        session = sessions.get(identity)
+        return None if session is None else session.sent_epochs.get(request)
     #: Identities that send something a target could accept or reject. An
     #: anonymous identity is not one, and a 401 it draws everywhere is the
     #: boundary working rather than a token that expired.
@@ -6963,6 +7022,8 @@ def execute_run(
         for identity_name, expectation in check["expect"].items():
             if identity_name in unusable:
                 continue
+            if sessions.get(identity_name) is not None:
+                sessions[identity_name].stamp(("check", check["id"]))
             probe = _execute_probe(
                 config["target"]["base_url"],
                 float(config["target"].get("timeout_seconds", 10)),
@@ -6986,7 +7047,12 @@ def execute_run(
                 session_transient=session_transient(),
                 target=config.get("target", {}),
                 liveness=liveness_controls,
-                live_credentials=live_credentials,
+                live_credentials={
+                    name
+                    for name in live_credentials
+                    if sent_under(name, ("check", check["id"]))
+                    == sent_under(name, ("marker",))
+                },
                 credentialed=credentialed,
                 liveness_unproven=liveness_unproven,
             )
@@ -7043,25 +7109,52 @@ def execute_run(
         liveness_unproven = liveness_unproven + _sequence_liveness_unproven(
             _sequence_liveness, sequence_records
         )
-        proven_live = set(live_credentials) | _proven_live_by_service(
-            config, probes, liveness_controls, sequence_records, credentialed
-        )
+        # (identity, session epoch) for every piece of evidence that a
+        # credential was live when it was sent. See sent_under above.
+        proofs = {(name, sent_under(name, ("marker",))) for name in live_credentials} | {
+            (identity, sent_under(identity, request))
+            for identity, request in _served_where_refused(
+                config, probes, liveness_controls, sequence_records, credentialed
+            )
+        }
+
+        def denied_under(entry: Mapping[str, Any]) -> int | None:
+            request = (
+                ("step", entry["sequence_id"], entry["step_index"])
+                if entry.get("sequence_id") is not None
+                else ("check", entry["check_id"])
+            )
+            return sent_under(entry["identity"], request)
+
         liveness_unproven = [
             entry
             for entry in liveness_unproven
             if not (
-                _proven_under_same_login(
-                    entry, config, liveness_controls, sequence_records, credentialed
+                (entry["identity"], denied_under(entry)) in proofs
+                and (
+                    entry["identity"] not in relogged
+                    or _proven_under_same_login(
+                        entry, config, liveness_controls, sequence_records, credentialed
+                    )
                 )
-                if entry["identity"] in relogged
-                else entry["identity"] in proven_live
             )
         ]
         for entry in liveness_unproven:
             if entry["identity"] in relogged:
                 # The generic advice is to add a marker_probe, which proves
                 # nothing for this identity past its first login.
+                entry["proof_scope"] = "login"
                 entry["remediation"] = RELOGGED_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
+            elif any(
+                name == entry["identity"] and epoch != denied_under(entry)
+                for name, epoch in proofs
+            ):
+                # Proven live, but under a value of the session cookie the
+                # target has since replaced. Its marker_probe is already there.
+                entry["proof_scope"] = "cookie_value"
+                entry["remediation"] = STALE_COOKIE_LIVENESS_REMEDIATION.format(
                     identity=quoted(entry["identity"])
                 )
 

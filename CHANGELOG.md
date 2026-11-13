@@ -40,6 +40,33 @@ something you installed.
   cookie a `${capture.…}` value was read from. Behaviour change: a server that
   keeps case apart, and would have read the right one, now gets
   `inconclusive` for such a request too.
+- **A session cookie replaced after the marker probe kept the marker's
+  liveness proof.** A response that gives the cookie that established the
+  session a different value on the same name, domain and path is treated as
+  rotation, and requests go out with the new value. A target that swapped the
+  session for an anonymous one looks the same: the marker probe's response
+  set `sid=guest; Path=/`, the check went out as `sid=guest`, drew the `404`
+  the declaration lists, and was graded `safe` with `liveness.unproven` empty
+  on the strength of the marker probe taken under `sid=attacker`
+  (reproduced: safe 2, vulnerable 0; with the cookie left alone the marker
+  proves it, and on a route that is a live IDOR the guest's `404` hid it the
+  same way). A 2xx sent with the old value cancelled the disclosure the same
+  way, in a check or a sequence. Liveness evidence now counts only for
+  requests sent with the same value of that cookie: each login and each change
+  of its value starts a new session epoch, and the `marker_probe` and every
+  2xx prove only the epoch they were sent in. A denial with no proof in its
+  own epoch is listed in `liveness.unproven` with `"proof_scope":
+  "cookie_value"` and advice to prove the new value; a 2xx sent with the new
+  value, where an identity with no credential or the fabricated credential is
+  refused, proves it. Behaviour change: a target that rotates the session
+  cookie after the marker probe now has those denials listed as unproven, and
+  under `--require-complete` exits `3`, unless something proves the new value.
+  A `"reestablish": "check"` identity's unproven denials carry `"proof_scope":
+  "login"`. Not detected, and now said in the README: a credential the target
+  revokes during the run without changing anything Veridor sees, such as a
+  bearer token or static header, or a session revoked server-side while its
+  cookie keeps its value; the marker probe's evidence still counts for it
+  (measured: safe 2, vulnerable 0, `liveness.unproven` empty).
 - **A same-named cookie set after login rode in front of the session's
   cookie, and a live IDOR was graded safe.** A response after login set
   `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for

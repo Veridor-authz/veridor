@@ -652,7 +652,11 @@ Coverage still cannot fail silently, and this is the half that matters:
   live (a 2xx it drew on a request where an identity with no credential, or
   the fabricated credential, was refused; or its `marker_probe`; for a session
   with `"reestablish": "check"`, only a 2xx in the same sequence counts, since
-  each check and sequence is a login of its own) — a 2xx on
+  each check and sequence is a login of its own; and for any session, only
+  evidence sent with the same value of the cookie that established it, so once
+  a response gives that cookie a different value, the `marker_probe` and any
+  2xx sent with the old value stop counting, and only a 2xx sent with the new
+  value proves its denials) — a 2xx on
   a route that serves every caller proves nothing, so a `GET` that serves
   such an identity gets a fabricated credential too, and its 2xx counts only
   if that is refused (on a route an identity with no credential is declared
@@ -667,6 +671,24 @@ Coverage still cannot fail silently, and this is the half that matters:
   denial exits 3. The fabricated credential is not shaped like your token, so
   a target that refuses a malformed credential but serves a well-formed
   expired one as anonymous can let its refusal prove an expired token live.
+  In `liveness.unproven`, an unproven denial of a `"reestablish": "check"`
+  identity carries `"proof_scope": "login"`, and one whose identity was proven
+  live only under another value of its session cookie carries
+  `"proof_scope": "cookie_value"`; their advice says what would prove them
+  rather than to add a `marker_probe`.
+
+  Liveness evidence is point-in-time. The `marker_probe` runs once, before the
+  first check, and a 2xx proves the credential at the moment it was served. A
+  credential the target revokes later in the run, without changing anything
+  Veridor sees — a bearer token or static header it stops accepting, a session
+  revoked server-side while its cookie keeps the same value — is not
+  detected: the earlier evidence still counts, and a denial drawn after the
+  revocation is graded on it (measured: a token revoked by the marker probe's
+  own response, then safe 2, vulnerable 0, `liveness.unproven` empty). Keep a
+  run short relative to the credential's lifetime. For a session,
+  `"reestablish": "check"` narrows the window to one check or sequence,
+  because only evidence under that login counts; nothing narrows it for a
+  static credential.
 
   This is **stated, never graded**: an identity asserted only to be
   denied and never served anywhere is the ordinary shape of an authorization
@@ -1449,8 +1471,12 @@ more than once with one value (on two paths, or host-only and with `Domain=`),
 every copy is the proof, and once a later response gives one copy a different
 value, every request of that session is refused the same way, including one
 that only the unchanged copy would reach. A target that replaces the proof
-cookie itself (same name, domain and path) is rotating it, and the new value
-is the proof from then on.
+cookie itself (same name, domain and path) is treated as rotating it: the new
+value is the proof from then on and requests go out with it. Veridor cannot
+tell that from a target that swapped the session for an anonymous one, so
+liveness evidence taken under the old value — the `marker_probe`, an earlier
+2xx — no longer proves a denial drawn under the new one (see "A denial that
+proves nothing says so").
 
 | Capture `from` | Reads |
 | --- | --- |
@@ -2411,9 +2437,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,595 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 989 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,584 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,600 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 997 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,597 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,
