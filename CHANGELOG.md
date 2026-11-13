@@ -16,6 +16,56 @@ something you installed.
 
 ### Security
 
+- **A same-named cookie set after login rode in front of the session's
+  cookie, and a live IDOR was graded safe.** A response after login set
+  `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for
+  `/docs/1` went out as `Cookie: sid=guest; sid=attacker`. The check on the
+  outgoing request found the proof cookie's value and let it go. A server that
+  reads the first occurrence (Express's cookie-parser, PHP, Go's `r.Cookie`)
+  authenticated the guest, whose `404` matched the declared denial
+  (reproduced: safe 2, vulnerable 0, `liveness.unproven` empty, because the
+  marker probe ran before the guest cookie arrived; with `other=guest`
+  instead, `VERIDOR-AUTHZ-001` confirmed). A request that would carry the
+  proof cookie, or a cookie a `${capture.…}` value was read from, beside a
+  different value under the same name is now not sent and is graded
+  `inconclusive`, with its own reason (`session_cookie_ambiguous`), the rule a
+  login already followed. Behaviour change: a target that sets a second,
+  differently valued session cookie on a sub-path now gets `inconclusive` on
+  every request under that path, including where it would have authenticated
+  the right one.
+- **With `"reestablish": "check"`, a denial was proven live by a login it was
+  not sent under.** The identity's `marker_probe` runs once, under the login
+  before the first check; every check then logs in again. A re-login that drew
+  a cookie the target treats as anonymous got the declared `404`, and the
+  denial was graded `safe` with `liveness.unproven` empty, on the strength of
+  the first login's marker (reproduced: safe 2, vulnerable 0; every login real,
+  `VERIDOR-AUTHZ-001` confirmed). A 2xx in an earlier check, under that
+  check's own login, cancelled it the same way. For such an identity, only a
+  2xx in the same sequence, or the fabricated credential's answer, now proves
+  a denial; otherwise it is listed in `liveness.unproven`, with advice to use
+  `"reestablish": "run"` if sessions last the run. Behaviour change: a
+  `"reestablish": "check"` identity whose denials were proven only by its
+  `marker_probe` is now listed as unproven, and exits `3` under
+  `--require-complete`.
+- **A cookie read live is held to the checks a captured value gets.** A
+  `cookie` capture read from the jar at send time now passes the same size,
+  control-character and ASCII checks as one captured from a login response, a
+  change made with the live login-step capture below and not recorded until
+  now. Before it, a value with a space, a
+  Latin-1 character or over 4096 bytes was injected into the request as is,
+  and one outside Latin-1 failed inside the HTTP client and was reported as a
+  failed request rather than one not sent (measured on each). Such a
+  reference is now unresolved and the request is not sent. No test covered
+  it; one does now.
+- **A CSRF cookie that expired since login was reported as a configuration
+  error.** A `${capture.…}` read from a cookie the target had set, and that
+  had since expired, was refused as `unresolved_reference`: "the capture it
+  names is not declared, or the login step meant to produce it did not find
+  it", with configuration advice, and counted by the gate's vacuous-run message
+  as withheld by the configuration. It now has its own reason,
+  `capture_cookie_expired`, with session advice. A capture whose cookie never
+  had a value in the current login keeps `unresolved_reference`. Nothing is
+  sent either way, and the verdict stays `inconclusive`.
 - **A login step's cookie capture outlived its cookie, and as the session's
   proof it kept an expired session live.** A capture declared on a login step
   was copied once and frozen, whatever its source. With `establishes:

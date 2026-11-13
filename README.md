@@ -650,7 +650,9 @@ Coverage still cannot fail silently, and this is the half that matters:
   step, a static credential header); some identity was served in the same
   check, or the same sequence; nothing else in the run proved the identity
   live (a 2xx it drew on a request where an identity with no credential, or
-  the fabricated credential, was refused; or its `marker_probe`) — a 2xx on
+  the fabricated credential, was refused; or its `marker_probe`; for a session
+  with `"reestablish": "check"`, only a 2xx in the same sequence counts, since
+  each check and sequence is a login of its own) — a 2xx on
   a route that serves every caller proves nothing, so a `GET` that serves
   such an identity gets a fabricated credential too, and its 2xx counts only
   if that is refused (on a route an identity with no credential is declared
@@ -1374,7 +1376,15 @@ a missing cookie still fails the login, but after that it is read live: a frozen
 copy would outlive the cookie, and as the `establishes` proof it would keep an
 expired session looking live. A cookie with an empty value (`Set-Cookie:
 csrftoken=`) is no value: a `${capture.…}` reference to it is unresolved and
-the request is not sent.
+the request is not sent. A cookie read live is held to the same rules as a
+value captured from a login response — at most 4096 bytes, printable ASCII, no
+spaces or control characters — and one that breaks them is unresolved too,
+rather than injected as is (or, for a character outside Latin-1, failing inside
+the HTTP client and reported as a failed request rather than one not sent). If a cookie the target
+set during the current login has since expired or been cleared, the reason is
+`capture_cookie_expired`, with session advice, not `unresolved_reference`, which
+is kept for a capture that never had a value: a misspelt name, or a cookie the
+target has not set yet.
 
 **Cookies never cross identities.** Each identity gets its own jar, built on
 `http.cookiejar` with a policy that accepts and returns cookies for exactly one
@@ -1420,12 +1430,35 @@ CSRF token injected as a header: if the jar would leave that cookie off, a
 double-submit CSRF check would refuse the request with a `403`, so it is not
 sent either.
 
+Being on the request is not enough if a different value rides beside it. A
+response after login can set a second cookie under the same name on a
+narrower path (`sid=guest; Path=/docs`), and the jar then sends both, longer
+path first: `Cookie: sid=guest; sid=attacker`. A server that reads the first
+occurrence (Express's cookie-parser, PHP, Go's `r.Cookie`) authenticates the
+guest. So a request that would carry the proof cookie, or a cookie a
+`${capture.…}` value was read from, beside a different value under the same
+name **is not sent** and is graded `inconclusive`
+(`session_cookie_ambiguous`) — the rule that stops such a login from
+establishing, applied to every request. The same value under the same name on
+two paths is not ambiguous and goes out. A target that replaces the proof
+cookie itself (same name, domain and path) is rotating it, and the new value
+is the proof from then on.
+
 | Capture `from` | Reads |
 | --- | --- |
 | `cookie` | that identity's own jar, live at send time — so a rotating CSRF cookie works with no logic at all |
 | `header` | the named response header of the login step that declares it |
 | `json_pointer` | an RFC 6901 pointer into that step's response, in memory |
 | `html_meta` | `<meta name="X" content="Y">`, via the stdlib HTML parser |
+
+A `json_pointer` resolves a string, number or boolean leaf, a number or boolean
+as its JSON text (`0`, `false`); an object, an array or `null` does not
+resolve. A capture that resolves proves only that the login response held a
+non-empty value there, not that the target accepts it as a credential: `{"tok":
+false}` establishes a session whose token is the text `false`. Whether the
+token works is what the liveness controls measure, and a denial drawn with one
+the target ignores is listed in `liveness.unproven` when the fabricated
+credential draws the same answer (measured with `false`, `0` and `"null"`).
 
 `inject` applies to every request issued as that identity once the session is
 established — check probes, marker probes, sequence steps, and teardown. It sets
@@ -1450,7 +1483,13 @@ another's credential and fabricate a `confirmed` finding out of legitimate
 access. If a reference cannot be resolved, the request **is not sent** — an
 untokened request draws a `403`, and a `403` that matches a declared denial is a
 false pass. Set `"reestablish": "check"` to replace the jar and log in again
-before each check and each sequence.
+before each check and each sequence. Liveness proof then belongs to the login
+it was measured under: the identity's `marker_probe` runs once, under the login
+before the first check, so it no longer proves its denials live, and neither
+does a 2xx it drew in another check or sequence. A denial of such an identity
+is proven only within its own sequence or by the fabricated credential's
+answer, and is otherwise listed in `liveness.unproven`, with advice to use
+`"reestablish": "run"` if the target's sessions last the whole run.
 
 **Credentials never reach an artifact.** Cookie values, captured tokens, and
 `Set-Cookie` attributes are never placed in any object that is serialised,
@@ -2364,9 +2403,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,559 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 980 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,539 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,581 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 987 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,568 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

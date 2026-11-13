@@ -1253,6 +1253,11 @@ def _cookie_pairs(header: str) -> set[tuple[str, str]]:
     return pairs
 
 
+def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> bool:
+    """Does ``sent`` carry a value under ``name`` that is none of ``wires``?"""
+    return any(sent_name == name and value not in wires for sent_name, value in sent)
+
+
 def _cookie_wire_values(value: str) -> set[str]:
     """How the jar may write ``value`` into a ``Cookie`` header.
 
@@ -1338,6 +1343,11 @@ class IdentitySession:
         #: always runs next on that same request, requires each of these
         #: cookies to go out with it.
         self._carried: dict[str, str] = {}
+        #: Names of the cookies the target has set, usable and non-empty, since
+        #: the current login began. A capture whose cookie is among them and
+        #: no longer reads is a cookie that expired or was cleared, which is
+        #: the target's doing, not a misspelt capture.
+        self._seen: set[str] = set()
         self._injecting = False
         for capture_name, spec in (self.declaration.get("capture") or {}).items():
             self._session_cookies[capture_name] = spec["name"]
@@ -1389,14 +1399,29 @@ class IdentitySession:
             # or Domain does not cover this URL. The request would go out just
             # as anonymous as an expired one.
             return "session_cookie_not_sent"
+        if name is not None and _other_values(sent, name, {
+            wire for value in self._proof_values() for wire in _cookie_wire_values(value)
+        }):
+            # The proof is on the request, and so is a different value under
+            # its name: a later response set ``sid=guest; Path=/docs`` and the
+            # jar writes the longer path first. A server that reads the first
+            # occurrence authenticates the guest, and the guest's 404 matched
+            # the declared denial. Which one the target reads is unknowable,
+            # the rule establish() applies at login, applied to every request.
+            return "session_cookie_ambiguous"
         for cookie, value in carried.items():
-            if not any((cookie, wire) in sent for wire in _cookie_wire_values(value)):
+            wires = _cookie_wire_values(value)
+            if not any((cookie, wire) in sent for wire in wires):
                 # The request carries a value read from this cookie, in a header
                 # or the body, and the jar left the cookie itself off: it
                 # expired since prepare() read it, or its Path or Domain does
                 # not cover this URL. A double-submit CSRF check compares the
                 # two, draws a 403, and the 403 matches a declared denial.
                 return "capture_cookie_not_sent"
+            if _other_values(sent, cookie, wires):
+                # Sent, but beside a different value under the same name, so the
+                # CSRF check may compare the header with the other one.
+                return "session_cookie_ambiguous"
         return None
 
     def _establishing_cookie(self) -> str | None:
@@ -1433,6 +1458,13 @@ class IdentitySession:
             self.jar.extract_cookies(response, request)
         except Exception:
             self.note = COOKIE_ERROR
+        self._note_cookies()
+
+    def _note_cookies(self) -> None:
+        """Remember which cookies the jar holds a usable value for, by name."""
+        self._seen.update(
+            cookie.name for cookie in self.jar if cookie.value and self._usable(cookie)
+        )
 
     def _cookie_value(self, name: str) -> str | None:
         """The value of a usable cookie of this name, or None.
@@ -1639,12 +1671,18 @@ class IdentitySession:
             not_applied.append(_inject_field_label(entry))
         return resolved, body, None, not_applied
 
-    @staticmethod
-    def _block_reason(missing: str) -> str:
+    def _block_reason(self, missing: str) -> str:
         if missing == "\x00marker":
             return "marker_reflection_blocked"
         if missing == "\x00uncheckable":
             return "marker_check_incomplete"
+        cookie = self._live_cookies.get(missing)
+        if cookie is not None and cookie in self._seen and self._cookie_value(cookie) is None:
+            # The target set this cookie under this login and it is gone now:
+            # expired or cleared. That is the session's state, not a capture
+            # the configuration misnamed, so it gets session advice and the
+            # gate does not count it as a configuration error.
+            return "capture_cookie_expired"
         return "unresolved_reference"
 
     # -- establishment ---------------------------------------------------
@@ -1656,6 +1694,7 @@ class IdentitySession:
         self._values.clear()
         self._live_cookies = dict(self._session_cookies)
         self._proof = frozenset()
+        self._seen = set()
         self.steps = []
         self.note = None
         self.reason = None
@@ -1731,6 +1770,7 @@ class IdentitySession:
                     self._values[name] = value
             sink.clear()
 
+        self._note_cookies()
         cookie = self._establishing_cookie()
         if cookie is not None:
             proof = [

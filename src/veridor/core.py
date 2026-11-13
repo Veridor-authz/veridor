@@ -3210,6 +3210,18 @@ UNSENT_REASONS: dict[str, str] = {
         "not cover this URL), so a check comparing the two would have failed and "
         "the request was not sent"
     ),
+    "capture_cookie_expired": (
+        "a ${capture.…} reference in this request is read from a cookie the "
+        "target set during this login, and that cookie has since expired or been "
+        "cleared, so the request would have gone out without its value and was "
+        "not sent"
+    ),
+    "session_cookie_ambiguous": (
+        "this request would have carried a second, different value under the "
+        "name of a cookie this identity's session depends on (the cookie that "
+        "established it, or one a ${capture.…} value was read from), and which "
+        "one the target reads is unknowable, so the request was not sent"
+    ),
     "injection_not_applicable": (
         "this identity's session injects a form_field or json_field, and this "
         "request has no form-encoded or JSON object body to carry it, so the "
@@ -3318,6 +3330,21 @@ SESSION_UNSENT_REMEDIATION: dict[str, str] = {
         "header to the cookie would refuse it. If the cookie is short-lived, set "
         '"reestablish": "check" on the session; if its Path or Domain does not '
         "cover this URL, check the Set-Cookie attributes the target sends."
+    ),
+    "capture_cookie_expired": (
+        "Nothing was sent: a ${capture.…} value in this request is read from a "
+        "cookie the target set during this login, and it had expired or been "
+        "cleared by the time this request was built. If the cookie is "
+        'short-lived, set "reestablish": "check" on the session so it logs in '
+        "again before each check and sequence, then re-run."
+    ),
+    "session_cookie_ambiguous": (
+        "Nothing was sent: a response after login set another cookie under the "
+        "name of one this identity's session depends on, scoped so that both "
+        "would go out with this request, and a server that reads the first "
+        "occurrence would have authenticated the other one. Find which response "
+        "sets it, or set \"reestablish\": \"check\" on the session so each check "
+        "starts from a fresh login."
     ),
 }
 
@@ -4196,6 +4223,45 @@ def _proven_live_by_service(
             observe(("sequence", sequence_id, request.get("method"), request.get("url")),
                     entry.get("as"), entry.get("status"), entry.get("error"))
     return {identity for key, identity in served if key in refused}
+
+
+#: Advice on an unproven denial for an identity whose session logs in again
+#: before every check and sequence. Its marker_probe ran under the first login
+#: only, so "add a marker_probe" would not make the disclosure go away.
+RELOGGED_LIVENESS_REMEDIATION: str = (
+    '{identity}\'s session logs in again before every check and sequence '
+    '("reestablish": "check"), and its marker_probe runs once, under the first '
+    "login, so it proves nothing about the login this request was sent under. "
+    'If the target\'s sessions last the whole run, set "reestablish": "run" so '
+    "the marker_probe proves the login every request uses; inside a sequence, "
+    "a step where it is served and an identity with no credential is refused "
+    "on the same request proves that sequence's login."
+)
+
+
+def _proven_under_same_login(
+    entry: Mapping[str, Any],
+    config: Mapping[str, Any],
+    liveness: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+    sequence_records: Iterable[Mapping[str, Any]],
+    credentialed: Iterable[str],
+) -> bool:
+    """Is an unproven denial's identity proven live under the login it was sent with?
+
+    For an identity that logs in again before every check and sequence. A check
+    is its own login, and a 2xx in the same check was already taken as proof
+    when it was graded, so nothing at run level can add to it. A sequence is
+    one login too: a 2xx in the same sequence, on a request where a caller with
+    no credential was refused, proves it, as :func:`_proven_live_by_service`
+    judges for any identity.
+    """
+    sequence_id = entry.get("sequence_id")
+    if sequence_id is None:
+        return False
+    same = [record for record in sequence_records if record.get("sequence_id") == sequence_id]
+    return entry["identity"] in _proven_live_by_service(
+        config, (), liveness, same, credentialed
+    )
 
 
 def _sequence_liveness_unproven(
@@ -6849,10 +6915,25 @@ def execute_run(
     # marker_probe control that came back with the marker. Extended below with
     # every identity the target serves a 2xx anywhere in the run, because that
     # is equally good proof and costs nothing.
+    #
+    # Proof of a login is proof of that login only. An identity whose session
+    # logs in again before every check and sequence ("reestablish": "check")
+    # has its marker control run under the login before the first check, under
+    # which no graded request is ever sent, and each check under a login of its
+    # own. A re-login that drew a cookie the target treats as anonymous was
+    # graded safe on the strength of an earlier login's marker, or of a 2xx in
+    # an earlier check. Such an identity's denials are proven only by a 2xx
+    # under the same login -- in the same check or the same sequence -- or are
+    # disclosed as unproven.
+    relogged: set[str] = {
+        name
+        for name, state in sessions.items()
+        if getattr(state, "declaration", {}).get("reestablish") == "check"
+    }
     live_credentials: set[str] = {
         name
         for name, control in marker_controls.items()
-        if control.get("state") == "verified"
+        if control.get("state") == "verified" and name not in relogged
     }
     #: Identities that send something a target could accept or reject. An
     #: anonymous identity is not one, and a 401 it draws everywhere is the
@@ -6965,8 +7046,21 @@ def execute_run(
         liveness_unproven = [
             entry
             for entry in liveness_unproven
-            if entry["identity"] not in proven_live
+            if not (
+                _proven_under_same_login(
+                    entry, config, liveness_controls, sequence_records, credentialed
+                )
+                if entry["identity"] in relogged
+                else entry["identity"] in proven_live
+            )
         ]
+        for entry in liveness_unproven:
+            if entry["identity"] in relogged:
+                # The generic advice is to add a marker_probe, which proves
+                # nothing for this identity past its first login.
+                entry["remediation"] = RELOGGED_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
 
     # After the sequence findings are appended, so step findings are annotated
     # too, and before the diff, which never reads this key.
