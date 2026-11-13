@@ -4875,6 +4875,122 @@ class SessionOnlySequenceLivenessTest(unittest.TestCase):
         self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
 
 
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class TeardownLivenessProofTest(unittest.TestCase):
+    """A teardown 2xx proves the session for the epoch it was sent in, and only that.
+
+    The attacker's cookie is rotated to ``sid=attacker2`` by step 1, so the
+    assert step (3) goes out in a later epoch than the login. An identity with
+    no credential is refused GET /own in step 2; the attacker is served GET
+    /own only in teardown. That 2xx is the one proof for the assert's epoch.
+    Nothing exercised the teardown half of the epoch stamp: deleting it, or
+    stamping teardown under the step key, passed every tier.
+    """
+
+    @staticmethod
+    def _execute(*, teardown: bool = True, rotate_on_assert: bool = False):
+        def responder(entry: dict):
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                who = "victim" if b"u=victim" in entry["body"] else "attacker"
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "attacker2", "attacker3", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            headers = list(json_type)
+            if entry["path"] == "/m" and sid == "attacker":
+                headers.append(("Set-Cookie", "sid=attacker2; Path=/"))
+            if entry["path"] == "/docs/1" and sid == "attacker2" and rotate_on_assert:
+                headers.append(("Set-Cookie", "sid=attacker3; Path=/"))
+            if entry["path"] in ("/m", "/own") or sid == "victim":
+                return 200, headers, json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 404, headers, b'{"e":"denied"}'
+
+        def identity(who: str) -> dict:
+            return {"headers": {}, "session": {
+                "login": [{"method": "POST", "path": "/login", "body": f"u={who}",
+                           "expect_status": [200]}],
+                "establishes": {"cookie": "sid"}}}
+
+        steps = [
+            {"role": "setup", "as": "victim", "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "attacker", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "anonymous", "request": {"method": "GET", "path": "/own"},
+             "expect": {"status": [404]}},
+            {"role": "assert", "as": "attacker",
+             "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [403, 404]}},
+        ]
+        sequence_config = {"id": "seq", "steps": steps}
+        if teardown:
+            sequence_config["teardown"] = [
+                {"as": "attacker", "request": {"method": "GET", "path": "/own"},
+                 "expect": {"status": [200]}}]
+        config = {"version": 2,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": {"victim": identity("victim"), "attacker": identity("attacker"),
+                                 "anonymous": {"headers": {}}},
+                  "checks": [], "sequences": [sequence_config]}
+        with _server(responder) as (url, log):
+            result, sessions, _ = _run(config, url)
+        wire = [(entry["path"], entry["cookie"]) for entry in log.entries
+                if entry["path"] in ("/docs/1", "/own") and "victim" not in entry["cookie"]]
+        return result, wire, sessions["attacker"]
+
+    def test_a_teardown_2xx_in_the_asserts_epoch_proves_it(self) -> None:
+        result, wire, session = self._execute()
+        self.assertEqual(wire, [("/own", ""), ("/docs/1", "sid=attacker2"),
+                                ("/own", "sid=attacker2")])
+        self.assertEqual(result["sequences"][0]["teardown"][0]["status"], 200)
+        self.assertEqual(result["liveness"]["unproven"], [])
+        self.assertEqual(session.sent_epochs.get(("teardown", "seq", 0)),
+                         session.sent_epochs[("step", "seq", 3)])
+
+    def test_control_without_the_teardown_the_assert_is_listed(self) -> None:
+        result, _wire, _session = self._execute(teardown=False)
+        self.assertEqual([(entry["step_index"], entry.get("proof_scope"))
+                          for entry in result["liveness"]["unproven"]],
+                         [(3, "cookie_value")])
+
+    def test_a_teardown_2xx_in_a_later_epoch_does_not_prove_it(self) -> None:
+        """The assert's response rotates again; teardown goes out as attacker3."""
+        result, wire, _session = self._execute(rotate_on_assert=True)
+        self.assertEqual(wire[-1], ("/own", "sid=attacker3"))
+        self.assertEqual([(entry["step_index"], entry.get("proof_scope"))
+                          for entry in result["liveness"]["unproven"]],
+                         [(3, "cookie_value")])
+
+
+class ServedWhereRefusedRequestKeyTest(unittest.TestCase):
+    """The request a proving 2xx names is keyed as the session stamped it. Socket-free."""
+
+    @staticmethod
+    def _records(served_in: str) -> list[dict]:
+        refused = {"index": 0, "as": "anonymous",
+                   "request": {"method": "GET", "url": "/own"},
+                   "response": {"status": 404}, "error": None}
+        served = {"index": 1 if served_in == "steps" else 0, "as": "attacker",
+                  "request": {"method": "GET", "url": "/own"}, "error": None}
+        if served_in == "steps":
+            served["response"] = {"status": 200}
+            return [{"sequence_id": "seq", "steps": [refused, served], "teardown": []}]
+        served["status"] = 200
+        return [{"sequence_id": "seq", "steps": [refused], "teardown": [served]}]
+
+    def _proofs(self, records: list[dict]) -> list:
+        return core._served_where_refused({"checks": []}, (), {}, records, {"attacker"})
+
+    def test_a_teardown_2xx_names_its_teardown_entry(self) -> None:
+        self.assertEqual(self._proofs(self._records("teardown")),
+                         [("attacker", ("teardown", "seq", 0))])
+
+    def test_control_a_step_2xx_names_its_step(self) -> None:
+        self.assertEqual(self._proofs(self._records("steps")),
+                         [("attacker", ("step", "seq", 1))])
+
+
 class ReplacedCookieSequenceStepsTest(unittest.TestCase):
     """Which steps the run-level pass considers, read off the config. Socket-free."""
 

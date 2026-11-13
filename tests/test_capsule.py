@@ -806,6 +806,28 @@ class AdjudicationTest(unittest.TestCase):
         self.assertIn("no credential Veridor fabricated was sent", result["reason"])
         self.assertNotIn("so did a credential Veridor fabricated", result["reason"])
 
+    def test_a_scoped_unproven_denial_is_not_told_to_add_a_marker_probe(self) -> None:
+        """Its marker_probe ran, under a login or cookie value the denial did not use."""
+        for scope in ("login", "cookie_value"):
+            with self.subTest(scope=scope):
+                document = _run_document(liveness="unproven")
+                entry = document["liveness"]["unproven"][0]
+                entry["control"], entry["proof_scope"] = "withheld_sequence_step", scope
+                result = capsule.adjudicate(self.capsule, document)
+                self.assertEqual(result["verdict"], capsule.INCONCLUSIVE)
+                self.assertIn("a marker_probe proves only the login and session cookie "
+                              "value it ran under, and this denial was sent under another",
+                              result["reason"])
+                self.assertNotIn("would prove it live", result["reason"])
+
+    def test_control_an_unscoped_one_is_told_to_add_a_marker_probe(self) -> None:
+        document = _run_document(liveness="unproven")
+        document["liveness"]["unproven"][0]["control"] = "withheld_sequence_step"
+        result = capsule.adjudicate(self.capsule, document)
+        self.assertIn("(a marker_probe on 'attacker', naming something it is served, "
+                      "would prove it live)", result["reason"])
+        self.assertNotIn("proves only the login", result["reason"])
+
     def test_liveness_turned_off_says_so_beside_the_verdict(self) -> None:
         result = self._verdict(liveness="off")
         self.assertEqual(result["verdict"], capsule.NOT_REPRODUCED)
