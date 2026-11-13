@@ -15,7 +15,7 @@ first time.
 
 ## What is supported
 
-- **Releases.** None yet. After the first release, only the latest release
+- **Releases.** Only the latest release
   gets fixes ([SECURITY.md](SECURITY.md#supported-versions)).
 - **Python.** 3.11, 3.12 and 3.13. The CI workflow is configured to run the
   suite on all three on Linux and on 3.12 on macOS; Windows has not been tried.

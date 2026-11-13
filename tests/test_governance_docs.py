@@ -108,7 +108,10 @@ class IntegrationsTableTest(unittest.TestCase):
     def test_the_table_claims_nothing_exists_that_does_not(self) -> None:
         section = re.search(r"^## CI/CD integrations$(.*?)(?=^## )", README, re.M | re.S).group(1)
         self.assertIn("every other row ran outside its platform", section)
-        self.assertIn("Nothing is published", section)
+        # Until the first tag this read "Nothing is published"; the files
+        # name what each release tag publishes, and the table claims only
+        # what was executed.
+        self.assertIn("are the ones each release tag publishes", " ".join(section.split()))
         for claim in self.EXISTENCE_CLAIMS:
             with self.subTest(claim=claim):
                 self.assertIsNone(re.search(claim, section))
@@ -418,11 +421,17 @@ class ChangelogTest(unittest.TestCase):
         doubled = self.TEXT[:at] + "### Added\n\n- x\n\n" + self.TEXT[at:]
         self.assertEqual(self.problems(doubled), [f"{title}: a '###' heading appears twice"])
 
-    def test_no_version_is_described_as_released(self) -> None:
-        """0.1.0 was called "First tagged release"; no tag has ever existed."""
-        self.assertNotIn("First tagged release", self.TEXT)
-        section = re.search(r"^## \[0\.1\.0\]$(.*?)(?=^## |\Z)", self.TEXT, re.M | re.S).group(1)
-        self.assertIn("Not released", section)
+    def test_the_released_version_is_dated_and_says_so(self) -> None:
+        """0.1.0 was once called "First tagged release" while no tag existed,
+        and until the tag this asserted its section said "Not released". The
+        release commit dates the heading and replaces that paragraph, and
+        leaves [Unreleased] empty above it (CONTRIBUTING, "Releasing")."""
+        section = re.search(r"^## \[0\.1\.0\] - \d{4}-\d{2}-\d{2}$(.*?)(?=^## |\Z)", self.TEXT, re.M | re.S)
+        self.assertIsNotNone(section, "0.1.0 has no dated heading")
+        self.assertNotRegex(section.group(1), r"(?m)^(?:Not (?:yet )?released\.|Nothing here has been released)")
+        self.assertIn("First public release.", section.group(1))
+        unreleased = re.search(r"^## \[Unreleased\]$(.*?)(?=^## |\Z)", self.TEXT, re.M | re.S)
+        self.assertEqual(unreleased.group(1).strip(), "")
 
 
 class MajorTagPolicyTest(unittest.TestCase):

@@ -27,8 +27,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: veridor
-          # A placeholder: no image is published yet. Build one from the
-          # repository's Dockerfile and set it with `images:` in your overlay.
+          # The image each release publishes. To run one built from the
+          # repository's Dockerfile, set it with `images:` in your overlay.
           image: ghcr.io/veridor-authz/veridor:0.1.0
           imagePullPolicy: IfNotPresent
           command:

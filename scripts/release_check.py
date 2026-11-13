@@ -169,9 +169,7 @@ REGISTRY: tuple[Occurrence, ...] = (
     _occ("deploy/helm/veridor-gate/Chart.yaml", r"^version: {V}$", "semver", "chart version"),
     _occ("deploy/helm/veridor-gate/Chart.yaml", r'^appVersion: "{V}"$', "semver",
          "chart appVersion (the default image tag)"),
-    _occ("deploy/helm/veridor-gate/README.md", r"At chart version {V} neither", "semver", "chart README"),
     _occ("deploy/helm/veridor-gate/README.md", r"not implemented in chart {V}\.", "semver", "chart README"),
-    _occ("deploy/helm/veridor-gate/README.md", r"Not published at {V}; see above", "semver", "chart README"),
     # Kustomize and Argo.
     _occ("deploy/kustomize/veridor-gate/base/job.yaml", r"image: ghcr\.io/veridor-authz/veridor:{V}$", "semver",
          "Kustomize base image"),
@@ -181,7 +179,6 @@ REGISTRY: tuple[Occurrence, ...] = (
     _occ("deploy/argo-rollouts/veridor-analysistemplate.yaml", r"value: ghcr\.io/veridor-authz/veridor:{V}$", "semver",
          "AnalysisTemplate image default"),
     _occ("deploy/argo-rollouts/README.md", r"`ghcr\.io/veridor-authz/veridor:{V}`", "semver", "Rollouts README"),
-    _occ("deploy/argo-rollouts/README.md", r"Not published at {V}:", "semver", "Rollouts README"),
     # The GitLab component and its consumer example.
     _occ("templates/veridor.yml", r'default: "ghcr\.io/veridor-authz/veridor:{V}"', "semver", "component image default"),
     _occ("templates/veridor.yml", r'default: "veridor=={V}"', "pep440", "component pip_package default"),

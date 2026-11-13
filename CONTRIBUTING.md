@@ -293,8 +293,8 @@ GitHub yet:
 
 ## Releasing
 
-For maintainers. As of 2026-11-04 nothing has been released; this is the procedure
-`.github/workflows/release.yml` expects, and it has not been run end to end.
+For maintainers. This is the procedure `.github/workflows/release.yml` expects.
+It had not been run end to end before the first release was tagged.
 
 Every job in `release.yml` that publishes (provenance, PyPI, the image, the
 chart, the GitHub release) runs in one protected environment, `release`, and
@@ -344,7 +344,8 @@ the repository running it, lowercase, the chart's default image is `IMAGE` and
 is on `main` and the CI workflow's newest push run on `main` for that commit
 passed (`.github/scripts/check-release-commit.sh`). So push the commit, wait for
 CI, then tag it. CI runs on the newest commit of a push, so a commit in the
-middle of one cannot be tagged. Neither check has run on GitHub yet.
+middle of one cannot be tagged. Neither check had run on GitHub before the
+first release.
 
 Each job in `release` also first runs
 `.github/scripts/check-release-environment.sh`. The job fails unless
@@ -386,9 +387,11 @@ maintainers.
    the wheel path that stops the install step with a pin of the released version.
    These tests hold those sentences, so change them in the same commit:
    `tests/test_action.py`, `tests/test_kustomize.py`,
-   `test_nothing_claims_a_release_exists` in `tests/test_ci_configs.py`,
+   `test_each_file_says_what_the_first_release_publishes` in
+   `tests/test_ci_configs.py`,
    `test_the_action_examples_pin_a_commit_never_a_tag` in
-   `tests/test_release_files.py`, `test_no_version_is_described_as_released` and
+   `tests/test_release_files.py`,
+   `test_the_released_version_is_dated_and_says_so` and
    `test_the_table_claims_nothing_exists_that_does_not` in
    `tests/test_governance_docs.py`, and
    `test_the_changelog_states_the_break_under_changed` in `tests/test_docs.py`.

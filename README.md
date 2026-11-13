@@ -9,9 +9,9 @@ declaration is right — only whether your target still agrees with it. Read
 [what a finding does and does not mean](#what-a-veridor-finding-does-and-does-not-mean)
 before you read a report. Runtime is the Python standard library only.
 
-**Status: early pre-release (alpha).** As of 2026-11-04, no release has been tagged.
+**Status: early alpha.** Each release is listed in [CHANGELOG.md](CHANGELOG.md).
 The configuration format, commands, flags and report formats may still change
-between commits. What Veridor does not claim is set out in
+between minor versions. What Veridor does not claim is set out in
 [what a finding does and does not mean](#what-a-veridor-finding-does-and-does-not-mean)
 and [Non-goals](#non-goals).
 
@@ -50,19 +50,17 @@ Python 3.11 or newer. No runtime dependencies. Installing from source with pip
 fetches setuptools from PyPI to build the package; the zipapp below needs no
 index to build or run.
 
-**As of 2026-11-04 no release exists.** Veridor is not on PyPI, and no container image
-or release download has been published. The repository's Releases page shows any
-published since. Until the first release, install from source or build the image
-or the zipapp yourself. The name `veridor` is unclaimed on PyPI, so anyone can
-register it: whatever `pip install veridor` finds before the first release is
-not this project's.
+Each release tag publishes the
+`veridor` package to PyPI, the image to `ghcr.io/veridor-authz/veridor`, the
+Helm chart and a GitHub release with the zipapp and `SHA256SUMS`. The
+repository's Releases page lists every release. You can also install from
+source or build the image or the zipapp yourself.
 
-| How | Before the first release | After the first release |
+| How | From a release | Built yourself |
 | --- | --- | --- |
-| From source | Below | Unchanged |
-| pip | Not available | `pip install veridor==X.Y.Z` |
-| Container image | `docker build -t veridor:local .` | `ghcr.io/veridor-authz/veridor:X.Y.Z` |
-| Zipapp, one file | `python3.12 scripts/build_zipapp.py` writes `dist/veridor-<version>.pyz` | `veridor-X.Y.Z.pyz` with `SHA256SUMS` on the release |
+| pip | `pip install veridor==X.Y.Z` | From source, below |
+| Container image | `ghcr.io/veridor-authz/veridor:X.Y.Z` | `docker build -t veridor:local .` |
+| Zipapp, one file | `veridor-X.Y.Z.pyz` with `SHA256SUMS` on the release | `python3.12 scripts/build_zipapp.py` writes `dist/veridor-<version>.pyz` |
 
 From source:
 
@@ -109,8 +107,8 @@ Veridor has no TLS setting of its own, and a configuration that names one
 CI is configured to run the full fast tier on every version that floor allows
 (3.11, 3.12 and 3.13), plus a wheel build and install, because running from a
 checkout proves nothing about installing. Every job passed on GitHub-hosted
-runners on 2026-11-08 (CI run 42508338432, at `38025ed`). The repository is still private,
-so that run is visible only to its members.
+runners on 2026-11-08 (CI run 42508338432, at `38025ed`), while the repository
+was still private.
 
 Releases are configured to be tagged `vX.Y.Z`. The image gets `X.Y.Z`, plus
 `X.Y` and `latest` for a final release. There is no moving major tag (`v0`,
@@ -124,23 +122,23 @@ an `integrity` hash, not from the tag URL ([GitLab CI](#gitlab-ci) shows how).
 What each integration is, and exactly what had been executed for it as of
 2026-11-08. The Kubernetes rows have run on the system they target, on kind
 clusters, locally and in this repository's CI on a GitHub-hosted runner. The
-GitHub Action has run through `uses: ./` in that same CI, which is private;
-**every other row ran outside its platform**.
-Nothing is published, so the image, chart and package names in these files resolve only after the first
-release.
+GitHub Action has run through `uses: ./` in that same CI, which was private
+then; **every other row ran outside its platform**.
+The image, chart and package names in these files are the ones each release
+tag publishes.
 
 | Integration | Files | What has been executed | Not yet |
 | --- | --- | --- | --- |
 | [GitHub Action](#github-action) | [action.yml](action.yml) | Its steps, run in order by a local harness under the runner's bash flags, against the demo API: vulnerable fails the step with exit 1, fixed passes (`tests/test_action.py`); the `action-e2e` CI job through `uses: ./` on GitHub-hosted `ubuntu-latest` and `macos-latest`, same result (2026-11-08) | A run from another repository; a SARIF upload to code scanning; Windows runners |
 | [GitLab CI/CD component](#gitlab-ci) | [templates/veridor.yml](templates/veridor.yml) | The job's own rendered script in docker against the demo API, last run locally 2026-09-27, on the Alpine image ([counts and controls](ci/README.md#what-was-tested)), and with its three controls in CI on a GitHub-hosted runner on 2026-11-08, covering exits 0, 1, 2, 3 and 143, every report, every input that changes the script, and proxy variables set as pipeline variables (`scripts/e2e_gitlab_job.sh`); the YAML against GitLab's CI schema | A GitLab runner; the CI/CD Catalog |
-| Argo CD PostSync gate, Helm | [deploy/helm/veridor-gate](deploy/helm/veridor-gate/README.md), [deploy/argocd](deploy/argocd/README.md) | A kind cluster with Argo CD v3.5.3, locally and on a GitHub-hosted runner (`scripts/e2e_kubernetes.sh`): a vulnerable target fails the sync, a fixed one succeeds, each sync that runs hooks read from a gate Job of its own (`generateName`); a selective or Apply Only sync runs no hook and no gate; also as a Helm hook and a plain Job | Other clusters and Argo CD versions; the chart is not published |
+| Argo CD PostSync gate, Helm | [deploy/helm/veridor-gate](deploy/helm/veridor-gate/README.md), [deploy/argocd](deploy/argocd/README.md) | A kind cluster with Argo CD v3.5.3, locally and on a GitHub-hosted runner (`scripts/e2e_kubernetes.sh`): a vulnerable target fails the sync, a fixed one succeeds, each sync that runs hooks read from a gate Job of its own (`generateName`); a selective or Apply Only sync runs no hook and no gate; also as a Helm hook and a plain Job | Other clusters and Argo CD versions; a run from the published chart |
 | Argo CD PostSync gate, Kustomize | [deploy/kustomize/veridor-gate](deploy/kustomize/veridor-gate/README.md) | Not provided: Kustomize refuses the `generateName` an Argo CD hook Job needs, so with Argo CD use the Helm chart. The plain overlay ran in the same kind run: vulnerable Job `Failed`, fixed `Complete`, and its README's delete/apply/wait block | Standalone kustomize, Flux |
 | Argo Rollouts analysis | [deploy/argo-rollouts](deploy/argo-rollouts/README.md) | The same kind run with Argo Rollouts v1.10.0: a vulnerable canary is aborted, a fixed one promoted | A traffic router |
 | Jenkins | [ci/Jenkinsfile](ci/Jenkinsfile) | The gate shell, run on a host against the demo API (`tests/test_ci_configs.py`); the file accepted by Jenkins' declarative linter | A Jenkins build |
 | Azure Pipelines | [ci/azure-pipelines.yml](ci/azure-pipelines.yml) | The gate shell, run on a host; the YAML against Azure's pipeline schema | An Azure run |
 | AWS CodeBuild | [ci/buildspec.yml](ci/buildspec.yml) | The gate shell, run on a host; the keys against AWS's buildspec reference | A CodeBuild build |
-| Any CI, container image | [Dockerfile](Dockerfile) | Built locally and run as the job image in the GitLab run above; built and run as the gate by the `image` CI job on a GitHub-hosted runner (2026-11-08) | Publishing |
-| Any CI, zipapp | [scripts/build_zipapp.py](scripts/build_zipapp.py) | Built, then run on Python 3.11 against the demo API: vulnerable exits 1, fixed 0 | Publishing as a release asset |
+| Any CI, container image | [Dockerfile](Dockerfile) | Built locally and run as the job image in the GitLab run above; built and run as the gate by the `image` CI job on a GitHub-hosted runner (2026-11-08) | A run from the published image |
+| Any CI, zipapp | [scripts/build_zipapp.py](scripts/build_zipapp.py) | Built, then run on Python 3.11 against the demo API: vulnerable exits 1, fixed 0 | A run of the release asset |
 
 [ci/README.md](ci/README.md#what-was-tested) has the detail for GitLab,
 Jenkins, Azure and CodeBuild, and the READMEs under `deploy/helm`,
@@ -2146,10 +2144,9 @@ baseline, and the committed file cannot go missing without somebody noticing.
 
 ### GitHub Action
 
-**As of 2026-11-04, no release has been tagged.** There is no `Veridor-authz/veridor` tag,
-release or Marketplace listing to point at, so `Veridor-authz/veridor@<full-commit-sha>`
-in the examples below is a placeholder that resolves to nothing until there is.
-After the first release, replace it with that release's full 40-character commit SHA
+Releases are tagged `vX.Y.Z`. There is no Marketplace listing.
+`Veridor-authz/veridor@<full-commit-sha>` in the examples below stands for the
+full 40-character commit SHA a release tag points to: replace it with that SHA
 and keep the version as a comment, the way this repository pins every action
 it uses. There is no moving `v0` or `v1` tag while the version is `0.x`: a
 minor release may change behaviour, and a floating reference would change what
@@ -2179,7 +2176,7 @@ steps:
   - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
     with:
       python-version: "3.12"
-  - uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z, after the first release
+  - uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z
     id: veridor
     with:
       config: veridor.json
@@ -2231,7 +2228,7 @@ resulting alerts has not been observed here.
 Drift is the same Action with `mode: drift`:
 
 ```yaml
-  - uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z, after the first release
+  - uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z
     with:
       mode: drift
       config: veridor.json
@@ -2340,7 +2337,7 @@ let a document written in the same second, or with a clock ahead, pass as this
 step's.
 
 ```yaml
-- uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z, after the first release
+- uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z
   id: authz
   continue-on-error: true          # you MUST re-fail below, or the gate is off
   with:
@@ -2580,7 +2577,7 @@ with every image and the Datasette pair's build layers already present
 (2026-10-15, three runs, load average about 2.5 from other work): every pair
 with `--pull` took 53 seconds median (52 to 64). On a GitHub-hosted `ubuntu-latest`
 runner the CI job's `--pull` step took 155 seconds (one
-run, 2026-11-08). The release job has not run.
+run, 2026-11-08). The release job had not run by then.
 
 `--pairs-dir DIR` (or `VERIDOR_PAIRS_DIR`) also runs the pairs in a directory
 outside the repository. It is for findings whose details are not public yet: a
@@ -2631,10 +2628,9 @@ Left as shown, both placeholders stop the pipeline rather than run anything.
 
 Once the repository is mirrored to GitLab and released there, the CI/CD
 Catalog form is `include: component: gitlab.com/Veridor-authz/veridor/veridor@0.1.0`.
-**Neither is published as of 2026-11-04.** The `v0.1.0` tag, the
-`ghcr.io/veridor-authz/veridor:0.1.0` image the job runs, the PyPI package and a
-Catalog entry do not exist until the first release. The Catalog address also
-assumes the `gitlab.com/Veridor-authz` namespace belongs to this project,
+The `v0.1.0` tag publishes the `ghcr.io/veridor-authz/veridor:0.1.0` image the
+job runs and the PyPI package; it does not publish a Catalog entry. The Catalog
+address assumes the `gitlab.com/Veridor-authz` namespace belongs to this project,
 and nothing here shows that it does. Whoever holds that namespace could publish a
 component at that address, and it would run with your CI/CD variables, so check
 the holder before you use it.
@@ -2664,9 +2660,9 @@ it so by default; when it is not, the job stops with exit 2 and says why.
 | `stage` | string | `test` | The stage the job runs in. The gate probes whatever `base_url` serves when it starts, so run it after the job that deploys that target, in a later stage or with `needs:` on that job. `test` runs before GitLab's default `deploy` stage |
 | `job_name` | string | `veridor` | The job's name; include the component twice under two names to gate two configurations |
 | `install` | string | `image` | `image` runs the Veridor container image; `pip` installs `pip_package` into `python_image`, for runners that cannot pull it |
-| `image` | string | `ghcr.io/veridor-authz/veridor:0.1.0` | The Veridor image (`install: image`); pin a digest once one is published |
+| `image` | string | `ghcr.io/veridor-authz/veridor:0.1.0` | The Veridor image (`install: image`); pin it by digest |
 | `python_image` | string | `python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111` | The Python 3.11+ image (`install: pip`), pinned by digest: the job runs pip and the gate in it with every credential. The digest is the one the release Dockerfile builds on. It has no bash; the job's script needs none |
-| `pip_package` | string | `veridor==0.1.0` | What pip installs (`install: pip`): a pinned requirement or a wheel path. The name is unclaimed on PyPI until the first release, and anyone can publish that version: set a wheel path until then |
+| `pip_package` | string | `veridor==0.1.0` | What pip installs (`install: pip`): a pinned requirement or a wheel path |
 | `config` | string | `veridor.json` | The Veridor configuration |
 | `base_url` | string | (empty) | Overrides `target.base_url`. Every credential is sent here, so prefer a literal URL. For a review app, a variable the deploy job writes to a dotenv report ([`ci/.gitlab-ci.yml`](ci/.gitlab-ci.yml) shows how), but only where the project's *Minimum role to use pipeline variables* excludes everyone who may not read the credentials: a pipeline variable of the same name outranks the dotenv value. Not `$CI_ENVIRONMENT_URL`, which GitLab sets only in a job with an environment. A variable that is empty when the job runs is refused, not ignored |
 | `proxy_from_environment` | boolean | `false` | `false` runs Veridor without any `*_proxy` variable (`http_proxy`, `HTTPS_PROXY`, any case), so its requests go straight to the target, and the log names what was removed. A pipeline variable of that name would otherwise pick where every credential goes, whatever `base_url` says. `true` keeps them, for a target reachable only through a proxy |
@@ -2759,10 +2755,10 @@ step that makes that true, and one with that step as it was before `run` was
 checked). The release workflow is configured to check each platform's image
 the same way before it pushes, and the pushed digest again before it signs.
 Every one of those CI jobs passed on GitHub-hosted runners on 2026-11-08 (CI run 42508338432, at
-`38025ed`); the release workflow has not run. The repository is private, and on
-it the CodeQL and OpenSSF Scorecard workflows fail: CodeQL's upload needs
-Advanced Security enabled, and Scorecard's query of the repository is refused
-("Resource not accessible by integration"). The Linux Python 3.12 leg
+`38025ed`), before the release workflow had run. While the repository was
+private, the CodeQL and OpenSSF Scorecard workflows failed on it: CodeQL's upload
+needed Advanced Security enabled, and Scorecard's query of the repository was
+refused ("Resource not accessible by integration"). The Linux Python 3.12 leg
 also runs the end-to-end validation:
 
 ```bash

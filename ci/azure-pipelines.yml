@@ -5,21 +5,13 @@
 # Azure's published YAML schema, the veridor command line against the real CLI
 # parser, the exit-code branches, the shell with shellcheck) and what was not.
 #
-# NOT YET PUBLISHED. The PyPI package, container image and zipapp named below
-# do not exist until Veridor's first release (0.1.0).
+# The PyPI package, container image and zipapp named below are what Veridor's
+# first release (0.1.0) publishes.
 #
-# THE PYPI NAME IS UNCLAIMED. Nobody has registered `veridor` on PyPI, so
-# anyone can, and can publish the version named below. A pip line naming it would
-# install whatever is there and run it with the credentials this pipeline maps.
-# So the install step below names a wheel path that does not exist, and stops the
-# job there (pip exits 1 before it looks at any index). Build a wheel from the
-# repository and put its path in that step.
-#
-# INSTALL -- pick one; pip on a wheel path is the active one below.
-#   1. pip (active): UsePythonVersion, then pip on that wheel path. Once the
-#      first release is on the repository's Releases page and the name is no
-#      longer unclaimed,
-#      the line can name `veridor==0.1.0` instead.
+# INSTALL -- pick one; pip is the active one below.
+#   1. pip (active): UsePythonVersion, then pip on `veridor==0.1.0`. To
+#      install a wheel you built from the repository instead, put its path in
+#      that line.
 #   2. Container image: Azure's container jobs require an image without an
 #      ENTRYPOINT whose user can run groupadd, and the Veridor image has an
 #      ENTRYPOINT and runs as uid 10001. Use `docker run --rm --entrypoint ""
@@ -117,8 +109,7 @@ stages:
 
           - bash: |
               set -e
-              # Stops the job until you put a wheel's path here: see the note at the top.
-              python -m pip install --quiet --disable-pip-version-check "./REPLACE_WITH_THE_PATH_OF_A_VERIDOR_WHEEL.whl"
+              python -m pip install --quiet --disable-pip-version-check "veridor==0.1.0"
               veridor --version
             displayName: Install Veridor
 

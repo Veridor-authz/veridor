@@ -368,10 +368,12 @@ class ConsistencyTest(unittest.TestCase):
         a push here changes what runs in somebody's pipeline with their
         credentials in the environment, and the `@v0.1.0` the README used to
         show named a tag that did not exist. So this repository's Action is
-        shown pinned to a commit: the `<full-commit-sha>` placeholder until the
-        first release exists (and the README says so), a real 40-hex SHA with
-        a `# vX.Y.Z` comment after. Every other action shown is pinned the same
-        way this repository pins its own."""
+        shown pinned to a commit: the `<full-commit-sha>` placeholder with a
+        `# vX.Y.Z` comment, which the README says stands for the commit a
+        release tag points to (the text is committed before the tag exists, so
+        it cannot name that SHA), or a real 40-hex SHA with a `# vX.Y.Z`
+        comment after. Every other action shown is pinned the same way this
+        repository pins its own."""
         uses = re.findall(r"^\s*(?:- )?uses: (\S+)(.*)$", README, re.MULTILINE)
         ours = [(ref, rest) for ref, rest in uses if ref.startswith(REPOSITORY + "@")]
         self.assertTrue(ours, "the README no longer shows how to use the Action")
@@ -380,7 +382,9 @@ class ConsistencyTest(unittest.TestCase):
                 self.assertNotEqual(reference, "./", "the README tells users `uses: ./`")
                 repository, _, ref = reference.partition("@")
                 if repository == REPOSITORY and ref == "<full-commit-sha>":
-                    self.assertRegex(README, r"As of \d{4}-\d{2}-\d{2}, no release has been tagged\.")
+                    self.assertIn("stands for the full 40-character commit SHA a release tag points to",
+                                  " ".join(README.split()))
+                    self.assertRegex(rest, r"^\s+#\s+vX\.Y\.Z$", "say it is a release's SHA, and nothing else")
                     continue
                 self.assertRegex(ref, r"^[0-9a-f]{40}$", "pin a full commit SHA, not a tag or branch")
                 self.assertRegex(rest, r"^\s+#\s+v\d", "say which version the SHA is")

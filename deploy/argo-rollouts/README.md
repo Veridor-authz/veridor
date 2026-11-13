@@ -84,7 +84,7 @@ gate.
 | `base-url` | none (required) | The **canary** Service. A gate pointed at the stable Service measures the version already live. |
 | `config-map` | `veridor-config` | ConfigMap holding `veridor.json`. |
 | `secret` | `veridor-credentials` | Secret imported with `envFrom`. |
-| `image` | `ghcr.io/veridor-authz/veridor:0.1.0` | Gate image. Not published at 0.1.0: build it from the repository's `Dockerfile` and pass it here. |
+| `image` | `ghcr.io/veridor-authz/veridor:0.1.0` | Gate image, published by each release. To run one built from the repository's `Dockerfile`, pass it here. |
 | `fail-on` | `new+confirmed` | `--fail-on`. |
 | `wait-for-target` | `"60"` | `--wait-for-target`: seconds to wait, before the first request, for the canary Service to accept a TCP connection. The analysis can start as the canary pod turns Ready, before the Service routes to it; probes sent then are refused and exit 3 aborts the rollout. Never changes a verdict. `"0"` turns it off. |
 

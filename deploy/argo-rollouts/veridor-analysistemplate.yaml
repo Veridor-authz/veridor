@@ -35,8 +35,8 @@ spec:
       value: veridor-config
     - name: secret
       value: veridor-credentials
-    # This image is not published at this version: build one from the
-    # repository's Dockerfile and set it here.
+    # Each release publishes this image. To run one built from the
+    # repository's Dockerfile, set it here.
     - name: image
       value: ghcr.io/veridor-authz/veridor:0.1.0
     - name: fail-on

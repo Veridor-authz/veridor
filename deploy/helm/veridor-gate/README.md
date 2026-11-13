@@ -64,12 +64,13 @@ question in reverse and carries the same requirement.
 All three modes are exercised against a live kind cluster by
 `scripts/e2e_kubernetes.sh` (see "What is tested" below).
 
-**Not published as of 2026-11-04.** At chart version 0.1.0 neither this chart nor the
-`ghcr.io/veridor-authz/veridor` image is in a public registry. Package the chart
-yourself (`helm package deploy/helm/veridor-gate`) and build the image from the
-repository's `Dockerfile`, then set `image.repository` / `image.tag`. A chart
-the release workflow publishes pins `image.digest` to its own image; to run a
-different tag with it, see "Image and command".
+Each release tag publishes this chart to `oci://ghcr.io/veridor-authz/charts`
+and the `ghcr.io/veridor-authz/veridor` image. To run from the repository
+instead, package the chart yourself (`helm package deploy/helm/veridor-gate`)
+and build the image from the repository's `Dockerfile`, then set
+`image.repository` / `image.tag`. A chart the release workflow publishes pins
+`image.digest` to its own image; to run a different tag with it, see "Image
+and command".
 
 ## Quick start
 
@@ -770,7 +771,7 @@ when it is stopped mid-run is in the main README's exit-code section.
 | `hook.helm.deletePolicy` | `before-hook-creation` | `helm.sh/hook-delete-policy`. Must include `before-hook-creation` (`hook-succeeded` or `hook-failed` may be added): the Job keeps one name, so without it the next `helm upgrade` finds the Job an earlier run left and does not run the gate again (measured with `hook-failed`: the upgrade exited 0 on the install's Complete Job, no new run). |
 | `hook.helm.allowRenderWithoutCluster` | `false` | Helm mode is for the Helm CLI, whose `helm install` and `helm upgrade` reach the cluster. A helm-mode render that reaches none is refused unless this is `true` (a boolean; the string `"true"` is refused): Argo CD renders that way, and runs the Job as a `PostSync` hook with one fixed name, from which Argo CD v3.5.3 reported syncs by the previous sync's Job (measured, see the top of this README). Set it to render helm mode with `helm template` or `--dry-run=client` for the Helm CLI; never under Argo CD, where `hook.mode` is `argocd`. |
 | `hook.helm.weight` | `"0"` | `helm.sh/hook-weight`. |
-| `image.repository` | `ghcr.io/veridor-authz/veridor` | Gate image. Not published at 0.1.0; see above. |
+| `image.repository` | `ghcr.io/veridor-authz/veridor` | Gate image, published by each release; see above. |
 | `image.tag` | `""` | Empty = the chart's `appVersion`. With `image.digest` set it must equal `image.digestTag` (see "Image and command"). |
 | `image.digest` | `""` | `sha256:...`; referenced as `repository:tag@digest`, and the digest is what is pulled. The release workflow sets it to that release's image digest in the chart it publishes. |
 | `image.digestTag` | `""` | The tag `image.digest` is the digest of; empty = the chart's `appVersion`. With a digest set, a different tag is refused. |

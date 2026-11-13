@@ -1631,10 +1631,16 @@ class DocumentationTest(unittest.TestCase):
         self.assertIn("ci/README.md#what-was-tested", row)
         self.assertRegex(CI_README.read_text(encoding="utf-8"), r"\d+ checks, 0 mismatches")
 
-    def test_nothing_claims_a_release_exists(self) -> None:
+    def test_each_file_says_what_the_first_release_publishes(self) -> None:
+        """Until the first tag each of these said nothing was published yet,
+        and this asserted it. From the tag on, each says what the release it
+        names publishes, and none still says it does not exist."""
         for path in (cv.COMPONENT, cv.GITLAB_EXAMPLE, cv.JENKINSFILE, cv.AZURE, cv.BUILDSPEC, CI_README):
             with self.subTest(file=path.name):
-                self.assertRegex(path.read_text(encoding="utf-8"), r"(?i)not yet published|does not exist until|do not exist until")
+                text = path.read_text(encoding="utf-8")
+                self.assertRegex(" ".join(text.replace("#", " ").replace("//", " ").split()),
+                                 r"first release.{0,80}publish")
+                self.assertEqual(release_check.pre_release_statements(text), [])
 
     def test_every_pip_requirement_says_the_name_is_unclaimed(self) -> None:
         """Nobody has registered veridor on PyPI, so anyone can publish a 0.1.0,

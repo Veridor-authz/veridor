@@ -28,9 +28,9 @@ that is a statement of capacity, not of how seriously a report will be taken.
 
 ## Supported versions
 
-As of 2026-11-04 no release exists: there is no tag, and no package, image or chart. Fixes
-land on `main`. Once releases exist, only the latest one is supported. Veridor
-is `0.x`, and older versions are not patched.
+Fixes land on `main`. Only the
+latest release is supported. Veridor is `0.x`, and older versions are not
+patched.
 
 A confirmed vulnerability is disclosed through a GitHub security advisory on
 this repository once a fix is available.
@@ -202,9 +202,9 @@ write past these refusals is a vulnerability. `tests/test_capsule.py` and
 `tests/test_origin_containment.py` hold each refusal, including runs against a
 local listener that must receive nothing.
 
-## Verifying a release (after the first release)
+## Verifying a release
 
-**As of 2026-11-04 no release exists**, so nothing below has been run against one. It
+Nothing below had been run against a release when the first one was tagged. It
 describes what `.github/workflows/release.yml` is configured to produce for a
 tag `vX.Y.Z`.
 
@@ -236,8 +236,8 @@ workflow's own token, so for them the environment binds this workflow only.
   repository at any ref. Anyone who can push a branch can run a workflow of
   their own with write access ([CONTRIBUTING.md](CONTRIBUTING.md#releasing)),
   and such a workflow could replace a release file and attest the
-  replacement. That last step is inferred from GitHub's permission model;
-  there is no release to try it on. `--cert-identity` must
+  replacement. That last step is inferred from GitHub's permission model,
+  not tried on a release. `--cert-identity` must
   match the signing certificate exactly, so it accepts only a run of
   `release.yml` from the tag `vX.Y.Z`. (`--signer-workflow` alone is not
   enough: it is a prefix match and accepts any ref.) This was measured with

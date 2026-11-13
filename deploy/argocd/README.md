@@ -310,10 +310,10 @@ exactly which names count, and a secret under any other name is not caught.
 
 ## Hosting the chart
 
-The chart is not published to a public chart repository at this version, and
-its default image, `ghcr.io/veridor-authz/veridor`, is not published
-either, so with the default the PostSync Job cannot pull. Build the image from
-the repository's `Dockerfile`, push it where the cluster can pull it, and set
+Each release tag publishes the chart to `oci://ghcr.io/veridor-authz/charts`
+and its default image, `ghcr.io/veridor-authz/veridor`. Pointing Argo CD at
+that OCI repository was not measured here. To run an image built from the
+repository's `Dockerfile`, push it where the cluster can pull it, and set
 `image.repository` and `image.tag` in the example's `valuesObject`. The
 example points `sources[1].repoURL` at a placeholder: serve the packaged chart
 (`helm package deploy/helm/veridor-gate`) from your own Helm repository, or

@@ -7,10 +7,9 @@ repository. [What was tested](#what-was-tested) below lists exactly what was
 executed, what was only checked against a schema or read, and what was not
 looked at.
 
-**Not yet published, as of 2026-11-04.** No release tag, container image
-(`ghcr.io/veridor-authz/veridor`), PyPI package, zipapp or GitLab CI/CD Catalog entry
-exists. Every file here names the first release (0.1.0)
-and works only after that release exists.
+Every file here names the first release (0.1.0). Its tag publishes the
+container image (`ghcr.io/veridor-authz/veridor`), the PyPI package and the
+zipapp; it does not publish a GitLab CI/CD Catalog entry.
 
 | File | What it is |
 | --- | --- |
@@ -33,23 +32,19 @@ and the Markdown summary instead.
 | --- | --- | --- | --- |
 | GitLab | Default (`install: image`). The job clears the image's `veridor` entrypoint | `install: pip`: `pip_package` into `python_image` | Not offered |
 | Jenkins | Active: Docker Pipeline agent with `args '--entrypoint='` | In a venv, in a `python:3.12-slim` agent | `python3 veridor-0.1.0.pyz run ...` |
-| Azure | Not as a container job (see below); `docker run` from a bash step | Active: `UsePythonVersion`, then pip on a wheel path you fill in | `python veridor-0.1.0.pyz run ...` |
-| CodeBuild | Not checked | Active: `runtime-versions`, then pip on a wheel path you fill in | `python3 veridor-0.1.0.pyz run ...` |
+| Azure | Not as a container job (see below); `docker run` from a bash step | Active: `UsePythonVersion`, then pip on the pinned release | `python veridor-0.1.0.pyz run ...` |
+| CodeBuild | Not checked | Active: `runtime-versions`, then pip on the pinned release | `python3 veridor-0.1.0.pyz run ...` |
 
 A downloaded zipapp runs with every `VERIDOR_*` credential, so check it with
 the `gh attestation verify` command in
-[SECURITY.md](../SECURITY.md#verifying-a-release-after-the-first-release),
+[SECURITY.md](../SECURITY.md#verifying-a-release),
 which accepts only provenance signed by `release.yml` at the release's tag.
 `SHA256SUMS` comes from the same release page, so it detects a damaged
 download, not a substituted one.
 
-The name `veridor` is unclaimed on PyPI, so anyone can publish a version under
-it, and a pip line naming it would run that code with the job's credentials. The
-Azure and CodeBuild templates therefore do not name it. Their install step holds
-`./REPLACE_WITH_THE_PATH_OF_A_VERIDOR_WHEEL.whl`, which stops the job until you
-put in the path of a wheel built from this repository. The GitLab `pip_package`
-default and the Jenkins pip option do name it, and neither is the default install.
-Until the first release, give them a wheel path too.
+The Azure and CodeBuild install steps, the GitLab `pip_package` default and the
+Jenkins pip option pin the release with `veridor==`. To run a wheel built from
+this repository instead, put its path in place of the pin.
 
 The container image runs as uid 10001 and its `ENTRYPOINT` is `veridor`. Two
 consequences:
@@ -227,9 +222,9 @@ this table ran on GitLab, Jenkins, Azure or AWS.
   one shared shell. Report and artifact upload after a failed build.
   `runtime-versions` python 3.12 on your build image. `secrets-manager`.
 * **The release image.** The GitLab rows ran on an image built locally from
-  this tree's Dockerfile, not on a published one (none exists).
-* **pip from PyPI.** The package is not published. The pip row installed a
-  wheel built from this checkout.
+  this tree's Dockerfile, not on a published one (none existed then).
+* **pip from PyPI.** The pip row installed a wheel built from this checkout,
+  not a package from PyPI.
 
 ## Reproduce
 

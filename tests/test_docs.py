@@ -1929,8 +1929,9 @@ class AnnotationUpgradeDocumentationTest(unittest.TestCase):
 
     def test_the_changelog_states_the_break_under_changed(self) -> None:
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        unreleased = changelog.split("\n## [", 2)[1]
-        changed = _prose(unreleased.split("\n### Changed\n", 1)[1].split("\n### ", 1)[0])
+        # The release section, not the first one: [Unreleased] sits above it, empty.
+        release = re.search(r"^## \[0\.1\.0\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog, re.M | re.S).group(1)
+        changed = _prose(release.split("\n### Changed\n", 1)[1].split("\n### ", 1)[0])
         self.assertIn(
             "Upgrading: this refuses plain annotation keys that loaded before. A root "
             "checksum (read as checks), schema ($schema), versions or x-version "

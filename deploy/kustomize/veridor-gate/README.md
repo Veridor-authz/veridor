@@ -11,11 +11,10 @@ veridor run --config /config/veridor.json --output-dir /work/.veridor \
             --fail-on new+confirmed --require-complete --wait-for-target 60
 ```
 
-**Not published as of 2026-11-04.** No `ghcr.io/veridor-authz/veridor` image exists in a public
-registry, and there is no release tag to reference this directory by. Build
-the image from the repository's `Dockerfile` and set it with `images:`; use a
-copy of this directory (or, after the first release, a remote reference pinned
-to its tag).
+Each release tag publishes the `ghcr.io/veridor-authz/veridor` image the base
+names. Use a copy of this directory, or a remote reference pinned to a release
+tag. To run an image built from the repository's `Dockerfile`, set it with
+`images:`.
 
 ## Layout
 
@@ -38,7 +37,7 @@ Write your own overlay on top of `overlays/plain`:
 resources:
   - ../veridor-gate/overlays/plain
 images:
-  - name: ghcr.io/veridor-authz/veridor          # the placeholder in the base
+  - name: ghcr.io/veridor-authz/veridor          # the image in the base
     newName: registry.example.com/veridor
     newTag: 0.1.0
 configMapGenerator:

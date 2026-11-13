@@ -293,10 +293,14 @@ class ReadmeActionSectionTest(unittest.TestCase):
 
     def test_the_section_does_not_claim_a_release(self) -> None:
         section = _readme_section()
-        # Dated, because the sentence goes false at the first tag and nothing
-        # about an undated one says when it was written.
+        # Until the first tag this asserted the dated "no release has been
+        # tagged" sentence; that went false at the tag. The examples still
+        # show a placeholder (this text cannot name the SHA of the commit the
+        # tag is put on), so the section has to say what it stands for.
         prose = " ".join(section.split())
-        self.assertRegex(prose, r"As of \d{4}-\d{2}-\d{2}, no release has been tagged\.")
+        self.assertIn("`Veridor-authz/veridor@<full-commit-sha>` in the examples below stands for "
+                      "the full 40-character commit SHA a release tag points to", prose)
+        self.assertNotRegex(prose, r"(?i)no release has been tagged|after the first release")
         # The runner claim names the run it rests on and when it happened.
         ran = r"passed on GitHub-hosted runners on \d{4}-\d{2}-\d{2} \(CI run \d+\)"
         self.assertRegex(prose, ran)

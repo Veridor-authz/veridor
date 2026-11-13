@@ -5,16 +5,16 @@
 # Replace:
 #   sources[0]           your application's source
 #   sources[1].repoURL   the Helm repository YOU serve the veridor-gate chart
-#                        from. The chart is not published to a public chart
-#                        repository at this version: `helm package
+#                        from. Each release publishes the chart to
+#                        oci://ghcr.io/veridor-authz/charts (not measured with
+#                        Argo CD here). Or `helm package
 #                        deploy/helm/veridor-gate` and host it, or point a Git
 #                        source (repoURL + path: deploy/helm/veridor-gate) at a
 #                        copy of this repository.
-#   valuesObject         your target Service, Secret and Veridor configuration,
-#                        and the gate's image.repository and image.tag. The
-#                        chart's default image is not published at this version,
-#                        so the PostSync Job cannot pull it: build one from the
-#                        repository's Dockerfile.
+#   valuesObject         your target Service, Secret and Veridor configuration.
+#                        The chart's default image is the one each release
+#                        publishes; to run one built from the repository's
+#                        Dockerfile, set image.repository and image.tag.
 #
 # The Secret named in secretEnv is not created by this Application. Create it
 # (or sync it from your secret manager) in the destination namespace first.

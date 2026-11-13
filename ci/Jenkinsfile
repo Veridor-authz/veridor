@@ -5,8 +5,8 @@
 // command line against the real CLI parser, the exit-code branches, the shell
 // with shellcheck) and what was not.
 //
-// NOT YET PUBLISHED. The container image, the PyPI package and the zipapp named
-// below do not exist until Veridor's first release (0.1.0).
+// The container image, the PyPI package and the zipapp named below are what
+// Veridor's first release (0.1.0) publishes.
 //
 // INSTALL -- pick one; the container image is the active one below.
 //   1. Container image (active): the Docker Pipeline plugin runs the stages in
@@ -14,11 +14,8 @@
 //      plugin starts the container with a command of its own, so `args` clears
 //      the entrypoint. The plugin also passes `-u <jenkins uid>:<gid>`, so the
 //      workspace stays writable; do not add `-u root`.
-//   2. pip: the PyPI name is unclaimed. Nobody has registered `veridor`, so anyone
-//      can, and until the first release the line below would run their code
-//      with this build's credentials; build a wheel from the repository and
-//      install that path instead. Use `image 'python:3.12-slim'` (drop the args
-//      line) and, before the gate, run in an sh step:
+//   2. pip: use `image 'python:3.12-slim'` (drop the args line) and, before
+//      the gate, run in an sh step:
 //        python3 -m venv .venv && .venv/bin/pip install --quiet 'veridor==0.1.0'
 //      then put .venv/bin first on PATH (environment { PATH = "..." } or
 //      withEnv). The plugin's uid cannot write site-packages, hence the venv.

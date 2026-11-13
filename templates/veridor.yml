@@ -15,7 +15,7 @@ spec:
         - pip
       default: image
     image:
-      description: "Veridor container image, used when install is image. Its ENTRYPOINT is veridor, so the job clears it. Pin a digest once one is published. The default names the first release, which does not exist yet."
+      description: "Veridor container image, used when install is image. Its ENTRYPOINT is veridor, so the job clears it. The default names the first release; a tag can be moved, so pin yours by digest."
       default: "ghcr.io/veridor-authz/veridor:0.1.0"
       regex: '^\S+$'
     python_image:
@@ -23,7 +23,7 @@ spec:
       default: "python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111"
       regex: '^\S+$'
     pip_package:
-      description: "What pip installs when install is pip: a pinned requirement, or the path of a wheel in the project. The default names the first release, which as of 2026-11-04 is not on PyPI. The name is unclaimed there, so anyone can register it and publish that version, and this default would then run their code with every credential in the job: until the first release, set this to a wheel built from the repository. It names code the job installs and runs, so never forward untrusted text into it. A $ must begin a $NAME or ${NAME} variable reference: the value is written into the job's shell, so anything else after a $, such as $(...), is refused when the pipeline is created."
+      description: "What pip installs when install is pip: a pinned requirement, or the path of a wheel in the project. The default names the first release on PyPI. It names code the job installs and runs, so never forward untrusted text into it. A $ must begin a $NAME or ${NAME} variable reference: the value is written into the job's shell, so anything else after a $, such as $(...), is refused when the pipeline is created."
       default: "veridor==0.1.0"
       regex: '^(?:[^"\\\x60\n$]|\$[A-Za-z_][A-Za-z0-9_]*|\$\{[A-Za-z_][A-Za-z0-9_]*\})+$'
     config:
@@ -91,8 +91,8 @@ spec:
 # with `integrity:`) or, once the repository is mirrored to GitLab and released
 # there, `include: component:`. ci/.gitlab-ci.yml shows both; ci/README.md
 # says what was and was not tested.
-# NOT YET PUBLISHED as of 2026-11-04: no release tag, container image, PyPI package or
-# CI/CD Catalog entry exists. The defaults name the first release.
+# The defaults name the first release, whose tag publishes the container image
+# and the PyPI package; it does not publish a CI/CD Catalog entry.
 #
 # Exit codes, as the job treats them:
 #   0 nothing the fail_on policy gates on was found; a finding it does not

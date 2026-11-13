@@ -7,12 +7,15 @@ caveat that the interface may still move.
 
 ## [Unreleased]
 
-Nothing here has been released: there is no tag, and no package, image or
-chart (see [0.1.0]). These entries record development before the first public
-version, and no public version carried the earlier behaviour they describe. Read
-"used to" and "now" as what changed during that development, and the Security
-section as defects found and fixed before any release, not as advisories for
-something you installed.
+## [0.1.0] - 2026-11-13
+
+First public release. It contains `map`, `run` and `mutate`; the marker oracle
+and evidence grades; boundary coverage; baselines and the regression diff;
+sequences and session state; SARIF 2.1.0 and the GitHub Action; the local
+viewer. The entries below record development before this release, and no public
+version carried the earlier behaviour they describe. Read "used to" and "now" as
+what changed during that development, and the Security section as defects found
+and fixed before release, not as advisories against anything you installed.
 
 ### Security
 
@@ -840,8 +843,8 @@ something you installed.
   3.12 and 3.13, then the wheel, sdist and zipapp with a CycloneDX SBOM,
   `SHA256SUMS` and build provenance; PyPI through Trusted Publishing; a
   linux/amd64 and linux/arm64 image with SBOM and provenance, signed with
-  cosign; the Helm chart to an OCI registry, signed. None of it has run, and
-  nothing has been published.
+  cosign; the Helm chart to an OCI registry, signed. It first ran for this
+  release.
 - **A release image** (`Dockerfile`): the `python:3.12-alpine` base pinned by
   digest, the wheel installed with no package index from a read-only mount of
   the build stage, pip removed in the same layer, the CLI's imports compiled
@@ -1616,8 +1619,8 @@ something you installed.
   `VERIDOR_TEST_AGAINST=installed` the harness prints which `veridor` it
   imports and refuses to start when it cannot import `veridor.cli`, imports it
   from `src/`, or imports a file no installed distribution's RECORD lists.
-  The CI job passed on a GitHub-hosted runner on 2026-11-08; the release job
-  has not run.
+  The CI job passed on a GitHub-hosted runner on 2026-11-08, before the
+  release job had run.
 - **`release_check.py notes` refuses notes that are not release notes**: a
   section with a line starting "Not released." or "Nothing here has been
   released", and a non-empty `[Unreleased]`. `notes v0.1.0` exited `0` and
@@ -3152,13 +3155,3 @@ something you installed.
   step now records which file sits at each document path before Veridor
   starts and reads a path only if a different file is there afterwards;
   Veridor writes every document by renaming a new file over the path.
-
-## [0.1.0]
-
-Not released. There is no `v0.1.0` tag, and no package, image or chart for
-0.1.0. It is the version the source has carried from the start, and the feature
-set the entries above are written against: `map`, `run` and `mutate`; the
-marker oracle and evidence grades; boundary coverage; baselines and the
-regression diff; sequences and session state; SARIF 2.1.0 and the GitHub
-Action; the local viewer. If the first release is 0.1.0, fold [Unreleased] into
-this section before tagging it (CONTRIBUTING.md, "Releasing").

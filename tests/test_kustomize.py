@@ -185,12 +185,16 @@ class KustomizeFilesTest(unittest.TestCase):
         self.assertEqual(plain, {"apiVersion": "kustomize.config.k8s.io/v1beta1",
                                  "kind": "Kustomization", "resources": ["../../base"]})
 
-    def test_the_image_is_labelled_a_placeholder(self) -> None:
-        """No image is published yet. The manifests and the README must not
-        read as if one were."""
-        self.assertIn("A placeholder: no image is published yet", (BASE / "job.yaml").read_text())
-        readme = (KUSTOMIZE / "README.md").read_text(encoding="utf-8")
-        self.assertRegex(readme, r"Not published as of \d{4}-\d{2}-\d{2}")
+    def test_the_image_is_labelled_the_release_s(self) -> None:
+        """Until the first tag no image was published, and the base and the
+        README said so. From the tag on, the base names the image a release
+        publishes, and both say how to run another."""
+        job = (BASE / "job.yaml").read_text(encoding="utf-8")
+        self.assertIn("The image each release publishes", job)
+        self.assertNotIn("placeholder", job.lower())
+        readme = " ".join((KUSTOMIZE / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn("Each release tag publishes the `ghcr.io/veridor-authz/veridor` image the base names", readme)
+        self.assertNotRegex(readme, r"(?i)not published|placeholder")
 
 
 class NoArgoCdOverlayDocumentTest(unittest.TestCase):

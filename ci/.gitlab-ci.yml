@@ -4,11 +4,11 @@
 # what a project adds to its own .gitlab-ci.yml to use it. Merge the include
 # below into your pipeline; do not replace your pipeline with this file.
 #
-# NOT YET PUBLISHED as of 2026-11-04. No release tag, container image, PyPI package or
-# GitLab CI/CD Catalog entry exists. The tag URL and the
-# component address below name the first release (0.1.0); neither resolves
-# until that release exists, and the remote include needs its commit SHA. ci/README.md lists what was executed and what was
-# only validated against GitLab's CI schema.
+# The tag URL and the component address below name the first release (0.1.0).
+# Its tag publishes the container image and the PyPI package the component
+# uses; it does not publish a GitLab CI/CD Catalog entry, and the remote
+# include needs the tag's commit SHA. ci/README.md lists what was executed and
+# what was only validated against GitLab's CI schema.
 #
 # Credentials. The Veridor configuration names every credential as a
 # ${VERIDOR_*} reference (ci/veridor.example.json shows the shape). Define each
@@ -69,11 +69,11 @@ include:
 
   # CI/CD Catalog form, once the repository is mirrored to GitLab and a release
   # is published there. The address assumes a mirror at gitlab.com/Veridor-authz/veridor,
-  # which does not exist yet, under a namespace nothing here shows this project
-  # holds. Whoever holds it could publish a component at that address, and it
-  # would run with this project's CI/CD variables, so check the holder first. A
-  # component version can also be a full commit SHA, which does not move the way
-  # a tag can.
+  # which the release does not create, under a namespace nothing here shows this
+  # project holds. Whoever holds it could publish a component at that address,
+  # and it would run with this project's CI/CD variables, so check the holder
+  # first. A component version can also be a full commit SHA, which does not
+  # move the way a tag can.
   # - component: gitlab.com/Veridor-authz/veridor/veridor@0.1.0
   #   inputs:
   #     config: veridor.json

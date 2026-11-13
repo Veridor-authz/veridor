@@ -347,7 +347,7 @@ class _SharedContextHTTPSHandler(HTTPSHandler):
     target built 603 contexts, and what that cost grew with the size of the
     bundle. From 3.12 it builds one, but inside ``build_opener`` -- at import
     -- so ``--version``, the offline verbs and http:// targets paid for a
-    context they never used. CHANGELOG.md (Unreleased) has both measurements,
+    context they never used. CHANGELOG.md's first release has both measurements,
     with the bundle sizes. Only the count and the moment change; what the
     context is, is :func:`_default_https_context`.
     """
@@ -7516,8 +7516,8 @@ def write_json_many(paths: Sequence[Path], value: Any) -> None:
     ``latest.json``, ``--json`` -- and was scrubbed and re-encoded for each:
     six ``json.dumps(indent=2)`` per ``run --json``, where before 3.13 an
     indented dump cannot use the C encoder. Serializing once per write makes
-    a large ``run --json`` faster and smaller in memory (CHANGELOG.md,
-    Unreleased, has the measurement). Every file still gets the same bytes,
+    a large ``run --json`` faster and smaller in memory (CHANGELOG.md's
+    first release has the measurement). Every file still gets the same bytes,
     each written to a temporary file and renamed into place.
     """
     text = json.dumps(redaction.scrub(value), indent=2) + "\n"

@@ -81,8 +81,8 @@ hook:
     allowRenderWithoutCluster: false
 
 image:
-  # This image is not published at this version: build one from the repository's
-  # Dockerfile and set repository and tag.
+  # Each release publishes this image. To run one built from the repository's
+  # Dockerfile, set repository and tag.
   repository: ghcr.io/veridor-authz/veridor
   # Empty = the chart's appVersion.
   tag: ""
