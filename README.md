@@ -1363,13 +1363,18 @@ The two kinds are not interchangeable:
 
 | Declared on | May read | Read when |
 | --- | --- | --- |
-| a **login step** | `cookie`, `header`, `json_pointer`, `html_meta` | once, from that step's response, and frozen for the rest of the run |
+| a **login step** | `cookie`, `header`, `json_pointer`, `html_meta` | once, from that step's response, and frozen for the rest of the run — except `cookie`, which is read from the jar at send time like a session-level one |
 | the **session** | `cookie` only | **live, at send time** — so a rotating CSRF cookie needs no logic at all |
 
 A session-level capture is restricted to `cookie` for that reason: the jar is
 the only source that still holds a value after the login response is gone.
 Everything else is a property of one response and belongs on the step that
-produced it.
+produced it. A login step's `cookie` capture is checked when its step runs, so
+a missing cookie still fails the login, but after that it is read live: a frozen
+copy would outlive the cookie, and as the `establishes` proof it would keep an
+expired session looking live. A cookie with an empty value (`Set-Cookie:
+csrftoken=`) is no value: a `${capture.…}` reference to it is unresolved and
+the request is not sent.
 
 **Cookies never cross identities.** Each identity gets its own jar, built on
 `http.cookiejar` with a policy that accepts and returns cookies for exactly one
@@ -1386,9 +1391,14 @@ load error, because `add_cookie_header` silently does nothing when a `Cookie`
 header is already present — the session cookie would vanish with no diagnostic.
 
 **Establishment is proven, not assumed.** `establishes` is required and names
-exactly one of `cookie` (present in the jar and usable against this origin — a
-`Secure` cookie over plain `http` fails here rather than three checks later) or
-`capture` (non-empty, for bearer flows). `expect_status` is required on every
+exactly one of `cookie` (present in the jar with a non-empty value and usable
+against this origin — a `Secure` cookie over plain `http` fails here rather than
+three checks later) or `capture` (non-empty, for bearer flows). If the jar holds
+two cookies of the proving name with different values, for example one per
+`Path`, the session does not establish: which one the target authenticates is
+unknowable. Otherwise the proof is that cookie — its name, domain and path — and
+not its name alone, so a later same-named cookie on a narrower path cannot stand
+in for it once it expires. `expect_status` is required on every
 login step, because the common real login is `POST /login` → `302`, redirects
 are never followed, and the cookie is on the `302`.
 
@@ -1399,11 +1409,16 @@ entries are skipped and reported. Degraded state is never allowed to look like a
 result.
 
 An established session is checked again on every request, on the request
-itself: once the jar has attached its cookies, the cookie named in
-`establishes` must be on it. If that cookie has expired since login, or its
-`Path` or `Domain` does not cover the URL, the request **is not sent** and is
-graded `inconclusive`, because without the cookie it would go out anonymous and
-its `403` or `404` could match a declared denial.
+itself: once the jar has attached its cookies, the cookie that proved the
+session (named in `establishes`, or read by the capture it names) must be on it
+with its current value. If that cookie has expired since login, or its `Path` or
+`Domain` does not cover the URL, the request **is not sent** and is graded
+`inconclusive`, because without the cookie it would go out anonymous and its
+`403` or `404` could match a declared denial. The same holds for every cookie
+whose value the request carries through a `${capture.…}` reference, such as a
+CSRF token injected as a header: if the jar would leave that cookie off, a
+double-submit CSRF check would refuse the request with a `403`, so it is not
+sent either.
 
 | Capture `from` | Reads |
 | --- | --- |
@@ -2349,9 +2364,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,540 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 974 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,514 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,559 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 980 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,539 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

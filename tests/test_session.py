@@ -3102,6 +3102,9 @@ def _jar_session(
         0, "sid", "attacker", None, False, "127.0.0.1", False, False, path, True,
         False, int(time.time()) + 100, False, None, None, {}))
     session.state = "established"
+    if session._establishing_cookie() == "sid":
+        # What establish() records as the proof: this cookie, by its jar identity.
+        session._proof = frozenset({("127.0.0.1", path, "sid")})
     return session
 
 
@@ -3162,8 +3165,9 @@ class AttachCookiesRaceTest(unittest.TestCase):
     def test_a_capture_from_the_response_body_has_no_cookie_to_lose(self) -> None:
         """Its value is in the request already; the jar cannot take it back.
 
-        A login step's capture lands in ``_values``; only a session-level
-        capture (which the loader holds to ``from: cookie``) is read from the jar.
+        A login step's capture from a header or body lands in ``_values``;
+        a capture from a cookie, on the session or a login step, is read from
+        the jar.
         """
         session = _jar_session(establishes={"capture": "token"})
         session._values["token"] = "tok"
@@ -3389,6 +3393,402 @@ class SequenceSessionRemediationTest(unittest.TestCase):
                 self.assertNotIn("reachable", finding["remediation"])
         # Nothing was sent, so it does not say the request failed.
         self.assertTrue(steps[0]["message"].startswith("Request not sent: "))
+
+
+
+# --------------------------------------------------------------------------
+# What proves a session, and what a request carries from a cookie
+# --------------------------------------------------------------------------
+
+
+def _cookie(name: str, value: str, *, path: str = "/", max_age: int = 100):
+    return http.cookiejar.Cookie(
+        0, name, value, None, False, "127.0.0.1", False, False, path, True,
+        False, int(time.time()) + max_age, False, None, None, {})
+
+
+def _offline_session(declaration: dict, *cookies) -> sequence.IdentitySession:
+    """Run establish() with the login step answered in process, no socket.
+
+    Each login request puts ``cookies`` into the jar and answers 200, which is
+    all establish() reads from a login response for a cookie proof.
+    """
+    session = sequence.IdentitySession(
+        "attacker", {"headers": {}, "session": declaration}, "http://127.0.0.1:1", 5, {}
+    )
+
+    def perform(base_url, timeout, request_config, identity, *, session=None, **_):
+        for cookie in cookies:
+            session.jar.set_cookie(cookie)
+        return {
+            "request": {"method": "POST", "url": f"{base_url}/login"},
+            "response": {"status": 200, "duration_ms": 1, "body_bytes": 2,
+                         "body_sha256": "0" * 64},
+            "error": None,
+        }
+
+    with patch.object(core, "_perform_request", perform):
+        session.establish()
+    return session
+
+
+def _login(capture: dict | None = None) -> list[dict]:
+    step: dict = {"method": "POST", "path": "/login", "expect_status": [200]}
+    if capture:
+        step["capture"] = capture
+    return [step]
+
+
+def _expiry_of(session: sequence.IdentitySession, name: str) -> int:
+    return max(cookie.expires for cookie in session.jar if cookie.name == name)
+
+
+class LoginStepCookieCaptureIsLiveTest(unittest.TestCase):
+    """A login step's capture read from a cookie is read from the jar when used.
+
+    It was frozen in the value map at login. As the establishing proof
+    (``establishes: {"capture": NAME}``) it kept the session "live" after the
+    cookie expired, attach_cookies() had no cookie to look for, and the graded
+    probe went out anonymous: safe 2, vulnerable 0 over a confirmed IDOR.
+    """
+
+    DECLARATION = {
+        "login": _login({"tok": {"from": "cookie", "name": "sid"}}),
+        "establishes": {"capture": "tok"},
+    }
+
+    def _session(self) -> sequence.IdentitySession:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        return session
+
+    def test_control_while_the_cookie_lives_the_session_is_live(self) -> None:
+        session = self._session()
+        with _clock():
+            self.assertTrue(session.is_live())
+            self.assertEqual(session.lookup("tok"), "attacker")
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_the_session_dies_with_the_cookie(self) -> None:
+        session = self._session()
+        with _clock() as clock:
+            clock.past(_expiry_of(session, "sid"))
+            self.assertFalse(session.is_live())
+            self.assertIsNone(session.lookup("tok"))
+            self.assertEqual(session.prepare({}, None, method="GET")[2], "session_expired")
+
+    def test_a_cookie_that_expires_after_prepare_is_refused_at_attach(self) -> None:
+        session = self._session()
+        with _clock() as clock:
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            clock.past(_expiry_of(session, "sid"))
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            self.assertEqual(session.attach_cookies(request), "session_expired")
+        self.assertIsNone(request.get_header("Cookie"))
+
+    def test_control_a_login_step_capture_from_a_header_stays_frozen(self) -> None:
+        """Only a cookie source has a jar to read again; the rest is one response."""
+        session = sequence.IdentitySession(
+            "attacker",
+            {"headers": {}, "session": {
+                "login": _login({"tok": {"from": "header", "name": "X-Token"}}),
+                "establishes": {"capture": "tok"}}},
+            "http://127.0.0.1:1", 5, {},
+        )
+
+        def perform(base_url, timeout, request_config, identity, *, sink=None, **_):
+            sink["headers"] = [("X-Token", "frozen-token")]
+            return {"request": {"method": "POST", "url": f"{base_url}/login"},
+                    "response": {"status": 200, "duration_ms": 1, "body_bytes": 0,
+                                 "body_sha256": "0" * 64},
+                    "error": None}
+
+        with patch.object(core, "_perform_request", perform):
+            session.establish()
+        self.assertEqual(session.state, "established")
+        with _clock() as clock:
+            clock.offset = 10_000
+            self.assertTrue(session.is_live())
+            self.assertEqual(session.lookup("tok"), "frozen-token")
+
+
+class EmptyCookieIsNoProofTest(unittest.TestCase):
+    """``Set-Cookie: sid=`` clears a cookie; it never proved a session.
+
+    establish() and is_live() tested the cookie for ``is not None``, so an
+    empty one established the session and every probe went out as ``sid=``,
+    which a target treats as anonymous: safe 2, vulnerable 0 over a confirmed
+    IDOR. A capture proof already had to be non-empty.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+    CSRF = {
+        "login": _login(), "establishes": {"cookie": "sid"},
+        "capture": {"csrf": {"from": "cookie", "name": "csrftoken"}},
+        "inject": [{"header": "X-CSRFToken", "value": "${capture.csrf}"}],
+    }
+
+    def test_an_empty_establishing_cookie_does_not_establish(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", ""))
+        self.assertEqual(session.state, "failed")
+        self.assertEqual(session.reason_code, "not_established")
+        self.assertFalse(session.is_live())
+
+    def test_control_a_non_empty_one_does(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established")
+        self.assertTrue(session.is_live())
+
+    def test_an_established_session_whose_cookie_is_emptied_is_not_live(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", ""))  # the same cookie, cleared
+        self.assertFalse(session.is_live())
+        self.assertEqual(session.prepare({}, None, method="GET")[2], "session_expired")
+
+    def test_an_empty_csrf_cookie_is_not_injected(self) -> None:
+        """An empty X-CSRFToken draws the target's CSRF 403, a declared denial."""
+        session = _offline_session(self.CSRF, _cookie("sid", "attacker"),
+                                   _cookie("csrftoken", ""))
+        self.assertEqual(session.state, "established")
+        _headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        self.assertEqual(blocked, "unresolved_reference")
+
+    def test_control_a_non_empty_csrf_cookie_is_injected(self) -> None:
+        session = _offline_session(self.CSRF, _cookie("sid", "attacker"),
+                                   _cookie("csrftoken", CSRF_SENTINEL))
+        headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        self.assertIsNone(blocked)
+        self.assertEqual(headers["X-CSRFToken"], CSRF_SENTINEL)
+
+
+class ProofCookieIdentityTest(unittest.TestCase):
+    """Liveness asks after the cookie that proved the session, not its name.
+
+    A same-named cookie on a narrower path (``sid=guest; Path=/docs``) outlived
+    the real one: is_live() took any usable ``sid`` and attach_cookies() found
+    ``sid`` on the request by name, so the probe went out as the guest.
+    """
+
+    DECLARATION = {"login": _login(), "establishes": {"cookie": "sid"}}
+
+    def test_a_later_same_named_cookie_does_not_keep_the_session_live(self) -> None:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established")
+        # A later response sets a guest cookie under the same name, on /docs.
+        session.jar.set_cookie(_cookie("sid", "guest", path="/docs", max_age=10_000))
+        with _clock() as clock:
+            clock.past(next(c.expires for c in session.jar if c.value == "attacker"))
+            self.assertFalse(session.is_live())
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            # The jar would have sent the guest; nothing is sent instead.
+            self.assertEqual(session.attach_cookies(request), "session_expired")
+        self.assertEqual(request.get_header("Cookie"), "sid=guest")
+
+    def test_control_the_real_cookie_alive_beside_the_guest_is_sent(self) -> None:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", "guest", path="/docs", max_age=10_000))
+        with _clock():
+            self.assertTrue(session.is_live())
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertIn("sid=attacker", request.get_header("Cookie"))
+
+    def test_two_values_under_the_proving_name_at_login_do_not_establish(self) -> None:
+        """Which of the two the target authenticates is unknowable."""
+        session = _offline_session(self.DECLARATION, _cookie("sid", "guest", path="/docs"),
+                                   _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "failed")
+        self.assertEqual(session.reason_code, "not_established")
+        self.assertIn("set more than once with different values", session.reason)
+
+    def test_control_one_value_on_two_paths_establishes(self) -> None:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker", path="/docs"),
+                                   _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        self.assertTrue(session.is_live())
+
+    def test_a_rotated_proof_cookie_is_still_the_proof(self) -> None:
+        """The target re-setting the same (domain, path, name) is rotation."""
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", "attacker-rotated"))
+        request = Request("http://127.0.0.1:1/docs/1", method="GET")
+        self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker-rotated")
+
+
+class CarriedCookieTest(unittest.TestCase):
+    """A request carrying a value read from a cookie must carry the cookie too.
+
+    prepare() injected ``X-CSRFToken`` from the ``csrftoken`` cookie, then the
+    jar left the cookie off -- expired in between, or scoped by Path away from
+    the URL. A double-submit CSRF check compared the two, answered 403, and the
+    403 matched the declared denial: safe 2, vulnerable 0 over a confirmed IDOR.
+    """
+
+    @staticmethod
+    def _session(csrf_path: str = "/") -> sequence.IdentitySession:
+        return _offline_session(
+            EmptyCookieIsNoProofTest.CSRF, _cookie("sid", "attacker", max_age=10_000),
+            _cookie("csrftoken", CSRF_SENTINEL, path=csrf_path))
+
+    def _send(self, session, path: str = "/docs/1", *, expire_csrf: bool = False):
+        with _clock() as clock:
+            headers, body, blocked, _ = session.prepare({}, b"{}", method="POST")
+            self.assertIsNone(blocked)
+            if expire_csrf:
+                clock.past(_expiry_of(session, "csrftoken"))
+            request = Request(f"http://127.0.0.1:1{path}", data=body, headers=headers,
+                              method="POST")
+            return session.attach_cookies(request), request
+
+    def test_control_the_cookie_goes_out_with_its_value(self) -> None:
+        reason, request = self._send(self._session())
+        self.assertIsNone(reason)
+        self.assertIn(f"csrftoken={CSRF_SENTINEL}", request.get_header("Cookie"))
+        self.assertEqual(request.get_header("X-csrftoken"), CSRF_SENTINEL)
+
+    def test_a_csrf_cookie_that_expires_after_prepare_is_refused(self) -> None:
+        reason, request = self._send(self._session(), expire_csrf=True)
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+        self.assertEqual(reason, "capture_cookie_not_sent")
+
+    def test_a_csrf_cookie_scoped_away_from_the_url_is_refused(self) -> None:
+        reason, request = self._send(self._session(csrf_path="/app"))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+        self.assertEqual(reason, "capture_cookie_not_sent")
+
+    def test_control_inside_its_path_the_scoped_cookie_is_sent(self) -> None:
+        reason, _request = self._send(self._session(csrf_path="/app"), "/app/docs/1")
+        self.assertIsNone(reason)
+
+    def test_the_reason_gets_session_advice_and_is_not_configuration(self) -> None:
+        error = core.UNSENT_REASONS["capture_cookie_not_sent"]
+        advice = core.unsent_remediation(error)
+        self.assertIsNotNone(advice)
+        self.assertNotIn("reachable", advice)
+        self.assertNotIn("capture_cookie_not_sent", core.CONFIGURATION_UNSENT_ERRORS.values())
+        self.assertTrue(core.execution_message(error).startswith("Request not sent: "))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SessionProofGapsEndToEndTest(unittest.TestCase):
+    """The same gaps, through the engine, against a target with a live IDOR.
+
+    The target answers a request with no real ``sid`` with 404, and a POST
+    whose X-CSRFToken does not match its csrftoken cookie with 403; both are
+    statuses the attacker's declaration lists. Any logged-in caller reads the
+    victim's document. Each non-control case was graded safe before the fix.
+    """
+
+    STEP_CAPTURE = {"login": _login({"tok": {"from": "cookie", "name": "sid"}}),
+                    "establishes": {"capture": "tok"}}
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+    CSRF = EmptyCookieIsNoProofTest.CSRF
+
+    @staticmethod
+    def _target(attacker_cookies: list[str]):
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                cookies = (attacker_cookies if who == "attacker"
+                           else ["sid=victim; Path=/", "csrftoken=cv; Path=/"])
+                return 200, [("Set-Cookie", item) for item in cookies], b"ok"
+            jar = dict(part.strip().partition("=")[::2]
+                       for part in entry["cookie"].split(";") if part.strip())
+            if jar.get("sid") not in ("attacker", "victim"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            if entry["method"] == "POST" and (
+                    not entry["csrf"] or entry["csrf"] != jar.get("csrftoken")):
+                return 403, [("Content-Type", "application/json")], b'{"e":"csrf"}'
+            if entry["path"] == "/m":
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, [("Content-Type", "application/json")], json.dumps(
+                    {"m": owner}).encode()
+            # IDOR: any logged-in caller reads the victim's document.
+            return 200, [("Content-Type", "application/json")], json.dumps(
+                {"provenance": MARKER_VICTIM}).encode()
+
+        return responder
+
+    def _execute(self, session: dict, attacker_cookies: list[str], *,
+                 method: str = "GET", expire: bool = False):
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["session"] = json.loads(json.dumps(session))
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["request"] = {"method": method, "path": "/docs/1"}
+        if method == "POST":
+            check["request"]["json"] = {"a": 1}
+        check["expect"]["attacker"]["status"] = [403, 404]
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [check]}
+        real_attach = sequence.IdentitySession.attach_cookies
+        fired: list[str] = []
+
+        def attach(inner, request):
+            # The attacker's graded probe of /docs/1: its sid expires after
+            # prepare() and before the jar runs.
+            if (expire and not fired and inner.name == "attacker"
+                    and inner.state == "established"
+                    and request.get_header("Authorization") == ATTACKER_TOKEN
+                    and urlsplit(request.full_url).path == "/docs/1"):
+                fired.append(request.full_url)
+                clock.past(_expiry_of(inner, "sid"))
+            return real_attach(inner, request)
+
+        with _clock() as clock, \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach), \
+                _server(self._target(attacker_cookies)) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        if expire:
+            self.assertEqual(len(fired), 1, "the expiry was never forced")
+        probes = [entry for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        # None when the attacker's probe was graded safe: safe findings are not listed.
+        return result, probes, _finding_map(result).get(("cross-tenant-doc-read", "attacker"))
+
+    def _assert_confirmed(self, result, probes, verdict) -> None:
+        self.assertEqual(len(probes), 1)
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"], verdict["evidence_grade"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable", "confirmed"))
+
+    def _assert_withheld(self, words: str, result, probes, verdict) -> None:
+        self.assertEqual([entry["cookie"] for entry in probes], [],
+                         "a graded probe reached the target without its cookie")
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn(words, verdict["message"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(result["summary"]["safe"], 1)  # the victim's alone
+
+    def test_control_a_login_step_cookie_capture_proof_while_it_lives(self) -> None:
+        self._assert_confirmed(*self._execute(
+            self.STEP_CAPTURE, ["sid=attacker; Path=/; Max-Age=100"]))
+
+    def test_a_login_step_cookie_capture_proof_that_expired_sends_nothing(self) -> None:
+        self._assert_withheld("no longer live", *self._execute(
+            self.STEP_CAPTURE, ["sid=attacker; Path=/; Max-Age=100"], expire=True))
+
+    def test_control_a_non_empty_establishing_cookie(self) -> None:
+        self._assert_confirmed(*self._execute(self.COOKIE, ["sid=attacker; Path=/"]))
+
+    def test_an_empty_establishing_cookie_sends_nothing(self) -> None:
+        self._assert_withheld("not established", *self._execute(self.COOKIE, ["sid=; Path=/"]))
+
+    def test_control_a_csrf_cookie_that_covers_the_url(self) -> None:
+        self._assert_confirmed(*self._execute(
+            self.CSRF, ["sid=attacker; Path=/", "csrftoken=ca; Path=/"], method="POST"))
+
+    def test_a_csrf_cookie_scoped_away_from_the_url_sends_nothing(self) -> None:
+        self._assert_withheld("captured from a cookie", *self._execute(
+            self.CSRF, ["sid=attacker; Path=/", "csrftoken=ca; Path=/app"], method="POST"))
 
 
 if __name__ == "__main__":

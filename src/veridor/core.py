@@ -3204,6 +3204,12 @@ UNSENT_REASONS: dict[str, str] = {
         "been sent with this request (its Path or Domain does not cover it), so "
         "the request would have gone out unauthenticated and was not sent"
     ),
+    "capture_cookie_not_sent": (
+        "this request carries a value captured from a cookie, and that cookie "
+        "would not have been sent with it (it expired, or its Path or Domain does "
+        "not cover this URL), so a check comparing the two would have failed and "
+        "the request was not sent"
+    ),
     "injection_not_applicable": (
         "this identity's session injects a form_field or json_field, and this "
         "request has no form-encoded or JSON object body to carry it, so the "
@@ -3305,6 +3311,13 @@ SESSION_UNSENT_REMEDIATION: dict[str, str] = {
         "is scoped by its Path or Domain away from this request's URL. Check the "
         "Set-Cookie attributes the login step receives, or name in establishes "
         "the cookie that authenticates this path."
+    ),
+    "capture_cookie_not_sent": (
+        "Nothing was sent: a ${capture.…} value in this request was read from a "
+        "cookie the jar would not send with it, so a CSRF check that compares the "
+        "header to the cookie would refuse it. If the cookie is short-lived, set "
+        '"reestablish": "check" on the session; if its Path or Domain does not '
+        "cover this URL, check the Set-Cookie attributes the target sends."
     ),
 }
 

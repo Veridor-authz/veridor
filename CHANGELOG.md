@@ -16,6 +16,45 @@ something you installed.
 
 ### Security
 
+- **A login step's cookie capture outlived its cookie, and as the session's
+  proof it kept an expired session live.** A capture declared on a login step
+  was copied once and frozen, whatever its source. With `establishes:
+  {"capture": NAME}` naming one read from a cookie, the session still looked
+  live after that cookie expired, and the check on the outgoing request had no
+  cookie to look for: the graded probe went out with an empty `Cookie` header,
+  drew the target's anonymous `404`, and a confirmed IDOR was graded `safe`
+  (reproduced: safe 2, vulnerable 0; with the cookie alive, `VERIDOR-AUTHZ-001`
+  confirmed). A login step's `cookie` capture is now read from the jar when it
+  is used, like a session-level one, so it expires with its cookie and is the
+  cookie the request is checked for.
+- **An empty session cookie established the session.** `Set-Cookie: sid=` is
+  how a target clears a cookie, but establishing and liveness asked only
+  whether a cookie of that name existed, so `establishes: {"cookie": "sid"}`
+  succeeded on it and every probe went out as `sid=`, which the target
+  answered as anonymous (reproduced: safe 2, vulnerable 0 over a confirmed
+  IDOR). A capture proof already had to be non-empty. An empty cookie is now
+  no value anywhere: it does not establish a session, keeps none live, and a
+  `${capture.…}` reference to one is unresolved, so an empty CSRF cookie is
+  no longer injected as an empty `X-CSRFToken` header that drew a CSRF `403`
+  (reproduced: safe 2, vulnerable 0).
+- **A different cookie of the same name stood in for the one that proved the
+  session.** Liveness took any usable cookie of the proving name, and the
+  check on the outgoing request matched by name. A `sid=guest; Path=/docs`
+  beside the real `sid` outlived it, and the probe went out as the guest
+  (reproduced: safe 2, vulnerable 0; the liveness disclosure listed the check
+  as unproven). The proof is now the cookie itself, by name, domain and path,
+  checked on the request by its current value; and a login that leaves two
+  different values under the proving name does not establish, because which
+  one the target authenticates is unknowable.
+- **A CSRF token went out without the cookie it was read from.** A request
+  carrying a value captured from a cookie, such as a CSRF cookie injected as
+  `X-CSRFToken`, was sent when the jar left that cookie off: because its
+  `Path` did not cover the URL, or because it expired between the moment its
+  value was read and the moment the jar attached cookies. A double-submit CSRF
+  check refused it with a `403` the declaration listed, and a confirmed IDOR
+  was graded `safe` (reproduced both ways: safe 2, vulnerable 0). Such a
+  request is now not sent and is graded `inconclusive`, with its own reason
+  (`capture_cookie_not_sent`).
 - **A session cookie that expired between the liveness check and the send
   went out missing, and a live IDOR was graded safe.** Each request asked
   whether the session was still live, then the cookie jar read the clock
@@ -33,7 +72,8 @@ something you installed.
   establishing cookie whose `Path` or `Domain` does not cover the request's
   URL, which also went out anonymous, with its own reason
   (`session_cookie_not_sent`). A session established by a capture from a
-  login response is unaffected: its value is already in the request.
+  login response's header or body is unaffected: its value is already in the
+  request.
 - **A drift document's counts were pasted into the Markdown summary as
   markup.** `report --from-drift` checked the drift document's kind, schema
   version and containers but not its counts, and the summary interpolated
