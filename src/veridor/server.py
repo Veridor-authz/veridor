@@ -447,11 +447,22 @@ def _host_name(header: str) -> str:
     IPv6 literal without a port: ``[::1]`` came out as ``[:``, which matched
     nothing, so a browser at ``http://[::1]/`` on port 80 was refused by the
     viewer it was pointed at.
+
+    After the closing bracket only ``:port`` may follow. Taking everything up
+    to the first ``]`` and ignoring the rest admitted ``[::1].evil.example``,
+    ``[::1]evil`` and ``[::1]@evil.example`` as ``::1`` -- all three were 421
+    before IPv6 literals were parsed, and an allow-list that widens on
+    malformed input is the wrong way round. Anything else after it is no name.
     """
     header = header.strip()
     if header.startswith("["):
-        return header[1 : header.find("]")].lower() if "]" in header else ""
+        match = _BRACKETED_HOST.fullmatch(header)
+        return match.group(1).lower() if match else ""
     return header.rsplit(":", 1)[0].lower()
+
+
+#: ``[literal]`` and an optional ``:port`` (RFC 3986 allows the port empty).
+_BRACKETED_HOST = re.compile(r"\[([^\[\]]*)\](?::[0-9]*)?")
 
 
 def _family(host: str) -> socket.AddressFamily:
