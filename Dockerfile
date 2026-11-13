@@ -18,7 +18,7 @@
 
 FROM python:3.12-alpine@sha256:4c47124a8391cb7a9f571164147d154777cf012a4ece5f86097130d7a4478111 AS build
 WORKDIR /src
-COPY pyproject.toml README.md LICENSE NOTICE ./
+COPY pyproject.toml README.pypi.md LICENSE NOTICE ./
 COPY src/ ./src/
 # The build backend is pinned by version and hash, and the wheel is built
 # without build isolation or an index, so this stage fetches exactly one file.

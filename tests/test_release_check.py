@@ -1014,7 +1014,7 @@ class DistTest(unittest.TestCase):
 
     def _dist(self, *, notice: bool = True, expression: str = "Apache-2.0",
               drop: tuple[str, ...] = (), extra: tuple[str, ...] = (),
-              description: str = "") -> Path:
+              description: str = "", pyproject: str = "[project]") -> Path:
         """A wheel and an sdist as setuptools builds them; ``drop`` leaves
         sdist members out and ``extra`` adds some."""
         directory = Path(tempfile.mkdtemp())
@@ -1031,7 +1031,7 @@ class DistTest(unittest.TestCase):
             if notice:
                 wheel.writestr(f"{info}/licenses/NOTICE", "notice")
         with tarfile.open(directory / "veridor-0.1.0.tar.gz", "w:gz") as sdist:
-            members = {"PKG-INFO": metadata, "LICENSE": "licence", "pyproject.toml": "[project]",
+            members = {"PKG-INFO": metadata, "LICENSE": "licence", "pyproject.toml": pyproject,
                        "README.md": "readme", **{f"src/{name}": "code" for name in PACKAGE},
                        **{name: "extra" for name in extra}}
             if notice:
@@ -1059,8 +1059,8 @@ class DistTest(unittest.TestCase):
         self.assertTrue(release_check.check_dist(self._dist(), "0.1.0", require_zipapp=True))
 
     def test_a_tagged_build_cannot_publish_a_page_saying_no_release_exists(self) -> None:
-        """The README is the PyPI description and a version's page cannot be
-        replaced. A wheel and sdist built from this tree passed `dist --tag` with
+        """The readme pyproject.toml names is the PyPI description and a
+        version's page cannot be replaced. A wheel and sdist built from this tree passed `dist --tag` with
         "No release exists yet. Veridor is not on PyPI" in their metadata."""
         for statement in ("**As of 2026-11-04 no release exists.**", "Veridor is not on\nPyPI, and",
                           "As of 2026-11-04, no release\nhas been tagged.",
@@ -1076,6 +1076,41 @@ class DistTest(unittest.TestCase):
     def test_control_a_tagged_build_with_a_released_description_passes(self) -> None:
         built = self._dist(description="# Veridor\n\nInstall with `pip install veridor==0.1.0`.\n")
         self.assertEqual(release_check.check_dist(built, "0.1.0", tagged=True), [])
+
+    def test_a_description_with_a_link_pypi_cannot_follow_is_refused(self) -> None:
+        """PyPI renders the description with no base URL and no heading ids.
+        The README was the description, with 43 distinct relative and #anchor
+        targets in it, and every check here passed it. Not only for a tag: a
+        branch build fails too, so the README cannot drift back first."""
+        for link in ("[the changelog](CHANGELOG.md)", "[non-goals](#non-goals)",
+                     "[tested](ci/README.md#what-was-tested)", "![logo](docs/logo.png)",
+                     "see\n[x]: SECURITY.md", '<a href="#install">install</a>'):
+            with self.subTest(link=link):
+                built = self._dist(description=f"# Veridor\n\nRead {link}.\n")
+                for tagged in (False, True):
+                    problems = release_check.check_dist(built, "0.1.0", tagged=tagged)
+                    self.assertEqual(len(problems), 2, problems)  # the wheel and the sdist
+                    self.assertTrue(all("not absolute URLs, which go nowhere on PyPI" in p for p in problems),
+                                    problems)
+
+    def test_control_absolute_links_and_links_in_code_pass(self) -> None:
+        description = ("# Veridor\n\n[non-goals](https://github.com/o/r#non-goals), <https://docs.example/>, "
+                       "[mail](mailto:a@example.org), `[not a link](x.md)`\n\n```\n[nor](y.md)\n```\n")
+        self.assertEqual(release_check.check_dist(self._dist(description=description), "0.1.0", tagged=True), [])
+
+    def test_an_sdist_must_carry_the_readme_its_pyproject_names(self) -> None:
+        """Building the wheel from the sdist reads it; setuptools fails without it."""
+        pyproject = '[project]\nreadme = "README.pypi.md"\n'
+        self.assertEqual(release_check.check_dist(
+            self._dist(pyproject=pyproject, extra=("README.pypi.md",)), "0.1.0"), [])
+        problems = release_check.check_dist(self._dist(pyproject=pyproject), "0.1.0")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("cannot rebuild the wheel", problems[0])
+        self.assertIn("veridor-0.1.0/README.pypi.md", problems[0])
+        # Control: a readme pyproject does not name is still a stray file.
+        problems = release_check.check_dist(self._dist(extra=("README.pypi.md",)), "0.1.0")
+        self.assertEqual(len(problems), 1, problems)
+        self.assertIn("must not ship", problems[0])
 
     def test_a_tagged_build_with_no_description_is_refused(self) -> None:
         """The rule above would read nothing and pass."""

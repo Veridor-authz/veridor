@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 name = "veridor"
 version = "0.1.0"
 description = "CI-first authorization regression runner for multi-user APIs"
-readme = "README.md"
+readme = "README.pypi.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]

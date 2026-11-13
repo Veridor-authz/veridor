@@ -397,15 +397,20 @@ maintainers.
    `test_the_changelog_states_the_break_under_changed` in `tests/test_docs.py`.
    `REGISTRY` in `scripts/release_check.py` matches some of those sentences
    (`Not published at`, `At chart version`), so `versions` names any you rewrote
-   past it. The README is the PyPI description and an uploaded
-   version's page cannot be replaced: `notes` refuses any shipped file except
+   past it. `README.pypi.md`, the readme `pyproject.toml` names, is the PyPI
+   description, and an uploaded version's page cannot be replaced: `notes`
+   refuses any shipped file except
    `tests/`, `CHANGELOG.md`, this file and `scripts/release_check.py` that still
    holds one of the phrases in `_PRE_RELEASE_STATEMENT`, and `dist --tag` refuses a
    wheel or sdist whose description does. Those rules read phrases, not meaning, so
    a sentence worded another way passes: read the sections as well, and the first
-   paragraphs of this section. The README's repository-relative
-   links have no base on PyPI, so make them absolute for the tag or give
-   `pyproject.toml` a readme written for PyPI. Nothing checks that one.
+   paragraphs of this section. PyPI has no base URL for a
+   repository-relative link and gives headings no ids, so `README.md` keeps
+   its GitHub links and `README.pypi.md` uses only absolute ones: `dist`
+   refuses a wheel or sdist whose description has any other link, on every
+   build, and `PyPIDescriptionTest` in `tests/test_release_files.py` holds
+   each of its links to a file or README heading in the tree and its first
+   paragraph to the README's.
 4. **Check.** `python3.12 scripts/release_check.py versions --tag vX.Y.Z`, the
    full suite, and the end-to-end checks above.
 5. **Tag.** Dispatch `.github/workflows/veridor.yml` on a branch other than `main`

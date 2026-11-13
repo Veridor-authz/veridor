@@ -234,7 +234,7 @@ cp "$ROOT/ci/veridor.example.json" "$WORK/project/veridor.json"
 if [[ -z "$E2E_WHEEL" ]]; then
   log "building a wheel from a copy of this checkout (pip fetches setuptools)"
   mkdir -p "$WORK/wheel-src" "$WORK/dist"
-  cp -R "$ROOT/pyproject.toml" "$ROOT/README.md" "$ROOT/LICENSE" "$ROOT/src" "$WORK/wheel-src/"
+  cp -R "$ROOT/pyproject.toml" "$ROOT/README.pypi.md" "$ROOT/LICENSE" "$ROOT/src" "$WORK/wheel-src/"
   "$PY" -m pip wheel --quiet --no-deps --wheel-dir "$WORK/dist" "$WORK/wheel-src" >&2
   E2E_WHEEL="$(ls "$WORK"/dist/veridor-*.whl)"
 fi

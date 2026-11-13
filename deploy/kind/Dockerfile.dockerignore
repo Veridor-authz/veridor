@@ -9,7 +9,7 @@
 # root file, what this Dockerfile does not COPY stays out of the context.
 *
 !pyproject.toml
-!README.md
+!README.pypi.md
 !LICENSE
 !NOTICE
 !src/

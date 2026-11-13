@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT / "tests"))
 import source_path  # noqa: E402,F401 -- src/ first unless VERIDOR_TEST_AGAINST=installed
 
 from dockerignore_model import ignored, read_patterns  # noqa: E402
-from scripts import sync_doc_counts  # noqa: E402
+from scripts import release_check, sync_doc_counts  # noqa: E402
+import test_governance_docs as governance_docs  # noqa: E402 -- its anchors(), not its tests
 from tiers import slow  # noqa: E402
 
 README = (ROOT / "README.md").read_text(encoding="utf-8")
@@ -70,7 +71,7 @@ def links_to_another_repository(expected: str) -> list[tuple[str, str]]:
     with pyproject's own Repository first. GitHub treats owner names without
     regard to case."""
     wrong = [("pyproject.toml", REPOSITORY)] if REPOSITORY.casefold() != expected.casefold() else []
-    for name in ("SECURITY.md", "README.md", ".github/PULL_REQUEST_TEMPLATE.md",
+    for name in ("SECURITY.md", "README.md", PYPROJECT["project"]["readme"], ".github/PULL_REQUEST_TEMPLATE.md",
                  ".github/ISSUE_TEMPLATE/config.yml",
                  ".github/ISSUE_TEMPLATE/bug_report.yml"):
         text = (ROOT / name).read_text(encoding="utf-8")
@@ -150,6 +151,84 @@ class PresenceTest(unittest.TestCase):
         self.assertIn("END OF TERMS AND CONDITIONS", licence)
         self.assertIn("Apache License 2.0",
                       (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+
+
+class PyPIDescriptionTest(unittest.TestCase):
+    """The readme pyproject.toml names is the PyPI page, which cannot be
+    replaced once a version is uploaded. It used to be README.md, whose
+    repository-relative and #anchor links resolve on GitHub and nowhere on
+    pypi.org. README.md stays the GitHub page with its own links; the PyPI
+    readme is short, every link in it is absolute, and these tests hold each
+    link to something this tree has, so the two cannot drift apart unseen."""
+
+    NAME = PYPROJECT["project"]["readme"]
+    TEXT = (ROOT / NAME).read_text(encoding="utf-8")
+    HOSTS = ("https://docs.veridor.org/", "https://veridor.org/")
+
+    @staticmethod
+    def targets(markdown: str) -> list[str]:
+        """Every link target, absolute or not: the check below names the
+        others, and this lists what it lets through."""
+        text = release_check._CODE_SPAN.sub("code", release_check._FENCED_BLOCK.sub("", markdown))
+        return [m.group(1) for pattern in release_check._LINK_TARGETS for m in pattern.finditer(text)]
+
+    @classmethod
+    def unresolved(cls, markdown: str, root: Path = ROOT) -> list[str]:
+        """Each target that names no file at this tree, no README heading, or a
+        host the project does not hold."""
+        base = f"https://github.com/{REPOSITORY}"
+        readme_anchors = governance_docs.anchors((root / "README.md").read_text(encoding="utf-8"))
+        problems = []
+        for target in cls.targets(markdown):
+            if target in (base, *cls.HOSTS):
+                continue
+            if target.startswith(f"{base}#"):
+                if target.removeprefix(f"{base}#") not in readme_anchors:
+                    problems.append(f"{target}: no heading or anchor in README.md")
+            elif target.startswith(f"{base}/blob/main/"):
+                if not (root / target.removeprefix(f"{base}/blob/main/")).is_file():
+                    problems.append(f"{target}: no such file in this tree")
+            else:
+                problems.append(f"{target}: not this repository's README or files, nor a held host")
+        return problems
+
+    @staticmethod
+    def opening(markdown: str) -> str:
+        """The first paragraph after the title, with link targets dropped."""
+        paragraph = markdown.split("\n\n")[1]
+        return " ".join(re.sub(r"\]\([^)]*\)", "]", paragraph).split())
+
+    def test_pyproject_names_the_pypi_readme_not_the_github_one(self) -> None:
+        self.assertEqual(self.NAME, "README.pypi.md")
+
+    def test_every_link_in_the_packaged_description_is_absolute(self) -> None:
+        """What `dist` refuses in the built wheel, read from the source, so a
+        commit fails before anything is built. On 0d5e55b this named 43."""
+        self.assertTrue(self.targets(self.TEXT))
+        self.assertEqual(release_check.description_link_problems(self.TEXT), [])
+
+    def test_every_link_resolves_in_this_tree(self) -> None:
+        self.assertEqual(self.unresolved(self.TEXT), [])
+
+    def test_control_a_link_that_resolves_nowhere_is_named(self) -> None:
+        base = f"https://github.com/{REPOSITORY}"
+        for link, said in ((f"{base}#non-goal", "no heading"), (f"{base}/blob/main/SECURITY.txt", "no such file"),
+                           ("https://docs.veridor.org/guides/x/", "nor a held host"),
+                           ("https://github.com/other/repo", "nor a held host")):
+            with self.subTest(link=link):
+                problems = self.unresolved(f"See [x]({link}).")
+                self.assertEqual(len(problems), 1, problems)
+                self.assertIn(said, problems[0])
+        self.assertEqual(release_check.description_link_problems("[x](CHANGELOG.md) [y](#install)"),
+                         ["CHANGELOG.md", "#install"])
+
+    def test_it_opens_with_what_the_readme_opens_with(self) -> None:
+        """The paragraph that says what Veridor is and is not. A copy that
+        drifts from the README would say something else on the page that
+        cannot be replaced."""
+        self.assertIn("authorization regression runner", self.opening(self.TEXT))
+        self.assertEqual(self.opening(self.TEXT), self.opening(README))
+        self.assertNotEqual(self.opening(self.TEXT.replace("no payloads", "no traffic")), self.opening(README))
 
 
 class PythonSupportTest(unittest.TestCase):
@@ -794,7 +873,7 @@ class InvisibleUnicodeTest(unittest.TestCase):
         scanned = [path for top in roots for path in (ROOT / top).rglob("*")
                    if path.suffix in suffixes and path.is_file()
                    and "__pycache__" not in path.parts]
-        scanned += [ROOT / name for name in ("action.yml", "Dockerfile", "README.md",
+        scanned += [ROOT / name for name in ("action.yml", "Dockerfile", "README.md", "README.pypi.md",
                                              "SECURITY.md", "CHANGELOG.md", "CONTRIBUTING.md")]
         self.assertGreater(len(scanned), 150, "the scan is not reading the tree")
         found = {str(path.relative_to(ROOT)): hits for path in scanned

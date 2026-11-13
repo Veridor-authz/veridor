@@ -60,10 +60,15 @@
     inside both, and (when present) the zipapp's name and contents. The wheel
     may hold only the ``veridor/`` package and its dist-info, with no bytecode.
     The sdist must hold what rebuilds the wheel -- every file the wheel
-    installs, under ``src/``, with ``pyproject.toml`` and ``README.md`` -- and
+    installs, under ``src/``, with ``pyproject.toml``, ``README.md`` and the readme
+    ``pyproject.toml`` names -- and
     nothing outside that package, the top-level packaging files and the
-    egg-info setuptools writes. With ``--tag``, the wheel's and the sdist's
-    description must exist and must not say that no release exists.
+    egg-info setuptools writes. Every link in the wheel's and the sdist's
+    description, the PyPI page, must be an absolute http(s) or mailto URL:
+    PyPI renders it with no base URL and no heading ids, so a
+    repository-relative path or a bare ``#anchor`` goes nowhere there, and an
+    uploaded version's page cannot be replaced. With ``--tag``, the
+    description must also exist and must not say that no release exists.
 
 ``identity``
     List every occurrence of the project's organisation, registry and domain
@@ -774,8 +779,8 @@ def identity_leftovers(root: Path) -> list[tuple[str, int, str, str]]:
 _NOT_RELEASED = re.compile(r"^(?:Not (?:yet )?released\.|Nothing here has been released\b)", re.M)
 
 
-#: What the tree says before there is a release. The README is the PyPI
-#: description, and an uploaded version's page cannot be replaced, so one of these
+#: What the tree says before there is a release. The readme pyproject.toml
+#: names (README.pypi.md) is the PyPI description, and an uploaded version's page cannot be replaced, so one of these
 #: would tell that page's readers the page does not exist. Every development build
 #: carries them, so only what runs for a tag reads them.
 _PRE_RELEASE_STATEMENT = re.compile(
@@ -889,6 +894,7 @@ def check_dist(directory: Path, version: str, *, require_zipapp: bool = False,
                 wheel.read(f"{info}/METADATA").decode("utf-8"), headersonly=True)
             if tagged:
                 problems += _description_problems(expected_wheel, metadata)
+            problems += _description_link_problems(expected_wheel, metadata)
             for name in ("LICENSE", "NOTICE"):
                 if f"{info}/licenses/{name}" not in wheel_names:
                     problems.append(f"{expected_wheel} does not contain {info}/licenses/{name}")
@@ -906,8 +912,10 @@ def check_dist(directory: Path, version: str, *, require_zipapp: bool = False,
                     handle.read().decode("utf-8"), headersonly=True)  # type: ignore[union-attr]
                 if tagged:
                     problems += _description_problems(expected_sdist, pkg_info)
+                problems += _description_link_problems(expected_sdist, pkg_info)
                 problems += _metadata_problems(expected_sdist, pkg_info, version)
-            problems += _sdist_content_problems(expected_sdist, base, members, wheel_names)
+            problems += _sdist_content_problems(expected_sdist, base, members, wheel_names,
+                                                _sdist_readme(sdist, base, members))
     for pyz in sorted(directory.glob("*.pyz")):
         if pyz.name != f"veridor-{version}.pyz":
             problems.append(f"zipapp is named {pyz.name}, expected veridor-{version}.pyz")
@@ -938,8 +946,22 @@ _SDIST_TOP_LEVEL = frozenset({"LICENSE", "NOTICE", "MANIFEST.in", "PKG-INFO", "R
                               "pyproject.toml", "setup.cfg"})
 
 
+def _sdist_readme(sdist: tarfile.TarFile, base: str, members: set[str]) -> str | None:
+    """The readme the sdist's own pyproject.toml names, which a rebuild reads."""
+    if f"{base}/pyproject.toml" not in members:
+        return None
+    handle = sdist.extractfile(f"{base}/pyproject.toml")
+    try:
+        readme = tomllib.loads(handle.read().decode("utf-8")).get("project", {}).get("readme")  # type: ignore[union-attr]
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError):
+        return None
+    if isinstance(readme, dict):
+        readme = readme.get("file")
+    return readme if isinstance(readme, str) and "/" not in readme else None
+
+
 def _sdist_content_problems(sdist: str, base: str, members: set[str],
-                            wheel_names: set[str]) -> list[str]:
+                            wheel_names: set[str], readme: str | None = None) -> list[str]:
     """What the sdist must hold, and must not.
 
     It is what a downstream builder turns into the wheel, so every file the
@@ -947,16 +969,19 @@ def _sdist_content_problems(sdist: str, base: str, members: set[str],
     would publish an sdist that builds a different Veridor. It is not a way to
     run the suite: setuptools used to add tests/test_*.py without the helpers
     they import, so 0 of the 51 it shipped could be imported (measured).
+    ``readme`` is the file its pyproject.toml names, which a rebuild reads.
     """
     problems = []
-    needed = {f"{base}/pyproject.toml", f"{base}/README.md"} | {
+    readmes = {"README.md"} | ({readme} if readme else set())
+    top_level = _SDIST_TOP_LEVEL | readmes
+    needed = {f"{base}/pyproject.toml"} | {f"{base}/{name}" for name in readmes} | {
         f"{base}/src/{name}" for name in wheel_names
         if name.startswith("veridor/") and not name.endswith("/")}
     missing = sorted(needed - members)
     if missing:
         problems.append(f"{sdist} cannot rebuild the wheel; it does not contain {missing[:5]}")
     allowed = {base, f"{base}/src", f"{base}/src/veridor", f"{base}/src/veridor.egg-info"} | {
-        f"{base}/{name}" for name in _SDIST_TOP_LEVEL}
+        f"{base}/{name}" for name in top_level}
     stray = sorted(
         name for name in members
         if not (name in allowed or name.startswith((f"{base}/src/veridor/", f"{base}/src/veridor.egg-info/")))
@@ -1025,6 +1050,47 @@ def _signing_identity_problems(root: Path, repository: str) -> list[str]:
                        for name in sorted(set(repos)) if name.casefold() != repository.casefold()]
 
 
+#: A link target that works on a page with no base URL.
+_ABSOLUTE_TARGET = re.compile(r"^(?:https?://|mailto:)", re.IGNORECASE)
+_FENCED_BLOCK = re.compile(r"^ {0,3}(`{3,}|~{3,})[^\n]*\n.*?^ {0,3}\1[ \t]*$", re.M | re.S)
+_CODE_SPAN = re.compile(r"(`+)(?!`).+?(?<!`)\1", re.S)
+_LINK_TARGETS = (
+    re.compile(r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]\(\s*<?([^\s)>]*)"),          # [text](target), ![alt](src)
+    re.compile(r"^ {0,3}\[[^\]]+\]:[ \t]*<?([^\s>]+)", re.M),                   # [label]: target
+    re.compile(r"<([A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*)>"),                      # <scheme:...>
+    re.compile(r"\b(?:href|src)\s*=\s*[\"']([^\"']*)[\"']", re.IGNORECASE),        # raw HTML
+)
+
+
+def description_link_problems(description: str) -> list[str]:
+    """Each link target in a markdown description that is not an absolute
+    http(s) or mailto URL, once, in order. Code is not read: a link written
+    inside a code span or block is text on PyPI too.
+
+    The README was the description. Its 24 repository-relative links and 30
+    ``#anchor`` links all resolve on GitHub and none of them on pypi.org,
+    which has no repository to resolve a path against and gives headings no
+    ids. The only rule against that was a sentence in CONTRIBUTING.md."""
+    text = _CODE_SPAN.sub("code", _FENCED_BLOCK.sub("", description))
+    found: list[str] = []
+    for pattern in _LINK_TARGETS:
+        for match in pattern.finditer(text):
+            target = match.group(1)
+            if not _ABSOLUTE_TARGET.match(target) and target not in found:
+                found.append(target)
+    return found
+
+
+def _description_link_problems(artifact: str, metadata) -> list[str]:
+    description = metadata.get_payload()
+    targets = description_link_problems(description) if isinstance(description, str) else []
+    if not targets:
+        return []
+    return [f"{artifact}: its description, the PyPI page, has {len(targets)} link(s) that are not "
+            f"absolute URLs, which go nowhere on PyPI: {targets[:8]}; make every link in the readme "
+            "pyproject.toml names absolute (CONTRIBUTING.md, \"Releasing\")"]
+
+
 def _description_problems(artifact: str, metadata) -> list[str]:
     """An empty description is a problem too: this rule would read nothing."""
     description = metadata.get_payload()
@@ -1033,7 +1099,7 @@ def _description_problems(artifact: str, metadata) -> list[str]:
     found = pre_release_statements(description)
     if found:
         return [f"{artifact}: its description, the PyPI page, still says {found}; "
-                "rewrite README.md before tagging (CONTRIBUTING.md, \"Releasing\")"]
+                "rewrite the readme pyproject.toml names before tagging (CONTRIBUTING.md, \"Releasing\")"]
     return []
 
 
