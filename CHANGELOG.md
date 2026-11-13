@@ -19,6 +19,11 @@ caveat that the interface may still move.
   `interpretation` block now points at the guide's section on what a
   `confirmed` finding proves; the old link named a README heading that no
   longer exists.
+- The image build and the release build install setuptools 84.1.0, not
+  84.0.0, which carries GHSA-xmj3-9gf7-h52w (a Windows path escape during
+  legacy wheel installation). The kind demo image's `python:3.12-slim` base
+  is pinned by digest like the root `Dockerfile`'s, so Dependabot proposes
+  its updates instead of the tag moving underneath it.
 
 ### Fixed
 

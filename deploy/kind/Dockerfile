@@ -5,7 +5,7 @@
 # nothing but Veridor itself. tests/test_stdlib_only.py (fast tier) asserts
 # both halves: an AST scan of every import in src/veridor/**, and no runtime
 # dependency in pyproject.toml. This image is where it pays off.
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b
 
 # Non-root by default. The viewer only ever reads files, but a container that
 # does not need root should not have it.

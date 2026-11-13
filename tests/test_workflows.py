@@ -1119,7 +1119,13 @@ class DependabotDockerTest(unittest.TestCase):
             "it under 'Not pinned at all'"])
         digest = {path: f"FROM python:3.12-slim@sha256:{'a' * 64} AS build\n" for path in tag}
         self.assertEqual(dependabot_docker_problems(bare, digest.__getitem__), [])
-        self.assertEqual(dependabot_docker_problems(self.TEXT, digest.__getitem__), [
+        # Both Dockerfiles are pinned now, so the header lists neither; plant the
+        # listing the kind image used to carry to show a stale one is still named.
+        anchor = "#   (tests/test_workflows.py, SCORECARD).\n"
+        self.assertIn(anchor, self.TEXT)
+        stale = self.TEXT.replace(anchor, "#   (tests/test_workflows.py, SCORECARD);\n"
+                                          "# - deploy/kind/Dockerfile's base, a moving tag.\n")
+        self.assertEqual(dependabot_docker_problems(stale, digest.__getitem__), [
             "deploy/kind/Dockerfile: pinned by digest but listed under 'Not pinned at all'"])
 
 
