@@ -201,7 +201,7 @@ class RunStatusTest(unittest.TestCase):
         return core.run_status([{"verdict": verdict} for verdict in verdicts])
 
     def _readme_rows(self) -> dict[str, str]:
-        text = (ROOT / "README.md").read_text(encoding="utf-8")
+        text = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         table = text.split("| `status` | Means |", 1)[1].split("\n\n", 1)[0]
         return dict(re.findall(r"^\| `(\w+)` \| (.+) \|$", table, re.MULTILINE))
 

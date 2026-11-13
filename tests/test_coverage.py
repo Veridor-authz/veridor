@@ -1070,7 +1070,7 @@ class HonestClaimTest(unittest.TestCase):
         statement = CLAIM["statement"]
         self.assertNotIn("owner", statement)
         self.assertIn("denial-only outcome for at least one identity", statement)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         self.assertIn("outcome for at least one identity", " ".join(readme.split()))
 
     def test_rendered_text_contains_no_banned_word(self) -> None:

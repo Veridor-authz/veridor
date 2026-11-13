@@ -115,16 +115,16 @@ subprocess.run([sys.executable, "-m", "veridor", ...], env=source_path.child_env
 
 Run the full suite and `python3.12 scripts/e2e_validation.py`.
 
-If you touched the README or the configuration schema, run
+If you touched the guide (`docs/guide.md`) or the configuration schema, run
 `python3.12 scripts/blind_config_study.py`. It asks whether somebody could still
 write a working configuration from the published documentation alone: every
 documented example must load, every key a working config needs must appear in
-the README, and a plausible first mistake must produce a refusal that names the
+the guide, and a plausible first mistake must produce a refusal that names the
 right key and says what it wanted. The suite runs it too. It is a mechanical
 proxy for a user study, not a substitute for one.
 
 If you changed the number of tests, run `python3.12 scripts/sync_doc_counts.py`:
-the counts in `README.md` are asserted by a test.
+the counts in `docs/guide.md` are asserted by a test.
 
 ## End-to-end checks
 
@@ -395,7 +395,7 @@ maintainers.
    `## [0.1.0]` already exists and was never tagged, so a 0.1.0 release folds
    `[Unreleased]` into it and replaces its "Not released" paragraph.
 3. **Statements the release makes false.** Rewrite the dated "no release"
-   sentences: the README's Install section, CI/CD integrations intro, GitHub
+   sentences: the guide's Install section, CI/CD integrations intro, GitHub
    Action and GitLab sections, both in `SECURITY.md`, `SUPPORT.md`, and the ones
    in `ci/`, `templates/veridor.yml` and `deploy/`, and the warnings that the PyPI
    name is unclaimed. In `ci/azure-pipelines.yml` and `ci/buildspec.yml`, replace
@@ -420,11 +420,11 @@ maintainers.
    wheel or sdist whose description does. Those rules read phrases, not meaning, so
    a sentence worded another way passes: read the sections as well, and the first
    paragraphs of this section. PyPI has no base URL for a
-   repository-relative link and gives headings no ids, so `README.md` keeps
-   its GitHub links and `README.pypi.md` uses only absolute ones: `dist`
+   repository-relative link and gives headings no ids, so `README.md` and
+   `docs/guide.md` keep their GitHub links and `README.pypi.md` uses only absolute ones: `dist`
    refuses a wheel or sdist whose description has any other link, on every
    build, and `PyPIDescriptionTest` in `tests/test_release_files.py` holds
-   each of its links to a file or README heading in the tree and its first
+   each of its links to a file, README heading or guide heading in the tree and its first
    paragraph to the README's.
 4. **Check.** `python3.12 scripts/release_check.py versions --tag vX.Y.Z`, the
    full suite, and the end-to-end checks above.

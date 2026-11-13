@@ -16,7 +16,7 @@ reasonable for a crash, a wrong number, or a claim the documentation overstates.
 
 Include the version (`veridor --version`), the command you ran, and a minimal
 configuration with **every credential replaced by an `${ENV_VAR}` reference**.
-Veridor's own [proof capsules](README.md#capsules-sending-a-proof-to-someone-else)
+Veridor's own [proof capsules](docs/guide.md#capsules-sending-a-proof-to-someone-else)
 refuse to build with a literal credential in them, and the same rule applies to
 anything you send us.
 
@@ -114,7 +114,7 @@ running system, so it necessarily handles secrets.
 
 ## Verifying a capsule someone sent you
 
-A [proof capsule](README.md#capsules-sending-a-proof-to-someone-else) is
+A [proof capsule](docs/guide.md#capsules-sending-a-proof-to-someone-else) is
 written by someone else, and `veridor verify` treats it as untrusted input.
 Before it sends anything, it refuses with exit `2`:
 
@@ -322,7 +322,7 @@ Veridor evaluates the expectations **you** declared. A finding means observed
 behaviour differed from your declaration; it does not establish that your
 declaration is correct, and a passing run is not evidence that a boundary is
 enforced. See
-[What a Veridor finding does and does not mean](README.md#what-a-veridor-finding-does-and-does-not-mean).
+[What a Veridor finding does and does not mean](docs/guide.md#what-a-veridor-finding-does-and-does-not-mean).
 
 If you believe a report or document overstates what was measured, please raise
 it. Overclaiming is treated as a defect in this project.

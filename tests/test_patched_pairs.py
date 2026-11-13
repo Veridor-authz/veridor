@@ -490,7 +490,7 @@ class MarkerNotEvaluatedTest(unittest.TestCase):
             pair = json.loads(path.read_text(encoding="utf-8"))
             result = self.evaluate(path.name, True if pair["control"].get("expect_marker", True) else None)
             made += len(result["checks"])
-        prose = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+        prose = " ".join((ROOT / "docs" / "guide.md").read_text(encoding="utf-8").split())
         self.assertIn(f"Java and C++), {made} assertions", prose)
         self.assertIn("the four status-only pairs, whose control asks for no marker, are held to its status alone, "
                       "and the output names that check not evaluated", prose)

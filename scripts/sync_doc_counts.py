@@ -1,5 +1,5 @@
 #!/usr/bin/env python3.12
-"""Write the real test-tier counts into README.md.
+"""Write the real test-tier counts into docs/guide.md.
 
 ``tests/test_docs.TierTableTest`` asserts that table against the counts the
 runner actually discovers, because it went stale three times in three days and
@@ -10,7 +10,7 @@ but tedious to do by hand -- so this does it::
     python3.12 scripts/sync_doc_counts.py [--check] [PATH ...]
 
 Each PATH names another document carrying the same table, relative to the
-current directory, to sync alongside README.md. Naming one that is missing, or
+current directory, to sync alongside docs/guide.md. Naming one that is missing, or
 that has no table, is an error and nothing is written.
 
 It touches nothing but the digits in those tables and prints what it changed.
@@ -44,7 +44,7 @@ PATTERNS: tuple[tuple[str, str], ...] = (
     (r"(\*\*)[\d,]+( tests passing\*\*)", "all"),
 )
 
-README = "README.md"
+README = "docs/guide.md"
 
 
 def counts() -> dict[str, int]:
@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> int:
         "documents",
         nargs="*",
         metavar="PATH",
-        help="another document carrying the tables, synced alongside README.md",
+        help="another document carrying the tables, synced alongside docs/guide.md",
     )
     args = parser.parse_args(argv)
 

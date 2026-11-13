@@ -53,7 +53,7 @@ import source_path  # noqa: E402,F401 -- src/ first unless VERIDOR_TEST_AGAINST=
 
 from veridor.core import ConfigError, load_config  # noqa: E402
 
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 
 #: A configuration that loads, used as the base every mistake is applied to.
 #: Deliberately the minimal one the README documents for drift.

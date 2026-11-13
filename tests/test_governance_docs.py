@@ -1,6 +1,6 @@
 """The files a contributor or an adopter reads first, held to what they point at.
 
-The README's CI/CD integrations table is the one place a reader decides which
+The guide's (docs/guide.md) CI/CD integrations table is the one place a reader decides which
 integration to trust, so every row must point at a file or heading that
 exists, and every row must say what has not been done yet. The governance
 files link to each other by heading; a renamed heading breaks those links
@@ -25,7 +25,7 @@ import source_path  # noqa: E402,F401 -- src/ first unless VERIDOR_TEST_AGAINST=
 
 from yaml_subset import load_yaml  # noqa: E402
 
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 MAINTAINER = "@Santoshkumarpuppala"
 _LINK = re.compile(r"(?<!!)\[[^\]]+\]\(([^)\s]+)\)")
 _FENCE = re.compile(r"^```.*?^```", re.M | re.S)
@@ -91,19 +91,24 @@ class IntegrationsTableTest(unittest.TestCase):
             with self.subTest(row=row[0]):
                 cells = " | ".join(row)
                 self.assertTrue(_LINK.findall(cells), "a row with no link to its files")
-                self.assertEqual(link_problems(cells, ROOT / "README.md"), [])
+                self.assertEqual(link_problems(cells, ROOT / "docs" / "guide.md"), [])
 
     def test_control_a_broken_file_or_anchor_fails(self) -> None:
-        row = "| [GitHub Action](#github-action) | [action.yml](action.yml) | x | y |"
-        self.assertEqual(link_problems(row, ROOT / "README.md"), [])
-        self.assertEqual(link_problems(row.replace("(action.yml)", "(action.yaml)"), ROOT / "README.md"),
-                         ["action.yaml: action.yaml does not exist"])
-        self.assertEqual(link_problems(row.replace("#github-action", "#github-actions"), ROOT / "README.md"),
-                         ["#github-actions: no heading or anchor #github-actions in README.md"])
-        self.assertEqual(len(link_problems("[x](ci/README.md#what-was-testedd)", ROOT / "README.md")), 1)
-        broken = README.replace("(deploy/argo-rollouts/README.md)", "(deploy/argo-rollout/README.md)")
+        # The table lives in docs/guide.md, one directory down, so its links
+        # climb with ../ and a bare anchor names a heading of the guide.
+        row = "| [GitHub Action](#github-action) | [action.yml](../action.yml) | x | y |"
+        self.assertEqual(link_problems(row, ROOT / "docs" / "guide.md"), [])
+        self.assertEqual(link_problems(row.replace("(../action.yml)", "(../action.yaml)"), ROOT / "docs" / "guide.md"),
+                         ["../action.yaml: action.yaml does not exist"])
+        self.assertEqual(link_problems(row.replace("(../action.yml)", "(action.yml)"), ROOT / "docs" / "guide.md"),
+                         ["action.yml: docs/action.yml does not exist"])
+        self.assertEqual(link_problems(row.replace("#github-action", "#github-actions"), ROOT / "docs" / "guide.md"),
+                         ["#github-actions: no heading or anchor #github-actions in guide.md"])
+        self.assertEqual(len(link_problems("[x](../ci/README.md#what-was-testedd)", ROOT / "docs" / "guide.md")), 1)
+        self.assertIn("(../deploy/argo-rollouts/README.md)", README)
+        broken = README.replace("(../deploy/argo-rollouts/README.md)", "(../deploy/argo-rollout/README.md)")
         rows = integration_rows(broken)
-        self.assertTrue(any(link_problems(" | ".join(row), ROOT / "README.md") for row in rows))
+        self.assertTrue(any(link_problems(" | ".join(row), ROOT / "docs" / "guide.md") for row in rows))
 
     def test_the_table_claims_nothing_exists_that_does_not(self) -> None:
         section = re.search(r"^## CI/CD integrations$(.*?)(?=^## )", README, re.M | re.S).group(1)
@@ -129,7 +134,7 @@ class IntegrationsTableTest(unittest.TestCase):
 
 
 class DocumentLinksTest(unittest.TestCase):
-    DOCUMENTS = ("README.md", "CONTRIBUTING.md", "SECURITY.md", "GOVERNANCE.md", "SUPPORT.md",
+    DOCUMENTS = ("README.md", "docs/guide.md", "CONTRIBUTING.md", "SECURITY.md", "GOVERNANCE.md", "SUPPORT.md",
                  "CHANGELOG.md", ".github/PULL_REQUEST_TEMPLATE.md", "ci/README.md")
 
     def test_every_relative_link_resolves(self) -> None:
@@ -385,7 +390,7 @@ class CommercialLanguageTest(unittest.TestCase):
     public should read as a sales document. Names of other people's products
     (GitHub Marketplace, GitLab Premium) are not this."""
 
-    DOCUMENTS = ("README.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CONTRIBUTING.md",
+    DOCUMENTS = ("README.md", "docs/guide.md", "SECURITY.md", "SUPPORT.md", "GOVERNANCE.md", "CONTRIBUTING.md",
                  "CODE_OF_CONDUCT.md", "pyproject.toml", "tests/tiers.py", "tests/test_tiers.py")
     WORDS = re.compile(r"(?i)\b(?:invest(?:ors?|ment)|buyers?|pitch|pricing|marketing|commercial|customers?"
                        r"|paid support|go-to-market|monetiz\w+)\b")
@@ -480,9 +485,9 @@ class MajorTagPolicyTest(unittest.TestCase):
         self.assertIn("NO moving major tag", release)
         self.assertNotIn("git push", release)
         prose = {name: re.sub(r"\s+", " ", (ROOT / name).read_text(encoding="utf-8"))
-                 for name in ("README.md", "CONTRIBUTING.md")}
+                 for name in ("README.md", "docs/guide.md", "CONTRIBUTING.md")}
         self.assertIn("There is no moving major tag (`v0`, `v1`) while the version is `0.x`",
-                      prose["README.md"])
+                      prose["docs/guide.md"])
         self.assertIn("There is no moving major tag (`v0`, `v1`) while the version is `0.x`",
                       prose["CONTRIBUTING.md"])
         for name, text in prose.items():

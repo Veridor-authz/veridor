@@ -754,9 +754,9 @@ def _schema_command(args: argparse.Namespace) -> int:
     same_parse(GITLAB_EXAMPLE, "ci/.gitlab-ci.yml")
     example = yaml.safe_load(GITLAB_EXAMPLE.read_text(encoding="utf-8"))
     record("ci/.gitlab-ci.yml", True, errors_for(gitlab, example))
-    readme = (ROOT / "README.md").read_text(encoding="utf-8").split("### GitLab CI", 1)[1].split("\n### ", 1)[0]
+    readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8").split("### GitLab CI", 1)[1].split("\n### ", 1)[0]
     for number, block in enumerate(re.findall(r"```yaml\n(.*?)```", readme, re.S), 1):
-        record(f"README.md GitLab section, YAML block {number}", True, errors_for(gitlab, yaml.safe_load(block)))
+        record(f"docs/guide.md GitLab section, YAML block {number}", True, errors_for(gitlab, yaml.safe_load(block)))
     remote = next(item for item in example["include"] if "remote" in item)
     for label, change in (
         ("control: include integrity as a hex digest", lambda item: item.__setitem__("integrity", "sha256-" + "0" * 64)),

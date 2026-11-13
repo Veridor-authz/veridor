@@ -299,7 +299,7 @@ class BlindConfigSyntaxTest(unittest.TestCase):
 
     @staticmethod
     def _readme() -> str:
-        return (ROOT / "README.md").read_text(encoding="utf-8")
+        return (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 
     def _broken(self) -> tuple[str, int]:
         """The README with the first comma of its first complete run config

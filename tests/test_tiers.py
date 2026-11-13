@@ -788,7 +788,7 @@ class BudgetNumbersTest(unittest.TestCase):
         return float(self.WORDS[limits.group(1)]), float(limits.group(2)), float(limits.group(3))
 
     def test_the_documents_state_the_limits_the_runner_applies(self) -> None:
-        for name in ("README.md", "CONTRIBUTING.md"):
+        for name in ("docs/guide.md", "CONTRIBUTING.md"):
             with self.subTest(document=name):
                 self.assertEqual(self.stated(name), (run_tests.FAST_TEST_BUDGET_SECONDS,
                                                      run_tests.FAST_TEST_WALL_CEILING_SECONDS,

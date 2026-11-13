@@ -422,7 +422,7 @@ def _shipped_configs() -> dict[str, dict]:
     return configs
 
 
-_README = (ROOT / "README.md").read_text(encoding="utf-8")
+_README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 _OWNER_MARKER = "vdr-Xk7Qm2Ls9Rt4Vb8Nc3Zp6Wf1"
 
 
@@ -441,7 +441,7 @@ def _readme_configs() -> dict[str, dict]:
                 json.loads("{" + match.group(1) + "}")
             except ValueError:
                 raise AssertionError(
-                    f"README.md:{line}: a ```json block is not valid JSON, on "
+                    f"docs/guide.md:{line}: a ```json block is not valid JSON, on "
                     f"its own or as an object's members: {error}") from None
             continue
         if not isinstance(document, dict):
@@ -449,11 +449,11 @@ def _readme_configs() -> dict[str, dict]:
         if "version" in document and "identities" in document:
             # A `map` configuration (a matrix, no checks) is named by what it
             # holds, not by its line: the line moved with every README edit
-            # above it, and "README.md:314" stopped matching.
+            # above it, and "README.md:314" stopped matching (the manual is docs/guide.md now).
             kind = " (map: matrix, no checks)" if "matrix" in document and "checks" not in document else ""
-            configs[f"README.md:{line}{kind}"] = document
+            configs[f"docs/guide.md:{line}{kind}"] = document
         elif "sequences" in document:
-            configs[f"README.md:{line} (sequences, with two identities)"] = {
+            configs[f"docs/guide.md:{line} (sequences, with two identities)"] = {
                 "version": document["version"],
                 "target": {"base_url": "https://staging.example.com"},
                 "identities": {
@@ -467,7 +467,7 @@ def _readme_configs() -> dict[str, dict]:
             identities = dict(document["identities"])
             owner = next(iter(identities))
             identities["outsider"] = {"headers": {"Authorization": "Bearer ${OUTSIDER_TOKEN}"}}
-            configs[f"README.md:{line} (session, with a second identity and a check)"] = {
+            configs[f"docs/guide.md:{line} (session, with a second identity and a check)"] = {
                 "version": 1,
                 "target": {"base_url": "https://staging.example.com"},
                 "identities": identities,
@@ -623,7 +623,7 @@ class CorpusAgreementTest(unittest.TestCase):
         with patch.object(sys.modules[__name__], "_README", broken):
             with self.assertRaises(AssertionError) as raised:
                 _readme_configs()
-        self.assertIn(f"README.md:{line}", str(raised.exception))
+        self.assertIn(f"docs/guide.md:{line}", str(raised.exception))
         self.assertIn("not valid JSON", str(raised.exception))
 
     def test_annotations_are_accepted_wherever_the_schema_allows_them(self) -> None:

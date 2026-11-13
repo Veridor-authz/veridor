@@ -102,7 +102,7 @@ class VersionsTest(_Tree):
                      "ci/azure-pipelines.yml", "ci/buildspec.yml",
                      "deploy/kustomize/veridor-gate/base/job.yaml",
                      "deploy/argo-rollouts/veridor-analysistemplate.yaml",
-                     "deploy/helm/veridor-gate/Chart.yaml", "README.md"):
+                     "deploy/helm/veridor-gate/Chart.yaml", "docs/guide.md"):
             with self.subTest(path=path):
                 self.assertIn(path, {entry.path for entry in matched})
 

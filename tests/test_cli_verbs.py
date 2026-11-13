@@ -264,7 +264,7 @@ class HelpShapeTest(unittest.TestCase):
         self.assertIn("liveness.unproven", prose)
         # README's no-flag vacuity bullet offered "an expired token" as a case
         # it catches; a 401 is an answer, so that run never reaches it.
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         bullet = readme.split("**Not one probe answered", 1)[1].split("\n- ", 1)[0]
         self.assertNotIn("expired token", bullet)
 
@@ -1415,7 +1415,7 @@ class MutateEnvelopeParserTest(unittest.TestCase):
         counted (``planned_requests`` adds nothing for a 50-step sequence), so
         "whole" overstated the bound in both places.
         """
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         start = readme.index("- **`--max-requests`**")
         end = readme.index("\n\n", start)
         bullet = " ".join(readme[start:end].split())

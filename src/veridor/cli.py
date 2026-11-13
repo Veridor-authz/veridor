@@ -544,7 +544,7 @@ def _parser() -> argparse.ArgumentParser:
             "(default: new+confirmed). "
             "new+confirmed: anything absent from the baseline, PLUS anything "
             "proved by a marker regardless of age -- the default because `new` "
-            "alone is decided entirely by a file the README asks you to commit, "
+            "alone is decided entirely by a file the guide asks you to commit, "
             "so a pull request that adds a finding id to the baseline turns a "
             "live confirmed leak into a green build. "
             "new: a finding absent from the baseline. "
@@ -3612,7 +3612,7 @@ def _drift_config(
             "response carrying it in another identity's hands is measured proof "
             "that data crossed. Without it drift can only see status changes.",
             "matrix.peer_groups, privilege_order and unauthenticated switch on "
-            "further candidate rules. See the README's map section.",
+            "further candidate rules. See the map section of Veridor's guide, docs/guide.md.",
         ],
         "target": {"base_url": base_url, "timeout_seconds": 10},
         "identities": {

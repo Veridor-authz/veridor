@@ -433,7 +433,7 @@ class ArgoCdTargetDocumentTest(unittest.TestCase):
         argocd_block = text[text.index("  argocd:\n"):text.index("    phase: PostSync")]
         pointers = {
             "values.yaml hook.argocd": " ".join(re.sub(r"(?m)^\s*#", "", argocd_block).split()),
-            "README.md": self.normalised(ROOT / "README.md"),
+            "docs/guide.md": self.normalised(ROOT / "docs" / "guide.md"),
             "deploy/argocd/README.md": self.normalised(ROOT / "deploy" / "argocd" / "README.md"),
         }
         for name, body in pointers.items():

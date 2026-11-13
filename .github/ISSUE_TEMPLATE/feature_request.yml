@@ -10,7 +10,7 @@ body:
         weighed against the rest.
 
         Veridor declares no policy, discovers no routes and sends no payloads
-        (README, "Non-goals"). A request that would change one of those is
+        (docs/guide.md, "Non-goals"). A request that would change one of those is
         welcome, but say so, because it is a design decision rather than a
         feature.
 

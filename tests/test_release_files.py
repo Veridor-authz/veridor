@@ -37,7 +37,9 @@ from scripts import release_check, sync_doc_counts  # noqa: E402
 import test_governance_docs as governance_docs  # noqa: E402 -- its anchors(), not its tests
 from tiers import slow  # noqa: E402
 
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
+#: README.md, the short front page GitHub shows; the manual above moved out of it.
+FRONT_PAGE = (ROOT / "README.md").read_text(encoding="utf-8")
 PYPROJECT = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
 
 #: The GitHub `owner/repo` every published link has to agree on, taken from the
@@ -71,7 +73,7 @@ def links_to_another_repository(expected: str) -> list[tuple[str, str]]:
     with pyproject's own Repository first. GitHub treats owner names without
     regard to case."""
     wrong = [("pyproject.toml", REPOSITORY)] if REPOSITORY.casefold() != expected.casefold() else []
-    for name in ("SECURITY.md", "README.md", PYPROJECT["project"]["readme"], ".github/PULL_REQUEST_TEMPLATE.md",
+    for name in ("SECURITY.md", "README.md", "docs/guide.md", PYPROJECT["project"]["readme"], ".github/PULL_REQUEST_TEMPLATE.md",
                  ".github/ISSUE_TEMPLATE/config.yml",
                  ".github/ISSUE_TEMPLATE/bug_report.yml"):
         text = (ROOT / name).read_text(encoding="utf-8")
@@ -132,6 +134,7 @@ class PresenceTest(unittest.TestCase):
         description = PYPROJECT["project"]["description"]
         self.assertIn("authorization regression runner", description)
         self.assertIn("authorization regression runner", " ".join(README.split()).replace("**", ""))
+        self.assertIn("authorization regression runner", " ".join(FRONT_PAGE.split()).replace("**", ""))
         self.assertNotIn("Deterministic", description)
 
     def test_the_classifier_comment_does_not_say_ci_has_run(self) -> None:
@@ -186,8 +189,14 @@ class PyPIDescriptionTest(unittest.TestCase):
                 if target.removeprefix(f"{base}#") not in readme_anchors:
                     problems.append(f"{target}: no heading or anchor in README.md")
             elif target.startswith(f"{base}/blob/main/"):
-                if not (root / target.removeprefix(f"{base}/blob/main/")).is_file():
+                # The manual moved from README.md to docs/guide.md, so its
+                # anchors are now reached through the file: hold those to the
+                # file's headings as the bare #anchor above is held to README's.
+                path, _, anchor = target.removeprefix(f"{base}/blob/main/").partition("#")
+                if not (root / path).is_file():
                     problems.append(f"{target}: no such file in this tree")
+                elif anchor and anchor not in governance_docs.anchors((root / path).read_text(encoding="utf-8")):
+                    problems.append(f"{target}: no heading or anchor in {path}")
             else:
                 problems.append(f"{target}: not this repository's README or files, nor a held host")
         return problems
@@ -214,7 +223,8 @@ class PyPIDescriptionTest(unittest.TestCase):
         base = f"https://github.com/{REPOSITORY}"
         for link, said in ((f"{base}#non-goal", "no heading"), (f"{base}/blob/main/SECURITY.txt", "no such file"),
                            ("https://docs.veridor.org/guides/x/", "nor a held host"),
-                           ("https://github.com/other/repo", "nor a held host")):
+                           ("https://github.com/other/repo", "nor a held host"),
+                           (f"{base}/blob/main/docs/guide.md#non-goal", "no heading or anchor in docs/guide.md")):
             with self.subTest(link=link):
                 problems = self.unresolved(f"See [x]({link}).")
                 self.assertEqual(len(problems), 1, problems)
@@ -227,8 +237,8 @@ class PyPIDescriptionTest(unittest.TestCase):
         drifts from the README would say something else on the page that
         cannot be replaced."""
         self.assertIn("authorization regression runner", self.opening(self.TEXT))
-        self.assertEqual(self.opening(self.TEXT), self.opening(README))
-        self.assertNotEqual(self.opening(self.TEXT.replace("no payloads", "no traffic")), self.opening(README))
+        self.assertEqual(self.opening(self.TEXT), self.opening(FRONT_PAGE))
+        self.assertNotEqual(self.opening(self.TEXT.replace("no payloads", "no traffic")), self.opening(FRONT_PAGE))
 
 
 class PythonSupportTest(unittest.TestCase):
@@ -313,6 +323,7 @@ class PythonSupportTest(unittest.TestCase):
     def test_the_readme_install_section_states_the_same_floor(self) -> None:
         floor = PYPROJECT["project"]["requires-python"].removeprefix(">=")
         self.assertIn(f"Python {floor} or newer", README)
+        self.assertIn(f"Python {floor} or newer", FRONT_PAGE)
 
 
 class ConfigSchemaTest(unittest.TestCase):
@@ -880,7 +891,7 @@ class InvisibleUnicodeTest(unittest.TestCase):
         scanned = [path for top in roots for path in (ROOT / top).rglob("*")
                    if path.suffix in suffixes and path.is_file()
                    and "__pycache__" not in path.parts]
-        scanned += [ROOT / name for name in ("action.yml", "Dockerfile", "README.md", "README.pypi.md",
+        scanned += [ROOT / name for name in ("action.yml", "Dockerfile", "README.md", "docs/guide.md", "README.pypi.md",
                                              "SECURITY.md", "CHANGELOG.md", "CONTRIBUTING.md")]
         self.assertGreater(len(scanned), 150, "the scan is not reading the tree")
         found = {str(path.relative_to(ROOT)): hits for path in scanned
@@ -925,7 +936,7 @@ class InternalDocumentTest(unittest.TestCase):
 
     #: Everything under docs/ that IS published. Anything else there is a
     #: working note and stays local.
-    PUBLISHED = {"report-formats.md"}
+    PUBLISHED = {"report-formats.md", "guide.md"}
 
     @slow("shells out to git ls-files")
     def test_no_working_note_is_tracked(self) -> None:
@@ -957,7 +968,7 @@ class InternalDocumentTest(unittest.TestCase):
 
         Read from the README's flags, so a new example that writes a new name
         fails here until .gitignore covers it."""
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         written = set()
         for match in re.finditer(
                 r"--(?:sarif|output|matrix|coverage|promote|json|baseline)[ =]([\w./-]+)"
@@ -1080,7 +1091,7 @@ class InternalDocumentTest(unittest.TestCase):
 
 
 class SyncDocCountsTest(unittest.TestCase):
-    """scripts/sync_doc_counts.py, with the counts supplied and README in a temp dir."""
+    """scripts/sync_doc_counts.py, with the counts supplied and the guide in a temp dir."""
 
     STALE = "| `fast` | 1 |\n| `slow` | 2 |\n| both | 3 |\n"
     FRESH = "| `fast` | 7 |\n| `slow` | 3 |\n| both | 10 |\n"
@@ -1088,7 +1099,8 @@ class SyncDocCountsTest(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.root, True)
-        self.readme = self.root / "README.md"
+        (self.root / "docs").mkdir()
+        self.readme = self.root / "docs" / "guide.md"
         self.readme.write_text(self.STALE, encoding="utf-8")
         self.extra = self.root / "extra.md"
         self.extra.write_text(self.STALE, encoding="utf-8")

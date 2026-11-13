@@ -6343,7 +6343,7 @@ def _interpretation(
             "as the marker is unique to that identity's data. It is never "
             "proof of policy."
         ),
-        "reference": "https://github.com/Veridor-authz/veridor#confirmed-proves-data-flow-never-policy",
+        "reference": "https://github.com/Veridor-authz/veridor/blob/main/docs/guide.md#confirmed-proves-data-flow-never-policy",
     }
     if has_sequences:
         # VERIDOR-EFFECT-001 grades 'confirmed' on a marker's ABSENCE, which

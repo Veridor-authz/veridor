@@ -480,7 +480,7 @@ class SarifTest(unittest.TestCase):
         # The README's report section made the same promise a third time
         # ("every format renders it") and the first version of this test did
         # not read it. Its paragraph opens with this sentence.
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         opening = "Reports are written whatever the gate decides."
         self.assertIn(opening, readme)
         readme_passage = " ".join(
@@ -493,7 +493,7 @@ class SarifTest(unittest.TestCase):
         docstring = " ".join((reports.__doc__ or "").split())
         self.assertTrue(docstring)
         for name, prose in (("report --help", description), ("report-formats.md", intro),
-                            ("README.md", readme_passage),
+                            ("docs/guide.md", readme_passage),
                             ("reports/__init__.py", docstring)):
             with self.subTest(where=name):
                 self.assertNotIn("Every format reads", prose)

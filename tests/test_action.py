@@ -181,7 +181,7 @@ class ActionMetadataTest(unittest.TestCase):
         self.assertIn('"${INPUT_FAIL_ON_DRIFT:-opened}"', MAIN["run"])
 
 
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 
 
 def _readme_section() -> str:

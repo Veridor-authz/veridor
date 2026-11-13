@@ -13,6 +13,12 @@ caveat that the interface may still move.
   (Apache-2.0) and links to the source repository and the docs. Artifact Hub
   reads them from a published chart version, so they appear from the next
   chart release; 0.1.0's page does not change.
+- `README.md` is a short front page. The full manual it held, 3,000 lines,
+  is now [docs/guide.md](docs/guide.md), and the tests that held the README's
+  prose and commands read it there. The `reference` link in every run's
+  `interpretation` block now points at the guide's section on what a
+  `confirmed` finding proves; the old link named a README heading that no
+  longer exists.
 
 ### Fixed
 

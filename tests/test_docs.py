@@ -1,5 +1,9 @@
 """The README is an emitted artifact and is held to the same claim contract.
 
+The manual that used to be README.md is docs/guide.md; README.md is now a
+short front page. ``README`` below is the guide, and ``FrontPageTest`` holds
+the short README to it.
+
 Two failures motivate this file.
 
 1. The README promised a guarantee the code no longer makes: "Veridor requires
@@ -45,7 +49,10 @@ from veridor.cli import _parser, main  # noqa: E402
 from veridor.core import load_config  # noqa: E402
 from veridor.coverage import BADGE_LABEL  # noqa: E402
 
-README = (ROOT / "README.md").read_text(encoding="utf-8")
+README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
+#: README.md: the short front page. Every command it shows is copied from the
+#: guide, where the tests below run or parse it.
+FRONT_PAGE = (ROOT / "README.md").read_text(encoding="utf-8")
 
 def _prose(text: str) -> str:
     """Read a passage the way a reader does: no emphasis, no code fences.
@@ -1359,6 +1366,7 @@ class CommittedFilesTest(unittest.TestCase):
     def test_the_index_was_read(self) -> None:
         """A guard on the guard: an empty set would pass everything below."""
         self.assertIn("README.md", self.tracked)
+        self.assertIn("docs/guide.md", self.tracked)
 
     def test_every_repository_path_the_readme_names_is_tracked(self) -> None:
         """Present on this disk and named by the README means: committed.
@@ -1409,7 +1417,7 @@ class TargetAcknowledgementDocumentationTest(unittest.TestCase):
         return _prose(text.split(start, 1)[1].split("\n- **", 1)[0])
 
     def test_no_doc_says_every_non_loopback_target_needs_it(self) -> None:
-        for name, text in (("README.md", README), ("SECURITY.md", self.SECURITY)):
+        for name, text in (("docs/guide.md", README), ("SECURITY.md", self.SECURITY)):
             with self.subTest(document=name):
                 self.assertNotRegex(_prose(text), r"non-loopback (target|host)")
 
@@ -1423,7 +1431,7 @@ class TargetAcknowledgementDocumentationTest(unittest.TestCase):
         self.assertEqual(classify_target("staging.example.com"), "public")
         readme = self._passage(README, "**A public target must be typed out.**")
         security = self._passage(self.SECURITY, "**`map` sends live requests**")
-        for name, passage in (("README.md", readme), ("SECURITY.md", security)):
+        for name, passage in (("docs/guide.md", readme), ("SECURITY.md", security)):
             with self.subTest(document=name):
                 self.assertIn("169.254.169.254", passage)
                 self.assertEqual(classify_target("169.254.169.254"), "private")
@@ -1496,7 +1504,7 @@ class TierTableTest(unittest.TestCase):
         """The documents the suite can rely on. Only tracked ones: a file a fresh
         clone does not have would make the published suite fail on the one thing
         a new contributor runs first."""
-        return [("README.md", README)]
+        return [("docs/guide.md", README)]
 
     def test_present_documents_carry_the_real_counts(self) -> None:
         for name, text in self._documents():
@@ -2107,7 +2115,7 @@ class CapsuleCarriesWhatRunArtifactsDoNotTest(unittest.TestCase):
     SECURITY = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
 
     def test_neither_document_claims_every_artifact(self) -> None:
-        for name, text in (("README.md", _prose(README)), ("SECURITY.md", _prose(self.SECURITY))):
+        for name, text in (("docs/guide.md", _prose(README)), ("SECURITY.md", _prose(self.SECURITY))):
             with self.subTest(document=name):
                 self.assertNotIn("never written to any artifact", text)
 
@@ -2161,7 +2169,7 @@ class NoUnreleasedHistoryTest(unittest.TestCase):
                "Noisy target, before", 'earlier "about', "used to be supplied by the test")
 
     def test_the_published_docs_do_not_narrate_a_history(self) -> None:
-        for path in ("README.md", "docs/report-formats.md", "ci/README.md"):
+        for path in ("README.md", "docs/guide.md", "docs/report-formats.md", "ci/README.md"):
             text = " ".join((ROOT / path).read_text(encoding="utf-8").split())
             for phrase in self.PHRASES:
                 with self.subTest(path=path, phrase=phrase):
@@ -2251,6 +2259,36 @@ class DocsOnlyTrialDocumentationTest(unittest.TestCase):
         self.assertIn("cannot tell", prose)
         self.assertIn("accepted silently", prose)
 
+
+
+class FrontPageTest(unittest.TestCase):
+    """README.md was the whole 3,000-line manual. It is now a short page that
+    points into docs/guide.md, so nothing it shows may exist only there: a
+    command in it is a command from the guide, which the tests above hold."""
+
+    @staticmethod
+    def commands(text: str) -> list[str]:
+        blocks = re.findall(r"^```bash\n(.*?)^```", text, re.MULTILINE | re.DOTALL)
+        return [line.strip() for block in blocks for line in block.splitlines() if line.strip()]
+
+    def test_every_command_on_the_front_page_is_one_the_guide_shows(self) -> None:
+        commands = self.commands(FRONT_PAGE)
+        self.assertGreaterEqual(len(commands), 3, "the front page shows no quickstart")
+        guide = set(self.commands(README))
+        self.assertEqual([command for command in commands if command not in guide], [])
+
+    def test_control_a_command_the_guide_does_not_show_is_named(self) -> None:
+        edited = FRONT_PAGE.replace("--sarif veridor.sarif", "--sarif out.sarif")
+        self.assertNotEqual(edited, FRONT_PAGE)
+        guide = set(self.commands(README))
+        self.assertEqual([c for c in self.commands(edited) if c not in guide],
+                         ["veridor run --config fixtures/veridor.demo.json --sarif out.sarif"])
+
+    def test_it_stays_short_and_points_at_the_guide(self) -> None:
+        self.assertLessEqual(len(FRONT_PAGE.splitlines()), 120)
+        self.assertIn("(docs/guide.md)", FRONT_PAGE)
+        self.assertIn("(docs/guide.md#what-a-veridor-finding-does-and-does-not-mean)", FRONT_PAGE)
+        self.assertIn("## What a Veridor finding does and does not mean", README)
 
 if __name__ == "__main__":
     unittest.main()

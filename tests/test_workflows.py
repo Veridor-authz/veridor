@@ -1616,7 +1616,7 @@ class WorkflowShapeTest(unittest.TestCase):
         cves = sum(value.startswith("CVE-") for value in loaded.values())
         ghsa = [stem for stem, value in loaded.items() if value.startswith("GHSA-")]
         applications = {stem.split("-")[0] for stem in loaded}
-        readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+        readme = " ".join((ROOT / "docs" / "guide.md").read_text(encoding="utf-8").split())
         self.assertIn(f"{words[len(loaded)]} published advisories in "
                       f"{words[len(applications)]} applications", readme)
         self.assertIn(f"{words[cves]} carry a CVE id and LubeLogger's carries a GHSA id", readme)
@@ -3131,7 +3131,7 @@ class ReleaseImageCheckTest(unittest.TestCase):
 
 
 #: Where a `gh attestation verify` command is shown to a reader.
-ATTESTATION_DOCUMENTS = ("SECURITY.md", ".github/workflows/release.yml", "CONTRIBUTING.md", "README.md",
+ATTESTATION_DOCUMENTS = ("SECURITY.md", ".github/workflows/release.yml", "CONTRIBUTING.md", "README.md", "docs/guide.md",
                          "ci/README.md", "ci/Jenkinsfile", "ci/azure-pipelines.yml", "ci/buildspec.yml")
 
 #: The signer a release file's attestation must name: release.yml at a v* tag,

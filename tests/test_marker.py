@@ -2626,7 +2626,8 @@ class DeclarationScopeTest(unittest.TestCase):
         self.assertIn("cannot audit it", interpretation["finding_does_not_mean"])
         self.assertIn("never proof of policy", interpretation["confirmed_grade_means"])
         self.assertEqual(interpretation["reference"],
-                         "https://github.com/Veridor-authz/veridor#confirmed-proves-data-flow-never-policy")
+                         "https://github.com/Veridor-authz/veridor/blob/main/docs/guide.md"
+                         "#confirmed-proves-data-flow-never-policy")
 
     @fast("reads the statement, pyproject.toml and the README, no target")
     def test_the_reference_is_a_page_a_reader_of_the_report_can_open(self) -> None:
@@ -2634,8 +2635,11 @@ class DeclarationScopeTest(unittest.TestCase):
 
         A path relative to this repository names nothing there: the wheel and
         the image ship no docs/. It has to be this project's own page, at a
-        section that exists, so renaming either the repository or the README
+        section that exists, so renaming either the repository or the guide
         heading fails here instead of leaving every report with a dead link.
+        The manual moved from README.md to docs/guide.md: the repository's
+        front page no longer has the heading, so the link names the guide's
+        page on main, and the anchor is read from that file.
         """
         def anchors(readme: str) -> set[str]:
             return {
@@ -2645,9 +2649,12 @@ class DeclarationScopeTest(unittest.TestCase):
 
         repository = re.search(r'^Repository = "(.+)"$',
                                (ROOT / "pyproject.toml").read_text(encoding="utf-8"), re.MULTILINE)
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         page, _, anchor = core._interpretation()["reference"].partition("#")
-        self.assertEqual(page, repository.group(1))
+        self.assertEqual(page, repository.group(1) + "/blob/main/docs/guide.md")
+        # The front page GitHub renders for the bare repository URL does not
+        # carry the heading any more, so the bare URL would be a dead anchor.
+        self.assertNotIn(anchor, anchors((ROOT / "README.md").read_text(encoding="utf-8")))
         self.assertIn(anchor, anchors(readme))
         # Control: the slug rule can miss, so a heading that is not there is not found.
         self.assertNotIn(anchor, anchors(readme.replace("proves data flow", "shows data flow")))

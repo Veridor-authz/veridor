@@ -797,7 +797,7 @@ class RedirectIsNotAMeasurementTest(unittest.TestCase):
                     self.assertEqual(stderr, "")
                 else:
                     self.assertIn("answered with a redirect in the baseline", stderr)
-        readme = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+        readme = " ".join((ROOT / "docs" / "guide.md").read_text(encoding="utf-8").split())
         start = readme.index("`opened` does not count a cell the baseline answered with a redirect")
         passage = readme[start:readme.index("`--fail-on-drift` without", start)]
         self.assertNotIn("on stdout, on stderr and in the Markdown report", passage)
@@ -1119,7 +1119,7 @@ class NoDeclarationRequiredTest(unittest.TestCase):
         first five minutes."""
         import re  # noqa: PLC0415
 
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         section = readme.split("### Drift: catching a regression", 1)[1]
         block = re.search(r"```json\n(.*?)```", section, re.DOTALL)
         self.assertIsNotNone(block, "the drift section lost its config example")

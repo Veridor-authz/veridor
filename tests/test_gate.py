@@ -1227,7 +1227,7 @@ class LivenessAdviceTest(unittest.TestCase):
         GitLab template, report-formats row, Argo CD README, chart values and
         chart README. The last five kept "give that identity a marker_probe"
         after CHANGELOG said the docs said the same."""
-        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        readme = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
         rows = [line for line in readme.splitlines()
                 if line.startswith(("| `require_complete` |", "| `require-complete` |"))]
         self.assertEqual(len(rows), 2)

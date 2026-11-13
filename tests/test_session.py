@@ -2197,7 +2197,7 @@ class NonGoalTest(unittest.TestCase):
 class DocumentationTest(unittest.TestCase):
     """The README is an emitted artifact; a write tool must document its blast radius."""
 
-    README = (ROOT / "README.md").read_text(encoding="utf-8")
+    README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
     PROSE = re.sub(r"\s+", " ", README.replace("**", "").replace("*", ""))
 
     def test_the_readme_documents_every_new_config_key(self) -> None:

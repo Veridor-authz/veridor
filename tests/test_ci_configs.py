@@ -54,7 +54,7 @@ from yaml_subset import load_yaml, load_yaml_documents  # noqa: E402
 
 E2E_SCRIPT = ROOT / "scripts" / "e2e_gitlab_job.sh"
 CI_README = ROOT / "ci" / "README.md"
-README = ROOT / "README.md"
+README = ROOT / "docs" / "guide.md"
 
 #: The exit codes every config must name: Veridor's full set.
 EXIT_CODES = {0, 1, 2, 3, 70, 130, 143}
