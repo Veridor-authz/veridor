@@ -712,8 +712,14 @@ class KindDemoInvocationTest(unittest.TestCase):
             recorder = bin_dir / "veridor"
             recorder.write_text(f'#!/bin/sh\necho "$1" >> "{calls}"\n', encoding="utf-8")
             recorder.chmod(0o755)
+            # seed.sh names /app unquoted, as it may inside the image. A link
+            # inside the temporary directory stands in for /app, so a checkout
+            # path with a space in it (or any shell metacharacter) is never
+            # pasted into the script and split by the shell.
+            app = work / "app"
+            app.symlink_to(ROOT, target_is_directory=True)
             script = seed
-            for old, new in (("/app/scripts/demo_server.py", demo), ("/app/", f"{ROOT}/"),
+            for old, new in (("/app/scripts/demo_server.py", demo), ("/app/", f"{app}/"),
                              ("OUT=/data/.veridor", f"OUT={work}/.veridor"), ("PORT=8765", f"PORT={port}")):
                 self.assertIn(old, script, "seed.sh changed; this copy no longer matches it")
                 script = script.replace(old, new)
@@ -729,7 +735,7 @@ class KindDemoInvocationTest(unittest.TestCase):
                 probe.bind(("127.0.0.1", 0))
                 return probe.getsockname()[1]
 
-        demo = str(ROOT / "scripts" / "demo_server.py")
+        demo = "/app/scripts/demo_server.py"
         status, output, verbs = run(free_port(), demo)
         self.assertEqual((status, verbs), (0, ["run", "map", "mutate", "run"]), output)
 
@@ -747,7 +753,7 @@ class KindDemoInvocationTest(unittest.TestCase):
         # timeout, so nothing pinned it. The case alone, as timed below, took
         # 11.2-11.6 s without the check and 0.3 s with it (measured).
         started = time.monotonic()
-        status, output, verbs = run(free_port(), str(ROOT / "scripts" / "no_such_demo_server.py"))
+        status, output, verbs = run(free_port(), "/app/scripts/no_such_demo_server.py")
         elapsed = time.monotonic() - started
         self.assertNotEqual(status, 0, output)
         self.assertEqual(verbs, [], output)
