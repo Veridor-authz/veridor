@@ -1267,8 +1267,12 @@ aside .empty {
 
 /* ----------------------------------------------------------------- footer */
 
+/* Column 2, beside the sidebar, not across it. The sidebar is sticky to the
+   whole of <main>, so it stayed pinned over the footer's first 320px and the
+   visible text began mid-sentence at "writes, issues no request." Below 900px
+   <main> is a block and the column does not apply. */
 .app-footer {
-  grid-column: 1 / -1;
+  grid-column: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;

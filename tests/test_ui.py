@@ -253,6 +253,29 @@ class PresentationContractTest(unittest.TestCase):
         self.assertIn("issues no request", footer)
         self.assertIn("your", footer.lower())
 
+    def test_the_footer_is_not_laid_under_the_sticky_sidebar(self) -> None:
+        """The posture line has to be readable, not merely present.
+
+        `aside` is sticky to the whole of <main>, and the footer spanned both
+        grid columns, so on a desktop the sidebar stayed pinned over its first
+        320px and the visible text began mid-sentence at "writes, issues no
+        request." (both themes, 1920x1080, measured with Playwright 2026-11-12).
+        """
+        aside = STYLES.split("\naside {", 1)[1].split("}", 1)[0]
+        self.assertIn("position: sticky", aside)
+        footer = STYLES.split("\n.app-footer {", 1)[1].split("}", 1)[0]
+        column = re.search(r"grid-column:\s*([^;]+);", footer)
+        self.assertIsNotNone(column, "the footer must name its grid column")
+        self.assertEqual(column.group(1).strip(), "2")
+
+    def test_the_matrix_panel_does_not_say_every_cell_was_measured(self) -> None:
+        """Skipped cells render as a dashed dot beside a subtitle that said
+        "every cell is a measured status"; 8 of 20 in the recorded tour were
+        never sent."""
+        panel = INDEX_HTML.split('data-field="matrix-panel"', 1)[1].split('data-field="matrix"', 1)[0]
+        self.assertNotIn("every cell is a measured", panel)
+        self.assertIn("a dot was not measured", panel)
+
     def test_the_layout_survives_a_narrow_viewport(self) -> None:
         self.assertIn("@media (max-width: 900px)", STYLES)
         self.assertIn("width=device-width", INDEX_HTML)
@@ -1083,6 +1106,19 @@ console.log(JSON.stringify(out));
 """
 
 
+_MAP_METRICS_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const code = grab("element") + grab("metric") + grab("mapMetrics");
+const context = { document: { createElement: node } };
+vm.createContext(context);
+vm.runInContext(code, context);
+const out = JSON.parse(process.argv[2]).map(([inventory, counts]) => {
+  context.args = [inventory, counts];
+  return vm.runInContext("mapMetrics(...args)", context).map((card) =>
+    [card.children[1].textContent, card.children[0].textContent]);
+});
+console.log(JSON.stringify(out));
+"""
+
 def _run_node(harness: str, payload: list) -> list:
     node = shutil.which("node")
     if node is None:
@@ -1320,6 +1356,43 @@ class AccessMatrixTest(unittest.TestCase):
         # In a map a crossed marker is a hypothesis; the legend must say so.
         self.assertIn("not a finding", grid["legend"])
         self.assertIsNone(nothing)
+
+    def test_a_cell_the_document_does_not_hold_says_so(self) -> None:
+        """The panel says a dot's tooltip says why it was not measured. A cell
+        absent from the document had no reason to give."""
+        matrix = {
+            "identities": ["owner", "other"],
+            "rows": [{"operation": "GET /api/invoices", "specimen": None}],
+            "cells": [{"operation": "GET /api/invoices", "specimen": None, "identity": "owner",
+                       "reach": "refused", "status": 404}],
+        }
+        (grid,) = _run_node(_MATRIX_HARNESS, [matrix])
+        owner, other = grid["cells"]
+        self.assertNotIn("no cell recorded", owner["label"])
+        self.assertIn("·", other["text"])
+        self.assertEqual(other["label"], "other, GET /api/invoices: unknown (no cell recorded)")
+
+
+@slow("runs app.js under node in a subprocess")
+class MapMetricsTest(unittest.TestCase):
+    """The map's tiles name what the document counts, nothing more.
+
+    `matrix.counts.cells` is every cell in the grid. It was labelled "Cells
+    probed" on a page that also said "8 Unknown" and "8 of 20 cell(s) WERE
+    NEVER PROBED" (recorded tour, 2026-11-12).
+    """
+
+    def test_the_grid_total_is_not_called_probed(self) -> None:
+        inventory = {"operations": 5, "identities": 4}
+        counts = {"reached": 2, "refused": 10, "indeterminate": 0, "unknown": 8, "cells": 20}
+        (tiles,) = _run_node(_MAP_METRICS_HARNESS, [[inventory, counts]])
+        self.assertEqual(tiles, [
+            ["Operations", "5"], ["Identities", "4"], ["Cells in grid", "20"],
+            ["Reached", "2"], ["Refused", "10"], ["Unknown", "8"],
+        ])
+        # No tile claims a probed count: "unknown" mixes cells never sent with
+        # cells sent and not answered, so the document records no such number.
+        self.assertFalse(any("probed" in label.lower() for label, _ in tiles))
 
 
 if __name__ == "__main__":

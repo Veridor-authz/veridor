@@ -622,6 +622,9 @@ function accessMatrix(matrix) {
       let description = `${identity}, ${row.operation}: ${reach}`;
       if (Number.isInteger(cell?.status)) description += `, HTTP ${cell.status}`;
       if (cell?.unknown_reason) description += ` (${cell.unknown_reason})`;
+      // The panel says a dot's tooltip says why; for a cell the document
+      // does not hold at all, the why is that it holds none.
+      else if (!cell) description += " (no cell recorded)";
       if (cell?.marker_scan === "present" && cell.marker_owner) {
         const own = cell.marker_owner === identity;
         box.append(element("i", own ? "matrix-marker own" : "matrix-marker"));
@@ -1029,6 +1032,23 @@ function candidateCard(candidate) {
   return card;
 }
 
+// `counts.cells` is every cell in the grid, probed or not. It was labelled
+// "Cells probed" beside "8 Unknown" and "8 of 20 cell(s) WERE NEVER PROBED".
+// No probed count is shown: the document does not record one. "unknown" mixes
+// cells never sent (skipped_mutating, skipped_no_specimen) with cells sent and
+// not answered (transport_error, rate_limited), so cells minus unknown is the
+// measured count, not the probed one.
+function mapMetrics(inventory, counts) {
+  return [
+    metric("Operations", inventory.operations ?? 0),
+    metric("Identities", inventory.identities ?? 0),
+    metric("Cells in grid", counts.cells ?? 0),
+    metric("Reached", counts.reached ?? 0),
+    metric("Refused", counts.refused ?? 0),
+    metric("Unknown", counts.unknown ?? 0),
+  ];
+}
+
 function renderMapDetail() {
   const map = state.selected;
   const blast = map.blast_radius || {};
@@ -1092,17 +1112,9 @@ function renderMapDetail() {
     );
   }
 
-  const counts = matrix.counts || {};
   fragment
     .querySelector('[data-field="map-metrics"]')
-    .append(
-      metric("Operations", inventory.operations ?? 0),
-      metric("Identities", inventory.identities ?? 0),
-      metric("Cells probed", counts.cells ?? 0),
-      metric("Reached", counts.reached ?? 0),
-      metric("Refused", counts.refused ?? 0),
-      metric("Unknown", counts.unknown ?? 0),
-    );
+    .append(...mapMetrics(inventory, matrix.counts || {}));
 
   const reachContainer = fragment.querySelector('[data-field="blast-radius"]');
   const identities = blast.identities || [];

@@ -1577,6 +1577,21 @@ something you installed.
 
 ### Fixed
 
+- **The viewer's footer was cut off behind the sidebar.** The footer spanned
+  both grid columns while the sidebar is sticky to the whole page, so on a
+  desktop the sidebar stayed pinned over its first 320px and the visible text
+  began mid-sentence at "writes, issues no request." in both themes. The
+  footer now sits in the content column beside the sidebar; below 900px,
+  where the sidebar stacks above the content, it is full width as before.
+- **The map called every cell in the grid "Cells probed".** The tile showed
+  `matrix.counts.cells`, the grid total, on a page that also said "8 Unknown"
+  and "8 of 20 cell(s) WERE NEVER PROBED". It is now "Cells in grid". No
+  probed count is shown, because the document records none: `unknown` mixes
+  cells never sent with cells sent and not answered.
+- **The access matrix said "every cell is a measured status"** above cells
+  drawn as a dot because they were never measured. It now says a number is an
+  observed status and a dot was not measured, with the reason in the dot's
+  tooltip; a cell the document does not hold at all says "no cell recorded".
 - **`map --dry-run` exited `0` on a plan the run refuses.** With
   `--max-requests 5` and a 12-request plan, the dry run printed "Over budget"
   and exited `0`, while `map --max-requests 5` refuses with exit `2`. The dry
