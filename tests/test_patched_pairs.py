@@ -481,6 +481,20 @@ class MarkerNotEvaluatedTest(unittest.TestCase):
         self.assertIn('pair.get("expected_evidence", "confirmed")', SCRIPT.read_text(encoding="utf-8"))
         self.assertIn("lists it under `not_evaluated`, never among the checks passed", doc)
 
+    def test_the_readme_counts_the_assertions_the_pairs_make(self) -> None:
+        """The README said every pair holds the owner to the marker and
+        counted 91 assertions: 13 x 7, the four marker checks nobody made
+        among them. Counted here from evaluate() on the shipped fixtures."""
+        made = 0
+        for path in sorted((ROOT / "fixtures" / "pairs").glob("*.json")):
+            pair = json.loads(path.read_text(encoding="utf-8"))
+            result = self.evaluate(path.name, True if pair["control"].get("expect_marker", True) else None)
+            made += len(result["checks"])
+        prose = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn(f"Java and C++), {made} assertions", prose)
+        self.assertIn("the four status-only pairs, whose control asks for no marker, are held to its status alone, "
+                      "and the output names that check not evaluated", prose)
+
 
 class PatchedLivenessTest(unittest.TestCase):
     """A denial on the patched build certifies the fix only if the attacker's
