@@ -3199,6 +3199,30 @@ UNSENT_REASONS: dict[str, str] = {
         "the session for this identity is no longer live, so the request would "
         "have gone out unauthenticated and was not sent"
     ),
+    "session_cookie_not_sent": (
+        "the cookie that established this identity's session would not have "
+        "been sent with this request (its Path or Domain does not cover it), so "
+        "the request would have gone out unauthenticated and was not sent"
+    ),
+    "capture_cookie_not_sent": (
+        "this request carries a value captured from a cookie, and that cookie "
+        "would not have been sent with it (it expired, or its Path or Domain does "
+        "not cover this URL), so a check comparing the two would have failed and "
+        "the request was not sent"
+    ),
+    "capture_cookie_expired": (
+        "a ${capture.…} reference in this request is read from a cookie the "
+        "target set during this login, and that cookie has since expired or been "
+        "cleared, so the request would have gone out without its value and was "
+        "not sent"
+    ),
+    "session_cookie_ambiguous": (
+        "this request would have carried a second, different value under the "
+        "name of a cookie this identity's session depends on (the cookie that "
+        "established it, or one a ${capture.…} value was read from), or the "
+        "cookies that established the session no longer carry one value, and "
+        "which one the target reads is unknowable, so the request was not sent"
+    ),
     "injection_not_applicable": (
         "this identity's session injects a form_field or json_field, and this "
         "request has no form-encoded or JSON object body to carry it, so the "
@@ -3225,9 +3249,13 @@ INJECTION_REMEDIATION: str = (
 )
 
 
-def execution_message(error: str) -> str:
-    """The message of an EXEC-001 finding: "not sent" when it was not."""
-    if error in _UNSENT_ERRORS:
+def execution_message(error: str, reason: str | None = None) -> str:
+    """The message of an EXEC-001 finding: "not sent" when it was not.
+
+    ``reason`` is the unsent code of a step that wrote its own message, which
+    is not one of the shared texts; such a step used to read "Request failed".
+    """
+    if error in _UNSENT_ERRORS or reason in UNSENT_REASONS:
         return f"Request not sent: {error}"
     return f"Request failed: {error}"
 
@@ -3270,14 +3298,76 @@ CONFIGURATION_UNSENT_ERRORS: dict[str, str] = {
 }
 
 
-def unsent_remediation(error: str, reason: str | None = None) -> str | None:
-    """Configuration advice for a request withheld by the configuration.
+#: Advice for a probe not issued because its identity's session never
+#: established. The check path has always given it; a sequence step refused for
+#: the same reason was told to confirm the target is reachable, which is wrong
+#: when the login answered 200 and its cookie was unusable.
+SESSION_NOT_ESTABLISHED_REMEDIATION: str = (
+    "Confirm the identity's session login steps succeed against this target, "
+    "then re-run. Until the session establishes, this identity measures nothing."
+)
 
-    ``reason`` names the code when the error text is not the shared one, as
-    for a sequence step whose own message names the capture it refused.
+#: Advice for the session reasons. Kept apart from the configuration ones on
+#: purpose: the gate reads those as "the fix is in your config", and a session
+#: can fail on the target's side. Nothing was sent, so network advice is wrong
+#: here too.
+SESSION_UNSENT_REMEDIATION: dict[str, str] = {
+    "session_unavailable": SESSION_NOT_ESTABLISHED_REMEDIATION,
+    "session_expired": (
+        "Nothing was sent: the cookie that established this identity's session "
+        "had expired by the time this request was built. If the target issues "
+        'short-lived session cookies, set "reestablish": "check" on the session '
+        "so it logs in again before each check and sequence, then re-run."
+    ),
+    "session_cookie_not_sent": (
+        "Nothing was sent: the cookie that established this identity's session "
+        "is scoped by its Path or Domain away from this request's URL. Check the "
+        "Set-Cookie attributes the login step receives, or name in establishes "
+        "the cookie that authenticates this path."
+    ),
+    "capture_cookie_not_sent": (
+        "Nothing was sent: a ${capture.…} value in this request was read from a "
+        "cookie the jar would not send with it, so a CSRF check that compares the "
+        "header to the cookie would refuse it. If the cookie is short-lived, set "
+        '"reestablish": "check" on the session; if its Path or Domain does not '
+        "cover this URL, check the Set-Cookie attributes the target sends."
+    ),
+    "capture_cookie_expired": (
+        "Nothing was sent: a ${capture.…} value in this request is read from a "
+        "cookie the target set during this login, and it had expired or been "
+        "cleared by the time this request was built. If the cookie is "
+        'short-lived, set "reestablish": "check" on the session so it logs in '
+        "again before each check and sequence, then re-run."
+    ),
+    "session_cookie_ambiguous": (
+        "Nothing was sent: a response after login set another cookie under the "
+        "name of one this identity's session depends on, scoped so that both "
+        "would go out with this request, or replaced one of the cookies that "
+        "established the session with a different value, and a server that "
+        "reads the first occurrence would have authenticated the other one. "
+        "Find which response "
+        "sets it, or set \"reestablish\": \"check\" on the session so each check "
+        "starts from a fresh login."
+    ),
+}
+
+_SESSION_UNSENT_ERRORS: dict[str, str] = {
+    UNSENT_REASONS[reason]: reason for reason in SESSION_UNSENT_REMEDIATION
+}
+
+
+def unsent_remediation(error: str, reason: str | None = None) -> str | None:
+    """Advice for a request withheld before the socket, or None if it was not.
+
+    Configuration advice for a request the configuration withheld, and session
+    advice for one its identity's session could not carry. ``reason`` names
+    the code when the error text is not the shared one, as for a sequence step
+    whose own message names the capture it refused.
     """
-    code = CONFIGURATION_UNSENT_ERRORS.get(error, reason)
-    return CONFIGURATION_UNSENT_REMEDIATION.get(code) if code else None
+    code = CONFIGURATION_UNSENT_ERRORS.get(error) or _SESSION_UNSENT_ERRORS.get(error, reason)
+    if not code:
+        return None
+    return CONFIGURATION_UNSENT_REMEDIATION.get(code) or SESSION_UNSENT_REMEDIATION.get(code)
 
 
 def _issued_mutating(results: Iterable[dict[str, Any]]) -> int:
@@ -3459,7 +3549,12 @@ def _perform_request(
     # http:// request routed through an https:// proxy into type "https", and
     # the jar then attached Secure cookies to a request for an http:// target.
     if session is not None:
-        session.attach_cookies(request)
+        blocked = session.attach_cookies(request)
+        if blocked is not None:
+            # The same refusal prepare() gives an expired session, decided on
+            # the request as built: the jar re-reads the clock, so a cookie can
+            # expire between that check and this one and be left off silently.
+            return _unsent_result(url, method, blocked, needles=bool(marker))
     route = proxy_route(url)
     if route is not None:
         _via_proxy(request, route)
@@ -3659,6 +3754,10 @@ def _execute_marker_controls(
         # Login ran before this, in this identity's own jar, so a marker control
         # works against a cookie-authenticated target -- which it could not do
         # before, because the probe was issued with no session and got a 401.
+        if session is not None:
+            # What this control proves, it proves about this session cookie
+            # value; execute_run compares epochs before counting it.
+            session.stamp(("marker",))
         result = _perform_request(
             base_url,
             timeout,
@@ -3815,7 +3914,8 @@ def _rescan_retained(sink: Mapping[str, Any], marker: str) -> str:
 #: such a route silently cancelled every unproven denial for that identity.
 _PROOF_OF_LIFE = (
     "a 2xx it drew on a request where an identity with no credential, or the "
-    "fabricated credential, was refused; or its marker_probe"
+    "fabricated credential, was refused; or its marker_probe; for a session, "
+    "either one counts only under the same login and session cookie value"
 )
 
 #: A refusal from the authorization layer: what makes a 2xx on the same
@@ -4008,7 +4108,10 @@ def plan_sequence_liveness(
     header -- any header :func:`_credential_bearing_header` accepts, so an
     ``Accept``-only anonymous identity is not one. A session identity's step
     already has its own rule (``session_not_live``), and an identity that
-    sends nothing has no credential that could be dead. Socket-free.
+    sends nothing has no credential that could be dead. A session-only
+    identity's step sent after a response replaced its session cookie is
+    added once the sequences have run (:func:`_replaced_cookie_sequence_steps`).
+    Socket-free.
 
     No fabricated credential is sent inside a sequence: a step's request
     depends on what earlier steps captured and created, and a sham replaying
@@ -4038,6 +4141,46 @@ def plan_sequence_liveness(
                 tuple((step.get("expect") or {}).get("status") or ()),
             ))
     return planned
+
+
+def _replaced_cookie_sequence_steps(
+    config: Mapping[str, Any],
+    replaced: Callable[[Any, tuple[Any, ...]], bool],
+) -> list[tuple[str, int, str, str, tuple[int, ...]]]:
+    """Denial-only assert steps of a session-only identity sent after its cookie changed.
+
+    Shaped as :func:`plan_sequence_liveness` plans them. That plan leaves out
+    an identity whose only credential is its session: its login proves the
+    session cookie, and ``session_not_live`` catches a 401 after it. Once a
+    response gives that cookie a different value -- or sets it in a form the
+    jar dropped -- the login proved a value the request no longer carries, and
+    a guest session's ``404`` matched the declared denial with nothing listed
+    unproven. ``replaced(identity, request)`` says whether the step went out
+    after such a change; it can only be known once the sequences have run.
+    """
+    identities = config.get("identities") or {}
+    steps: list[tuple[str, int, str, str, tuple[int, ...]]] = []
+    for sequence in config.get("sequences") or ():
+        sequence_id = str(sequence.get("id"))
+        for index, step in enumerate(sequence.get("steps") or ()):
+            identity = identities.get(step.get("as"))
+            if (
+                step.get("role") != "assert"
+                or not _denial_only(step.get("expect"))
+                or not isinstance(identity, Mapping)
+                or _presents_static_credential(identity)
+                or not replaced(step.get("as"), ("step", sequence.get("id"), index))
+            ):
+                continue
+            request = step.get("request") or {}
+            steps.append((
+                sequence_id,
+                index,
+                str(request.get("method", "GET")).upper(),
+                str(request.get("path", "")),
+                tuple((step.get("expect") or {}).get("status") or ()),
+            ))
+    return steps
 
 
 def _refused(status: Any) -> bool:
@@ -4082,6 +4225,30 @@ def _proven_live_by_service(
 ) -> set[str]:
     """Identities a 2xx in this run proves live: served where somebody was refused.
 
+    See :func:`_served_where_refused`, which also names the request that did it.
+    """
+    return {
+        identity
+        for identity, _request in _served_where_refused(
+            config, probes, liveness, sequence_records, credentialed
+        )
+    }
+
+
+def _served_where_refused(
+    config: Mapping[str, Any],
+    probes: Iterable[Mapping[str, Any]],
+    liveness: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+    sequence_records: Iterable[Mapping[str, Any]],
+    credentialed: Iterable[str],
+) -> list[tuple[str, tuple[Any, ...]]]:
+    """``(identity, request)`` for each 2xx that proves a credential live.
+
+    ``request`` names the request that drew it the way a session's
+    ``sent_epochs`` keys it -- ``("check", check_id)``, ``("step",
+    sequence_id, index)`` or ``("teardown", sequence_id, index)`` -- so the
+    caller can tell which session cookie value it proves.
+
     A 2xx proves a credential live only on a request that discriminates --
     where an identity with no credential, or the fabricated credential, was
     refused on that same request. Any 2xx anywhere used to count, so one check
@@ -4098,22 +4265,25 @@ def _proven_live_by_service(
     credentialed = set(credentialed)
     checks = {check.get("id"): check for check in config.get("checks") or ()}
     refused: set[tuple] = set()
-    served: list[tuple[tuple, str]] = []
+    served: list[tuple[tuple, str, tuple]] = []
 
-    def observe(key: tuple, identity: Any, status: Any, error: Any) -> None:
+    def observe(
+        key: tuple, identity: Any, status: Any, error: Any, request: tuple
+    ) -> None:
         if error or not isinstance(identity, str):
             return
         if identity not in credentialed and _refused(status):
             refused.add(key)
         elif _target_served(status):
-            served.append((key, identity))
+            served.append((key, identity, request))
 
     for probe in probes:
         check = checks.get(probe.get("check_id"))
         if check is None:
             continue
         observe(("check", *_liveness_key(check)), probe.get("identity"),
-                (probe.get("response") or {}).get("status"), probe.get("error"))
+                (probe.get("response") or {}).get("status"), probe.get("error"),
+                ("check", probe.get("check_id")))
     for (method, path), control in (liveness or {}).items():
         if not control.get("error") and _refused(
             (control.get("response") or {}).get("status")
@@ -4125,12 +4295,69 @@ def _proven_live_by_service(
             request = step.get("request") or {}
             observe(("sequence", sequence_id, request.get("method"), request.get("url")),
                     step.get("as"), (step.get("response") or {}).get("status"),
-                    step.get("error"))
+                    step.get("error"), ("step", sequence_id, step.get("index")))
         for entry in record.get("teardown") or ():
             request = entry.get("request") or {}
             observe(("sequence", sequence_id, request.get("method"), request.get("url")),
-                    entry.get("as"), entry.get("status"), entry.get("error"))
-    return {identity for key, identity in served if key in refused}
+                    entry.get("as"), entry.get("status"), entry.get("error"),
+                    ("teardown", sequence_id, entry.get("index")))
+    return [(identity, request) for key, identity, request in served if key in refused]
+
+
+#: Advice on an unproven denial for an identity whose session logs in again
+#: before every check and sequence. Its marker_probe ran under the first login
+#: only, so "add a marker_probe" would not make the disclosure go away.
+RELOGGED_LIVENESS_REMEDIATION: str = (
+    '{identity}\'s session logs in again before every check and sequence '
+    '("reestablish": "check"), and its marker_probe runs once, under the first '
+    "login, so it proves nothing about the login this request was sent under. "
+    'If the target\'s sessions last the whole run, set "reestablish": "run" so '
+    "the marker_probe proves the login every request uses; inside a sequence, "
+    "a step where it is served and an identity with no credential is refused "
+    "on the same request proves that sequence's login."
+)
+
+#: Advice on an unproven denial sent after a response replaced the cookie that
+#: established the session (or set it in a form the cookie jar dropped): the
+#: login, and any proof of life, covered the earlier value only, and nothing
+#: proved the session live since.
+STALE_COOKIE_LIVENESS_REMEDIATION: str = (
+    "{identity} logged in, or was proven live (by its marker_probe, or a 2xx "
+    "where a caller without its credential was refused), before a response "
+    "gave the cookie that established its session a different value, or set "
+    "it in a form Veridor's cookie jar dropped so the earlier value went on "
+    "being sent, and nothing proved the session live since. Veridor cannot tell a target "
+    "rotating the session from one replacing it with an anonymous session. "
+    "Find which response sets it; a check or sequence step sent after it, "
+    "where {identity} is served and an identity with no credential is refused "
+    "on the same request, proves it, or stop the target replacing the cookie "
+    "during the run."
+)
+
+
+def _proven_under_same_login(
+    entry: Mapping[str, Any],
+    config: Mapping[str, Any],
+    liveness: Mapping[tuple[str, str], Mapping[str, Any]] | None,
+    sequence_records: Iterable[Mapping[str, Any]],
+    credentialed: Iterable[str],
+) -> bool:
+    """Is an unproven denial's identity proven live under the login it was sent with?
+
+    For an identity that logs in again before every check and sequence. A check
+    is its own login, and a 2xx in the same check was already taken as proof
+    when it was graded, so nothing at run level can add to it. A sequence is
+    one login too: a 2xx in the same sequence, on a request where a caller with
+    no credential was refused, proves it, as :func:`_proven_live_by_service`
+    judges for any identity.
+    """
+    sequence_id = entry.get("sequence_id")
+    if sequence_id is None:
+        return False
+    same = [record for record in sequence_records if record.get("sequence_id") == sequence_id]
+    return entry["identity"] in _proven_live_by_service(
+        config, (), liveness, same, credentialed
+    )
 
 
 def _sequence_liveness_unproven(
@@ -5231,11 +5458,7 @@ def _grade_check(
                         },
                     },
                     "location": str(config_path),
-                    "remediation": (
-                        "Confirm the identity's session login steps succeed "
-                        "against this target, then re-run. Until the session "
-                        "establishes, this identity measures nothing."
-                    ),
+                    "remediation": SESSION_NOT_ESTABLISHED_REMEDIATION,
                 }
             )
             continue
@@ -6788,11 +7011,39 @@ def execute_run(
     # marker_probe control that came back with the marker. Extended below with
     # every identity the target serves a 2xx anywhere in the run, because that
     # is equally good proof and costs nothing.
+    #
+    # Proof of a login is proof of that login only. An identity whose session
+    # logs in again before every check and sequence ("reestablish": "check")
+    # has its marker control run under the login before the first check, under
+    # which no graded request is ever sent, and each check under a login of its
+    # own. A re-login that drew a cookie the target treats as anonymous was
+    # graded safe on the strength of an earlier login's marker, or of a 2xx in
+    # an earlier check. Such an identity's denials are proven only by a 2xx
+    # under the same login -- in the same check or the same sequence -- or are
+    # disclosed as unproven.
+    relogged: set[str] = {
+        name
+        for name, state in sessions.items()
+        if getattr(state, "declaration", {}).get("reestablish") == "check"
+    }
     live_credentials: set[str] = {
         name
         for name, control in marker_controls.items()
-        if control.get("state") == "verified"
+        if control.get("state") == "verified" and name not in relogged
     }
+
+    # Proof of a session cookie value is proof of that value only. A response
+    # can replace the proof cookie (same name, domain and path) with another
+    # value, which Veridor treats as rotation and keeps sending; a target that
+    # downgraded the session to an anonymous one looks exactly the same. The
+    # marker control taken before it, and a 2xx drawn before it, said nothing
+    # about the new value, and a denial drawn under it was graded safe with
+    # liveness.unproven empty. So each piece of evidence counts only for
+    # requests sent under the same session epoch (IdentitySession.epoch).
+    def sent_under(identity: str, request: tuple[Any, ...]) -> int | None:
+        """The session epoch ``request`` went out under; None without a session."""
+        session = sessions.get(identity)
+        return None if session is None else session.sent_epochs.get(request)
     #: Identities that send something a target could accept or reject. An
     #: anonymous identity is not one, and a 401 it draws everywhere is the
     #: boundary working rather than a token that expired.
@@ -6818,6 +7069,8 @@ def execute_run(
         for identity_name, expectation in check["expect"].items():
             if identity_name in unusable:
                 continue
+            if sessions.get(identity_name) is not None:
+                sessions[identity_name].stamp(("check", check["id"]))
             probe = _execute_probe(
                 config["target"]["base_url"],
                 float(config["target"].get("timeout_seconds", 10)),
@@ -6841,7 +7094,12 @@ def execute_run(
                 session_transient=session_transient(),
                 target=config.get("target", {}),
                 liveness=liveness_controls,
-                live_credentials=live_credentials,
+                live_credentials={
+                    name
+                    for name in live_credentials
+                    if sent_under(name, ("check", check["id"]))
+                    == sent_under(name, ("marker",))
+                },
                 credentialed=credentialed,
                 liveness_unproven=liveness_unproven,
             )
@@ -6895,17 +7153,76 @@ def execute_run(
     # by the same rule, and a step that served an identity beside a refusal
     # proves its credential as well as a check does.
     if liveness_controls is not None:
+        def replaced(identity: Any, request: tuple[Any, ...]) -> bool:
+            """Sent after a response replaced (or set a dropped) proof cookie."""
+            session = sessions.get(identity)
+            epoch = None if session is None else session.sent_epochs.get(request)
+            return epoch is not None and epoch not in session.login_epochs
+
         liveness_unproven = liveness_unproven + _sequence_liveness_unproven(
-            _sequence_liveness, sequence_records
+            _sequence_liveness
+            + _replaced_cookie_sequence_steps(config, replaced),
+            sequence_records,
         )
-        proven_live = set(live_credentials) | _proven_live_by_service(
-            config, probes, liveness_controls, sequence_records, credentialed
-        )
+        # (identity, session epoch) for every piece of evidence that a
+        # credential was live when it was sent. See sent_under above.
+        proofs = {(name, sent_under(name, ("marker",))) for name in live_credentials} | {
+            (identity, sent_under(identity, request))
+            for identity, request in _served_where_refused(
+                config, probes, liveness_controls, sequence_records, credentialed
+            )
+        }
+
+        def denied_by(entry: Mapping[str, Any]) -> tuple[Any, ...]:
+            return (
+                ("step", entry["sequence_id"], entry["step_index"])
+                if entry.get("sequence_id") is not None
+                else ("check", entry["check_id"])
+            )
+
+        def denied_under(entry: Mapping[str, Any]) -> int | None:
+            return sent_under(entry["identity"], denied_by(entry))
+
         liveness_unproven = [
             entry
             for entry in liveness_unproven
-            if entry["identity"] not in proven_live
+            if not (
+                (entry["identity"], denied_under(entry)) in proofs
+                and (
+                    entry["identity"] not in relogged
+                    or _proven_under_same_login(
+                        entry, config, liveness_controls, sequence_records, credentialed
+                    )
+                )
+            )
         ]
+        for entry in liveness_unproven:
+            if replaced(entry["identity"], denied_by(entry)):
+                # Whatever proved this session -- its login, its marker_probe,
+                # an earlier 2xx -- proved the value the target has since
+                # replaced; logging in again or a marker_probe would not prove
+                # the value this denial went out with.
+                entry["proof_scope"] = "cookie_value"
+                entry["remediation"] = STALE_COOKIE_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
+            elif entry["identity"] in relogged:
+                # The generic advice is to add a marker_probe, which proves
+                # nothing for this identity past its first login.
+                entry["proof_scope"] = "login"
+                entry["remediation"] = RELOGGED_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
+            elif any(
+                name == entry["identity"] and epoch != denied_under(entry)
+                for name, epoch in proofs
+            ):
+                # Proven live, but under a value of the session cookie the
+                # target has since replaced. Its marker_probe is already there.
+                entry["proof_scope"] = "cookie_value"
+                entry["remediation"] = STALE_COOKIE_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
 
     # After the sequence findings are appended, so step findings are annotated
     # too, and before the diff, which never reads this key.

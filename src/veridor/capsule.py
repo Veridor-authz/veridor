@@ -1052,9 +1052,18 @@ def _unmeasured(
                 + (
                     "and no credential Veridor fabricated was sent to compare "
                     "with, so that denial does not show this target recognised "
-                    "the identity's credential (a marker_probe on "
-                    f"{quoted(entry.get('identity'))}, naming something it is "
-                    "served, would prove it live)"
+                    "the identity's credential"
+                    + (
+                        # Sent under a login or session cookie value no
+                        # marker_probe ran with: adding one is not the fix.
+                        " (a marker_probe proves only the login and session "
+                        "cookie value it ran under, and this denial was sent "
+                        "under another)"
+                        if entry.get("proof_scope")
+                        else " (a marker_probe on "
+                        f"{quoted(entry.get('identity'))}, naming something it "
+                        "is served, would prove it live)"
+                    )
                     if str(entry.get("control") or "").startswith("withheld_")
                     else "and the credential Veridor fabricated to compare with "
                     "got no answer (its request failed), so that denial does not "

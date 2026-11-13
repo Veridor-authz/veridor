@@ -4390,7 +4390,8 @@ class LivenessBannerPreconditionTest(unittest.TestCase):
         "identity was served in the same check, and nothing else in this run "
         "proves the identity live (a 2xx it drew on a request where an identity "
         "with no credential, or the fabricated credential, was refused; or its "
-        "marker_probe)"
+        "marker_probe; for a session, either one counts only under the same "
+        "login and session cookie value)"
     )
 
     def _banners(self, config: dict) -> list[str]:

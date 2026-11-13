@@ -3059,5 +3059,2057 @@ class EstablishesUnknownKeyTest(unittest.TestCase):
         self.assertIn("inject", message)
 
 
+# --------------------------------------------------------------------------
+# a cookie that expires between prepare() and attach_cookies()
+# --------------------------------------------------------------------------
+
+import http.cookiejar  # noqa: E402
+from urllib.parse import urlsplit  # noqa: E402
+from urllib.request import Request  # noqa: E402
+
+
+class _Clock:
+    """``time`` as http.cookiejar and veridor.sequence see it, plus an offset.
+
+    prepare() asks is_live(), then add_cookie_header() reads the clock again.
+    Moving this clock between the two is the race, made certain: measured on
+    a real clock the window is about 12 us median and 113 us at worst, which
+    no wall-clock test can hit on purpose.
+    """
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return time.time() + self.offset
+
+    def past(self, expires: int) -> None:
+        self.offset = expires + 1 - time.time()
+
+
+@contextlib.contextmanager
+def _clock():
+    clock = _Clock()
+    with patch.object(http.cookiejar, "time", clock), patch.object(sequence, "time", clock):
+        yield clock
+
+
+def _jar_session(
+    *, path: str = "/", establishes: dict | None = None, capture: dict | None = None
+) -> sequence.IdentitySession:
+    declaration: dict = {"establishes": establishes or {"cookie": "sid"}}
+    if capture:
+        declaration["capture"] = capture
+    session = sequence.IdentitySession(
+        "attacker", {"headers": {}, "session": declaration}, "http://127.0.0.1:1", 5, {}
+    )
+    session.jar.set_cookie(http.cookiejar.Cookie(
+        0, "sid", "attacker", None, False, "127.0.0.1", False, False, path, True,
+        False, int(time.time()) + 100, False, None, None, {}))
+    session.state = "established"
+    if session._establishing_cookie() == "sid":
+        # What establish() records as the proof: this cookie, by its jar identity.
+        session._proof = frozenset({("127.0.0.1", path, "sid")})
+    return session
+
+
+def _expires(session: sequence.IdentitySession) -> int:
+    return next(cookie.expires for cookie in session.jar if cookie.name == "sid")
+
+
+class AttachCookiesRaceTest(unittest.TestCase):
+    """attach_cookies() looks for the session cookie on the request it built."""
+
+    def _race(self, session: sequence.IdentitySession, clock: _Clock):
+        _headers, _body, blocked, _ = session.prepare({}, None, method="GET")
+        self.assertIsNone(blocked, "prepare() saw a live session")
+        clock.past(_expires(session))
+        request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+        return session.attach_cookies(request), request
+
+    def test_a_cookie_that_expires_after_prepare_is_refused_at_attach(self) -> None:
+        with _clock() as clock:
+            reason, request = self._race(_jar_session(), clock)
+        # The jar left it off without a word; that is the race.
+        self.assertIsNone(request.get_header("Cookie"))
+        self.assertEqual(reason, "session_expired")
+
+    def test_control_a_live_cookie_goes_on_and_nothing_is_refused(self) -> None:
+        session = _jar_session()
+        with _clock():
+            request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_a_cookie_scoped_away_from_the_url_is_refused_by_its_own_reason(self) -> None:
+        session = _jar_session(path="/app")
+        request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+        self.assertTrue(session.is_live())
+        self.assertEqual(session.attach_cookies(request), "session_cookie_not_sent")
+        self.assertIn("session_cookie_not_sent", core.UNSENT_REASONS)
+        inside = Request("http://127.0.0.1:1/app/notes/n1", method="GET")
+        self.assertIsNone(session.attach_cookies(inside))
+
+    def test_a_login_step_is_never_refused(self) -> None:
+        """Login runs before the session exists, with whatever the jar holds."""
+        session = _jar_session(path="/app")
+        session.state = "pending"
+        request = Request("http://127.0.0.1:1/login", method="POST")
+        self.assertIsNone(session.attach_cookies(request))
+
+    def test_a_capture_read_from_the_cookie_is_the_same_proof(self) -> None:
+        session = _jar_session(
+            establishes={"capture": "csrf"},
+            capture={"csrf": {"from": "cookie", "name": "sid"}},
+        )
+        with _clock() as clock:
+            reason, _request = self._race(session, clock)
+        self.assertEqual(reason, "session_expired")
+
+    def test_a_capture_from_the_response_body_has_no_cookie_to_lose(self) -> None:
+        """Its value is in the request already; the jar cannot take it back.
+
+        A login step's capture from a header or body lands in ``_values``;
+        a capture from a cookie, on the session or a login step, is read from
+        the jar.
+        """
+        session = _jar_session(establishes={"capture": "token"})
+        session._values["token"] = "tok"
+        with _clock() as clock:
+            reason, request = self._race(session, clock)
+        self.assertIsNone(reason)
+        self.assertIsNone(request.get_header("Cookie"))
+
+    def test_perform_request_sends_nothing_when_attach_refuses(self) -> None:
+        class Opener:
+            def open(self, *_args, **_kwargs):
+                raise AssertionError("a request reached the opener")
+
+        session = _jar_session()
+        real_attach = sequence.IdentitySession.attach_cookies
+
+        def attach(inner, request):
+            clock.past(_expires(inner))
+            return real_attach(inner, request)
+
+        with _clock() as clock, patch.object(core, "_OPENER", Opener()), \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach):
+            result = core._perform_request(
+                "http://127.0.0.1:1", 5, {"method": "GET", "path": "/docs/1"},
+                {"headers": {}}, marker=MARKER_VICTIM, session=session,
+            )
+        self.assertEqual(result["error"], core.UNSENT_REASONS["session_expired"])
+        self.assertIsNone(result["response"]["status"])
+        self.assertEqual(result["response"]["marker_scan"], "unknown")
+
+
+class SessionRemediationTest(unittest.TestCase):
+    """A request a session could not carry gets session advice, not network advice."""
+
+    def test_each_session_reason_gets_session_advice(self) -> None:
+        for reason in ("session_unavailable", "session_expired", "session_cookie_not_sent"):
+            with self.subTest(reason=reason):
+                advice = core.unsent_remediation(core.UNSENT_REASONS[reason])
+                self.assertIsNotNone(advice)
+                self.assertNotIn("reachable", advice)
+        self.assertIn("reestablish", core.unsent_remediation(
+            core.UNSENT_REASONS["session_expired"]))
+
+    def test_a_step_message_of_its_own_is_matched_by_its_reason(self) -> None:
+        advice = core.unsent_remediation(
+            "the session for 'a' was not established (x); this step was not issued",
+            "session_unavailable",
+        )
+        self.assertEqual(advice, core.SESSION_NOT_ESTABLISHED_REMEDIATION)
+
+    def test_the_gate_still_does_not_call_a_session_failure_configuration(self) -> None:
+        """Exit codes read CONFIGURATION_UNSENT_ERRORS; a session can fail on the target."""
+        for reason in ("session_unavailable", "session_expired", "session_cookie_not_sent"):
+            self.assertNotIn(reason, core.CONFIGURATION_UNSENT_ERRORS.values())
+
+    def test_control_a_transport_failure_still_gets_no_unsent_advice(self) -> None:
+        self.assertIsNone(core.unsent_remediation("connection refused"))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class CookieExpiresBetweenPrepareAndAttachTest(unittest.TestCase):
+    """The attacker's cookie expires after is_live() said yes and before the jar runs.
+
+    The target answers an anonymous request with 404, a status the denial
+    declaration lists and not one the 401 rule catches. Before the fix the
+    graded probe went out with an empty Cookie header, drew that 404, and a
+    live IDOR was graded safe (check) or matched (sequence).
+    """
+
+    PROBE = {"seq": "/notes/n1", "check": "/docs/1"}
+
+    @staticmethod
+    def _target(*, cookie_path: str = "/"):
+        notes: dict[str, bytes] = {}
+
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                attributes = f"sid={who}; Path={cookie_path}"
+                if who == "attacker":
+                    attributes += "; Max-Age=100"
+                return 200, [("Set-Cookie", attributes)], b"ok"
+            if "sid=" not in entry["cookie"]:
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            if entry["method"] == "POST":
+                notes["n1"] = json.dumps({"provenance": MARKER_VICTIM}).encode()
+                return 201, [("Content-Type", "application/json")], b'{"id":"n1"}'
+            if entry["path"] == "/m":
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, [("Content-Type", "application/json")], json.dumps(
+                    {"m": owner}).encode()
+            # IDOR: any logged-in caller reads the victim's record.
+            body = notes.get("n1") or json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 200, [("Content-Type", "application/json")], body
+
+        return responder
+
+    @staticmethod
+    def _config(kind: str) -> dict:
+        identities = _identities(sessions=True)
+        if kind == "seq":
+            sequences = _idor_sequence()
+            sequences[0]["steps"][2]["expect"]["status"] = [403, 404]
+            return {"version": 2,
+                    "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                    "identities": identities, "checks": [], "sequences": sequences}
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        return {"version": 1,
+                "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                "identities": identities, "checks": [check]}
+
+    def _execute(self, kind: str, *, race: bool, cookie_path: str = "/"):
+        real_attach = sequence.IdentitySession.attach_cookies
+        fired: list[str] = []
+
+        def attach(session, request):
+            # The attacker's own graded probe, not the sham liveness control
+            # that replaces its Authorization header.
+            if (race and not fired and session.name == "attacker"
+                    and session.state == "established"
+                    and request.get_header("Authorization") == ATTACKER_TOKEN
+                    and urlsplit(request.full_url).path == self.PROBE[kind]):
+                fired.append(request.full_url)
+                clock.past(_expires(session))
+            return real_attach(session, request)
+
+        with _clock() as clock, \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach), \
+                _server(self._target(cookie_path=cookie_path)) as (url, log):
+            result, _sessions, _ = _run(self._config(kind), url)
+        if race:
+            self.assertEqual(len(fired), 1, "the race was never forced")
+        probes = [entry for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == self.PROBE[kind]]
+        return result, probes
+
+    def test_control_without_the_race_the_idor_is_confirmed(self) -> None:
+        for kind in ("seq", "check"):
+            with self.subTest(kind=kind):
+                result, probes = self._execute(kind, race=False)
+                self.assertEqual(len(probes), 1)
+                self.assertIn("sid=attacker", probes[0]["cookie"])
+                rules = [(f["rule_id"], f["verdict"], f["evidence_grade"])
+                         for f in result["findings"]]
+                self.assertEqual(rules, [("VERIDOR-AUTHZ-001", "vulnerable", "confirmed")])
+
+    def test_the_sequence_assert_step_is_never_sent_anonymous(self) -> None:
+        result, probes = self._execute("seq", race=True)
+        self.assertEqual(probes, [], "an anonymous graded probe reached the target")
+        steps = result["sequences"][0]["steps"]
+        self.assertNotEqual(steps[2]["state"], "matched")
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 2)
+        self.assertEqual(result["summary"]["safe"], 0)
+        self.assertEqual([(f["rule_id"], f["verdict"]) for f in result["findings"]],
+                         [("VERIDOR-EXEC-001", "inconclusive")])
+        finding = result["findings"][0]
+        self.assertIn("no longer live", finding["message"])
+        self.assertIn("reestablish", finding["remediation"])
+
+    def test_the_check_probe_is_never_sent_anonymous(self) -> None:
+        result, probes = self._execute("check", race=True)
+        self.assertEqual(probes, [], "an anonymous graded probe reached the target")
+        attacker = _finding_map(result)[("cross-tenant-doc-read", "attacker")]
+        self.assertEqual((attacker["rule_id"], attacker["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn("no longer live", attacker["message"])
+        self.assertIn("reestablish", attacker["remediation"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        # The victim's probe is the only one graded safe.
+        self.assertEqual(result["summary"]["safe"], 1)
+
+    def test_a_cookie_scoped_away_from_the_probe_is_not_sent_anonymous(self) -> None:
+        result, probes = self._execute("check", race=False, cookie_path="/app")
+        self.assertEqual(probes, [])
+        attacker = _finding_map(result)[("cross-tenant-doc-read", "attacker")]
+        self.assertEqual(attacker["verdict"], "inconclusive")
+        self.assertIn("Path or Domain", attacker["message"])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SequenceSessionRemediationTest(unittest.TestCase):
+    """A sequence step whose session never established was told to check the network.
+
+    The login answered 200; its cookie was the problem. The check path has
+    always said so.
+    """
+
+    def test_the_sequence_step_gets_the_advice_the_check_probe_gets(self) -> None:
+        def responder(entry: dict):
+            # Logs in fine, and sets a cookie under a name nobody declared.
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", "other=1; Path=/")], b"ok"
+            return 404, [], b""
+
+        config = {
+            "version": 2,
+            "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+            "identities": _identities(sessions=True),
+            "checks": [_doc_check()],
+            "sequences": _idor_sequence(),
+        }
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        # Nothing but the logins went out as either identity (the liveness
+        # control's fabricated credential is neither).
+        self.assertEqual(
+            {entry["path"] for entry in log.entries
+             if entry["auth"] in (VICTIM_TOKEN, ATTACKER_TOKEN)},
+            {"/login"},
+        )
+        execution = [f for f in result["findings"] if f["rule_id"] == "VERIDOR-EXEC-001"]
+        steps = [f for f in execution if f["check_id"] == "sess-idor"]
+        checks = [f for f in execution if f["check_id"] == "cross-tenant-doc-read"]
+        self.assertEqual((len(steps), len(checks)), (1, 2))
+        for finding in steps + checks:
+            with self.subTest(finding=finding["id"]):
+                self.assertEqual(finding["verdict"], "inconclusive")
+                self.assertEqual(finding["remediation"],
+                                 core.SESSION_NOT_ESTABLISHED_REMEDIATION)
+                self.assertNotIn("reachable", finding["remediation"])
+        # Nothing was sent, so it does not say the request failed.
+        self.assertTrue(steps[0]["message"].startswith("Request not sent: "))
+
+
+
+# --------------------------------------------------------------------------
+# What proves a session, and what a request carries from a cookie
+# --------------------------------------------------------------------------
+
+
+def _cookie(name: str, value: str, *, path: str = "/", max_age: int = 100):
+    return http.cookiejar.Cookie(
+        0, name, value, None, False, "127.0.0.1", False, False, path, True,
+        False, int(time.time()) + max_age, False, None, None, {})
+
+
+def _offline_session(declaration: dict, *cookies) -> sequence.IdentitySession:
+    """Run establish() with the login step answered in process, no socket.
+
+    Each login request puts ``cookies`` into the jar and answers 200, which is
+    all establish() reads from a login response for a cookie proof.
+    """
+    session = sequence.IdentitySession(
+        "attacker", {"headers": {}, "session": declaration}, "http://127.0.0.1:1", 5, {}
+    )
+
+    def perform(base_url, timeout, request_config, identity, *, session=None, **_):
+        for cookie in cookies:
+            session.jar.set_cookie(cookie)
+        return {
+            "request": {"method": "POST", "url": f"{base_url}/login"},
+            "response": {"status": 200, "duration_ms": 1, "body_bytes": 2,
+                         "body_sha256": "0" * 64},
+            "error": None,
+        }
+
+    with patch.object(core, "_perform_request", perform):
+        session.establish()
+    return session
+
+
+def _login(capture: dict | None = None) -> list[dict]:
+    step: dict = {"method": "POST", "path": "/login", "expect_status": [200]}
+    if capture:
+        step["capture"] = capture
+    return [step]
+
+
+def _expiry_of(session: sequence.IdentitySession, name: str) -> int:
+    return max(cookie.expires for cookie in session.jar if cookie.name == name)
+
+
+class LoginStepCookieCaptureIsLiveTest(unittest.TestCase):
+    """A login step's capture read from a cookie is read from the jar when used.
+
+    It was frozen in the value map at login. As the establishing proof
+    (``establishes: {"capture": NAME}``) it kept the session "live" after the
+    cookie expired, attach_cookies() had no cookie to look for, and the graded
+    probe went out anonymous: safe 2, vulnerable 0 over a confirmed IDOR.
+    """
+
+    DECLARATION = {
+        "login": _login({"tok": {"from": "cookie", "name": "sid"}}),
+        "establishes": {"capture": "tok"},
+    }
+
+    def _session(self) -> sequence.IdentitySession:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        return session
+
+    def test_control_while_the_cookie_lives_the_session_is_live(self) -> None:
+        session = self._session()
+        with _clock():
+            self.assertTrue(session.is_live())
+            self.assertEqual(session.lookup("tok"), "attacker")
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_the_session_dies_with_the_cookie(self) -> None:
+        session = self._session()
+        with _clock() as clock:
+            clock.past(_expiry_of(session, "sid"))
+            self.assertFalse(session.is_live())
+            self.assertIsNone(session.lookup("tok"))
+            self.assertEqual(session.prepare({}, None, method="GET")[2], "session_expired")
+
+    def test_a_cookie_that_expires_after_prepare_is_refused_at_attach(self) -> None:
+        session = self._session()
+        with _clock() as clock:
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            clock.past(_expiry_of(session, "sid"))
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            self.assertEqual(session.attach_cookies(request), "session_expired")
+        self.assertIsNone(request.get_header("Cookie"))
+
+    def test_control_a_login_step_capture_from_a_header_stays_frozen(self) -> None:
+        """Only a cookie source has a jar to read again; the rest is one response."""
+        session = sequence.IdentitySession(
+            "attacker",
+            {"headers": {}, "session": {
+                "login": _login({"tok": {"from": "header", "name": "X-Token"}}),
+                "establishes": {"capture": "tok"}}},
+            "http://127.0.0.1:1", 5, {},
+        )
+
+        def perform(base_url, timeout, request_config, identity, *, sink=None, **_):
+            sink["headers"] = [("X-Token", "frozen-token")]
+            return {"request": {"method": "POST", "url": f"{base_url}/login"},
+                    "response": {"status": 200, "duration_ms": 1, "body_bytes": 0,
+                                 "body_sha256": "0" * 64},
+                    "error": None}
+
+        with patch.object(core, "_perform_request", perform):
+            session.establish()
+        self.assertEqual(session.state, "established")
+        with _clock() as clock:
+            clock.offset = 10_000
+            self.assertTrue(session.is_live())
+            self.assertEqual(session.lookup("tok"), "frozen-token")
+
+
+class EmptyCookieIsNoProofTest(unittest.TestCase):
+    """``Set-Cookie: sid=`` clears a cookie; it never proved a session.
+
+    establish() and is_live() tested the cookie for ``is not None``, so an
+    empty one established the session and every probe went out as ``sid=``,
+    which a target treats as anonymous: safe 2, vulnerable 0 over a confirmed
+    IDOR. A capture proof already had to be non-empty.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+    CSRF = {
+        "login": _login(), "establishes": {"cookie": "sid"},
+        "capture": {"csrf": {"from": "cookie", "name": "csrftoken"}},
+        "inject": [{"header": "X-CSRFToken", "value": "${capture.csrf}"}],
+    }
+
+    def test_an_empty_establishing_cookie_does_not_establish(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", ""))
+        self.assertEqual(session.state, "failed")
+        self.assertEqual(session.reason_code, "not_established")
+        self.assertFalse(session.is_live())
+
+    def test_control_a_non_empty_one_does(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established")
+        self.assertTrue(session.is_live())
+
+    def test_an_established_session_whose_cookie_is_emptied_is_not_live(self) -> None:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", ""))  # the same cookie, cleared
+        self.assertFalse(session.is_live())
+        self.assertEqual(session.prepare({}, None, method="GET")[2], "session_expired")
+
+    def test_an_empty_csrf_cookie_is_not_injected(self) -> None:
+        """An empty X-CSRFToken draws the target's CSRF 403, a declared denial."""
+        session = _offline_session(self.CSRF, _cookie("sid", "attacker"),
+                                   _cookie("csrftoken", ""))
+        self.assertEqual(session.state, "established")
+        _headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        self.assertEqual(blocked, "unresolved_reference")
+
+    def test_control_a_non_empty_csrf_cookie_is_injected(self) -> None:
+        session = _offline_session(self.CSRF, _cookie("sid", "attacker"),
+                                   _cookie("csrftoken", CSRF_SENTINEL))
+        headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        self.assertIsNone(blocked)
+        self.assertEqual(headers["X-CSRFToken"], CSRF_SENTINEL)
+
+
+class ProofCookieIdentityTest(unittest.TestCase):
+    """Liveness asks after the cookie that proved the session, not its name.
+
+    A same-named cookie on a narrower path (``sid=guest; Path=/docs``) outlived
+    the real one: is_live() took any usable ``sid`` and attach_cookies() found
+    ``sid`` on the request by name, so the probe went out as the guest.
+    """
+
+    DECLARATION = {"login": _login(), "establishes": {"cookie": "sid"}}
+
+    def test_a_later_same_named_cookie_does_not_keep_the_session_live(self) -> None:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established")
+        # A later response sets a guest cookie under the same name, on /docs.
+        session.jar.set_cookie(_cookie("sid", "guest", path="/docs", max_age=10_000))
+        with _clock() as clock:
+            clock.past(next(c.expires for c in session.jar if c.value == "attacker"))
+            self.assertFalse(session.is_live())
+            request = Request("http://127.0.0.1:1/docs/1", method="GET")
+            # The jar would have sent the guest; nothing is sent instead.
+            self.assertEqual(session.attach_cookies(request), "session_expired")
+        self.assertEqual(request.get_header("Cookie"), "sid=guest")
+
+    def test_control_the_real_cookie_alive_beside_the_guest_is_sent(self) -> None:
+        """Where the guest's Path does not reach, the proof alone goes out.
+
+        Inside /docs both would go out, which SameNamedCookieOnTheRequestTest
+        covers: that request is refused, not sent with the proof beside a guest.
+        """
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", "guest", path="/docs", max_age=10_000))
+        with _clock():
+            self.assertTrue(session.is_live())
+            request = Request("http://127.0.0.1:1/m", method="GET")
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_two_values_under_the_proving_name_at_login_do_not_establish(self) -> None:
+        """Which of the two the target authenticates is unknowable."""
+        session = _offline_session(self.DECLARATION, _cookie("sid", "guest", path="/docs"),
+                                   _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "failed")
+        self.assertEqual(session.reason_code, "not_established")
+        self.assertIn("set more than once with different values", session.reason)
+
+    def test_control_one_value_on_two_paths_establishes(self) -> None:
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker", path="/docs"),
+                                   _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        self.assertTrue(session.is_live())
+
+    def test_a_rotated_proof_cookie_is_still_the_proof(self) -> None:
+        """The target re-setting the same (domain, path, name) is rotation."""
+        session = _offline_session(self.DECLARATION, _cookie("sid", "attacker"))
+        session.jar.set_cookie(_cookie("sid", "attacker-rotated"))
+        request = Request("http://127.0.0.1:1/docs/1", method="GET")
+        self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker-rotated")
+
+
+class CarriedCookieTest(unittest.TestCase):
+    """A request carrying a value read from a cookie must carry the cookie too.
+
+    prepare() injected ``X-CSRFToken`` from the ``csrftoken`` cookie, then the
+    jar left the cookie off -- expired in between, or scoped by Path away from
+    the URL. A double-submit CSRF check compared the two, answered 403, and the
+    403 matched the declared denial: safe 2, vulnerable 0 over a confirmed IDOR.
+    """
+
+    @staticmethod
+    def _session(csrf_path: str = "/") -> sequence.IdentitySession:
+        return _offline_session(
+            EmptyCookieIsNoProofTest.CSRF, _cookie("sid", "attacker", max_age=10_000),
+            _cookie("csrftoken", CSRF_SENTINEL, path=csrf_path))
+
+    def _send(self, session, path: str = "/docs/1", *, expire_csrf: bool = False):
+        with _clock() as clock:
+            headers, body, blocked, _ = session.prepare({}, b"{}", method="POST")
+            self.assertIsNone(blocked)
+            if expire_csrf:
+                clock.past(_expiry_of(session, "csrftoken"))
+            request = Request(f"http://127.0.0.1:1{path}", data=body, headers=headers,
+                              method="POST")
+            return session.attach_cookies(request), request
+
+    def test_control_the_cookie_goes_out_with_its_value(self) -> None:
+        reason, request = self._send(self._session())
+        self.assertIsNone(reason)
+        self.assertIn(f"csrftoken={CSRF_SENTINEL}", request.get_header("Cookie"))
+        self.assertEqual(request.get_header("X-csrftoken"), CSRF_SENTINEL)
+
+    def test_a_csrf_cookie_that_expires_after_prepare_is_refused(self) -> None:
+        reason, request = self._send(self._session(), expire_csrf=True)
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+        self.assertEqual(reason, "capture_cookie_not_sent")
+
+    def test_a_csrf_cookie_scoped_away_from_the_url_is_refused(self) -> None:
+        reason, request = self._send(self._session(csrf_path="/app"))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+        self.assertEqual(reason, "capture_cookie_not_sent")
+
+    def test_control_inside_its_path_the_scoped_cookie_is_sent(self) -> None:
+        reason, _request = self._send(self._session(csrf_path="/app"), "/app/docs/1")
+        self.assertIsNone(reason)
+
+    def test_the_reason_gets_session_advice_and_is_not_configuration(self) -> None:
+        error = core.UNSENT_REASONS["capture_cookie_not_sent"]
+        advice = core.unsent_remediation(error)
+        self.assertIsNotNone(advice)
+        self.assertNotIn("reachable", advice)
+        self.assertNotIn("capture_cookie_not_sent", core.CONFIGURATION_UNSENT_ERRORS.values())
+        self.assertTrue(core.execution_message(error).startswith("Request not sent: "))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SessionProofGapsEndToEndTest(unittest.TestCase):
+    """The same gaps, through the engine, against a target with a live IDOR.
+
+    The target answers a request with no real ``sid`` with 404, and a POST
+    whose X-CSRFToken does not match its csrftoken cookie with 403; both are
+    statuses the attacker's declaration lists. Any logged-in caller reads the
+    victim's document. Each non-control case was graded safe before the fix.
+    """
+
+    STEP_CAPTURE = {"login": _login({"tok": {"from": "cookie", "name": "sid"}}),
+                    "establishes": {"capture": "tok"}}
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+    CSRF = EmptyCookieIsNoProofTest.CSRF
+
+    @staticmethod
+    def _target(attacker_cookies: list[str]):
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                cookies = (attacker_cookies if who == "attacker"
+                           else ["sid=victim; Path=/", "csrftoken=cv; Path=/"])
+                return 200, [("Set-Cookie", item) for item in cookies], b"ok"
+            jar = dict(part.strip().partition("=")[::2]
+                       for part in entry["cookie"].split(";") if part.strip())
+            if jar.get("sid") not in ("attacker", "victim"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            if entry["method"] == "POST" and (
+                    not entry["csrf"] or entry["csrf"] != jar.get("csrftoken")):
+                return 403, [("Content-Type", "application/json")], b'{"e":"csrf"}'
+            if entry["path"] == "/m":
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, [("Content-Type", "application/json")], json.dumps(
+                    {"m": owner}).encode()
+            # IDOR: any logged-in caller reads the victim's document.
+            return 200, [("Content-Type", "application/json")], json.dumps(
+                {"provenance": MARKER_VICTIM}).encode()
+
+        return responder
+
+    def _execute(self, session: dict, attacker_cookies: list[str], *,
+                 method: str = "GET", expire: bool = False):
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["session"] = json.loads(json.dumps(session))
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["request"] = {"method": method, "path": "/docs/1"}
+        if method == "POST":
+            check["request"]["json"] = {"a": 1}
+        check["expect"]["attacker"]["status"] = [403, 404]
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [check]}
+        real_attach = sequence.IdentitySession.attach_cookies
+        fired: list[str] = []
+
+        def attach(inner, request):
+            # The attacker's graded probe of /docs/1: its sid expires after
+            # prepare() and before the jar runs.
+            if (expire and not fired and inner.name == "attacker"
+                    and inner.state == "established"
+                    and request.get_header("Authorization") == ATTACKER_TOKEN
+                    and urlsplit(request.full_url).path == "/docs/1"):
+                fired.append(request.full_url)
+                clock.past(_expiry_of(inner, "sid"))
+            return real_attach(inner, request)
+
+        with _clock() as clock, \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach), \
+                _server(self._target(attacker_cookies)) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        if expire:
+            self.assertEqual(len(fired), 1, "the expiry was never forced")
+        probes = [entry for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        # None when the attacker's probe was graded safe: safe findings are not listed.
+        return result, probes, _finding_map(result).get(("cross-tenant-doc-read", "attacker"))
+
+    def _assert_confirmed(self, result, probes, verdict) -> None:
+        self.assertEqual(len(probes), 1)
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"], verdict["evidence_grade"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable", "confirmed"))
+
+    def _assert_withheld(self, words: str, result, probes, verdict) -> None:
+        self.assertEqual([entry["cookie"] for entry in probes], [],
+                         "a graded probe reached the target without its cookie")
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn(words, verdict["message"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(result["summary"]["safe"], 1)  # the victim's alone
+
+    def test_control_a_login_step_cookie_capture_proof_while_it_lives(self) -> None:
+        self._assert_confirmed(*self._execute(
+            self.STEP_CAPTURE, ["sid=attacker; Path=/; Max-Age=100"]))
+
+    def test_a_login_step_cookie_capture_proof_that_expired_sends_nothing(self) -> None:
+        self._assert_withheld("no longer live", *self._execute(
+            self.STEP_CAPTURE, ["sid=attacker; Path=/; Max-Age=100"], expire=True))
+
+    def test_control_a_non_empty_establishing_cookie(self) -> None:
+        self._assert_confirmed(*self._execute(self.COOKIE, ["sid=attacker; Path=/"]))
+
+    def test_an_empty_establishing_cookie_sends_nothing(self) -> None:
+        self._assert_withheld("not established", *self._execute(self.COOKIE, ["sid=; Path=/"]))
+
+    def test_control_a_csrf_cookie_that_covers_the_url(self) -> None:
+        self._assert_confirmed(*self._execute(
+            self.CSRF, ["sid=attacker; Path=/", "csrftoken=ca; Path=/"], method="POST"))
+
+    def test_a_csrf_cookie_scoped_away_from_the_url_sends_nothing(self) -> None:
+        self._assert_withheld("captured from a cookie", *self._execute(
+            self.CSRF, ["sid=attacker; Path=/", "csrftoken=ca; Path=/app"], method="POST"))
+
+
+# --------------------------------------------------------------------------
+# A second value under a cookie name the session depends on
+# --------------------------------------------------------------------------
+
+
+class SameNamedCookieOnTheRequestTest(unittest.TestCase):
+    """The proof cookie on the request is not enough if another value rides beside it.
+
+    A response after login set ``sid=guest; Path=/docs``. The jar writes longer
+    paths first, so a request for /docs/1 went out as ``sid=guest; sid=attacker``
+    and passed the attach check, which looked only for the proof's value. A
+    server that reads the first occurrence (Express cookie-parser, PHP, Go's
+    ``r.Cookie``) authenticated the guest, whose 404 matched the declared
+    denial: safe 2, vulnerable 0, ``liveness.unproven`` empty.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+    STEP_CAPTURE = LoginStepCookieCaptureIsLiveTest.DECLARATION
+
+    def _attach(self, declaration: dict, later, path: str = "/docs/1"):
+        session = _offline_session(declaration, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        session.jar.set_cookie(later)
+        request = Request(f"http://127.0.0.1:1{path}", method="GET")
+        return session.attach_cookies(request), request.get_header("Cookie")
+
+    def test_a_later_same_named_cookie_beside_the_proof_is_refused(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("sid", "guest", path="/docs"))
+        self.assertEqual(cookie, "sid=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_the_same_for_a_proof_read_by_a_login_step_capture(self) -> None:
+        reason, _cookie_header = self._attach(
+            self.STEP_CAPTURE, _cookie("sid", "guest", path="/docs"))
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_outside_the_guest_cookies_path_the_request_goes_out(self) -> None:
+        reason, cookie = self._attach(
+            self.COOKIE, _cookie("sid", "guest", path="/docs"), path="/m")
+        self.assertEqual(cookie, "sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_another_name_on_the_same_path_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("other", "guest", path="/docs"))
+        self.assertEqual(cookie, "other=guest; sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_the_proof_value_on_a_second_path_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("sid", "attacker", path="/docs"))
+        self.assertEqual(cookie, "sid=attacker; sid=attacker")
+        self.assertIsNone(reason)
+
+    def _csrf(self, *later) -> str | None:
+        session = _offline_session(
+            EmptyCookieIsNoProofTest.CSRF, _cookie("sid", "attacker"),
+            _cookie("csrftoken", CSRF_SENTINEL))
+        for cookie in later:
+            session.jar.set_cookie(cookie)
+        headers, body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        self.assertIsNone(blocked)
+        self.assertEqual(headers["X-CSRFToken"], CSRF_SENTINEL)
+        request = Request("http://127.0.0.1:1/docs/1", data=body, headers=headers,
+                          method="POST")
+        return session.attach_cookies(request)
+
+    def test_a_carried_csrf_cookie_beside_a_second_value_is_refused(self) -> None:
+        """The CSRF check may compare the header with the other one and answer 403."""
+        self.assertEqual(self._csrf(_cookie("csrftoken", "other", path="/docs")),
+                         "session_cookie_ambiguous")
+
+    def test_control_a_carried_csrf_cookie_alone_goes_out(self) -> None:
+        self.assertIsNone(self._csrf())
+        self.assertIsNone(self._csrf(_cookie("csrftoken", CSRF_SENTINEL, path="/docs")))
+
+    def test_the_reason_gets_session_advice_and_is_not_configuration(self) -> None:
+        error = core.UNSENT_REASONS["session_cookie_ambiguous"]
+        advice = core.unsent_remediation(error)
+        self.assertIsNotNone(advice)
+        self.assertNotIn("reachable", advice)
+        self.assertNotIn("session_cookie_ambiguous", core.CONFIGURATION_UNSENT_ERRORS.values())
+        self.assertTrue(core.execution_message(error).startswith("Request not sent: "))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SameNamedCookieEndToEndTest(unittest.TestCase):
+    """The same, through the engine, against a server that reads the first ``sid``.
+
+    The attacker's marker probe (GET /m) draws a response that also sets a
+    second cookie on Path=/docs; /docs/1 is an IDOR any logged-in caller reads,
+    and a request whose first ``sid`` is not a real session gets 404, which the
+    attacker's declaration lists.
+    """
+
+    @staticmethod
+    def _execute(late: str):
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sids = [part.strip()[4:] for part in entry["cookie"].split(";")
+                    if part.strip().startswith("sid=")]
+            if not sids or sids[0] not in ("attacker", "victim"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            headers = [("Content-Type", "application/json")]
+            if entry["path"] == "/m":
+                if who == "attacker":
+                    headers.append(("Set-Cookie", late))
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, headers, json.dumps({"m": owner}).encode()
+            return 200, headers, json.dumps({"provenance": MARKER_VICTIM}).encode()
+
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [check]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        probes = [entry["cookie"] for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        return result, probes, _finding_map(result).get(("cross-tenant-doc-read", "attacker"))
+
+    def test_control_a_later_cookie_of_another_name_leaves_the_idor_confirmed(self) -> None:
+        result, probes, verdict = self._execute("other=guest; Path=/docs")
+        self.assertEqual(probes, ["other=guest; sid=attacker"])
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"], verdict["evidence_grade"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable", "confirmed"))
+
+    def test_a_later_same_named_cookie_sends_nothing(self) -> None:
+        result, probes, verdict = self._execute("sid=guest; Path=/docs")
+        self.assertEqual(probes, [], "the probe reached the target as the guest")
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn("second, different value", verdict["message"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(result["summary"]["safe"], 1)  # the victim's alone
+
+
+# --------------------------------------------------------------------------
+# A live cookie value passes the checks a captured one does
+# --------------------------------------------------------------------------
+
+
+class LiveCookieValueChecksTest(unittest.TestCase):
+    """A value read from the jar at send time is held to the capture rules.
+
+    lookup() routes a live cookie through the same size, control-character and
+    ASCII checks as a value captured from a login response. Without them a
+    cookie value with a space went out in a header as is, and a non-ASCII one
+    raised UnicodeEncodeError inside http.client instead of a typed refusal.
+    """
+
+    @staticmethod
+    def _csrf(value: str) -> tuple[dict, str | None]:
+        session = _offline_session(
+            EmptyCookieIsNoProofTest.CSRF, _cookie("sid", "attacker"),
+            _cookie("csrftoken", value))
+        headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+        return headers, blocked
+
+    def test_control_a_plain_value_is_injected(self) -> None:
+        headers, blocked = self._csrf(CSRF_SENTINEL)
+        self.assertIsNone(blocked)
+        self.assertEqual(headers["X-CSRFToken"], CSRF_SENTINEL)
+
+    def test_a_value_with_a_space_is_not_injected(self) -> None:
+        self.assertEqual(self._csrf("tok en"), ({}, "unresolved_reference"))
+
+    def test_a_non_ascii_value_is_not_injected(self) -> None:
+        self.assertEqual(self._csrf("töken"), ({}, "unresolved_reference"))
+
+    def test_an_oversize_value_is_not_injected(self) -> None:
+        self.assertEqual(self._csrf("x" * (sequence.MAX_CAPTURE_VALUE_BYTES + 1)),
+                         ({}, "unresolved_reference"))
+
+    def test_control_a_value_at_the_size_limit_is_injected(self) -> None:
+        value = "x" * sequence.MAX_CAPTURE_VALUE_BYTES
+        headers, blocked = self._csrf(value)
+        self.assertIsNone(blocked)
+        self.assertEqual(headers["X-CSRFToken"], value)
+
+    def test_the_proof_cookie_read_by_a_capture_is_checked_too(self) -> None:
+        declaration = dict(LoginStepCookieCaptureIsLiveTest.DECLARATION,
+                           inject=[{"header": "X-Token", "value": "${capture.tok}"}])
+        session = _offline_session(declaration, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        # Control: the value the login step checked goes out.
+        self.assertEqual(session.lookup("tok"), "attacker")
+        self.assertEqual(session.prepare({}, None, method="GET")[0]["X-Token"], "attacker")
+        # The target rotates the proof cookie to a value the login step would
+        # have refused; read live, it is refused the same way.
+        session.jar.set_cookie(_cookie("sid", "tök"))
+        self.assertIsNone(session.lookup("tok"))
+        self.assertEqual(session.prepare({}, None, method="GET")[2], "unresolved_reference")
+
+
+# --------------------------------------------------------------------------
+# A capture cookie that expired is the session's state, not the configuration
+# --------------------------------------------------------------------------
+
+
+class _Response:
+    """What CookieJar.extract_cookies reads from a response: its headers."""
+
+    def __init__(self, *set_cookies: str) -> None:
+        import email.message
+
+        self._headers = email.message.Message()
+        for value in set_cookies:
+            self._headers["Set-Cookie"] = value
+
+    def info(self):
+        return self._headers
+
+
+class ExpiredCaptureCookieReasonTest(unittest.TestCase):
+    """A ``${capture.…}`` whose cookie expired since login says so.
+
+    It said unresolved_reference: "the capture it names is not declared, or the
+    login step meant to produce it did not find it", configuration advice, and
+    the gate counted it as a configuration error -- for a cookie the target set
+    and let expire. Nothing is sent either way; the reason and advice change.
+    """
+
+    def _session(self, *cookies) -> sequence.IdentitySession:
+        session = _offline_session(
+            EmptyCookieIsNoProofTest.CSRF, _cookie("sid", "attacker", max_age=10_000),
+            *cookies)
+        self.assertEqual(session.state, "established", session.reason)
+        return session
+
+    def test_a_csrf_cookie_set_at_login_that_expired_reports_expiry(self) -> None:
+        session = self._session(_cookie("csrftoken", CSRF_SENTINEL))
+        with _clock() as clock:
+            self.assertIsNone(session.prepare({}, b"{}", method="POST")[2])
+            clock.past(_expiry_of(session, "csrftoken"))
+            self.assertTrue(session.is_live())
+            self.assertEqual(session.prepare({}, b"{}", method="POST")[2],
+                             "capture_cookie_expired")
+
+    def test_a_csrf_cookie_set_after_login_that_expired_reports_expiry(self) -> None:
+        session = self._session()
+        session.harvest(_Response(f"csrftoken={CSRF_SENTINEL}; Path=/; Max-Age=100"),
+                        Request("http://127.0.0.1:1/m", method="GET"))
+        with _clock() as clock:
+            headers, _body, blocked, _ = session.prepare({}, b"{}", method="POST")
+            self.assertIsNone(blocked)
+            self.assertEqual(headers["X-CSRFToken"], CSRF_SENTINEL)
+            clock.past(_expiry_of(session, "csrftoken"))
+            self.assertEqual(session.prepare({}, b"{}", method="POST")[2],
+                             "capture_cookie_expired")
+
+    def test_a_csrf_cookie_the_target_cleared_reports_expiry(self) -> None:
+        # "Expired or cleared": a response setting the cookie to an empty
+        # value is the session's state too, not a misnamed capture.
+        session = self._session(_cookie("csrftoken", CSRF_SENTINEL))
+        self.assertIsNone(session.prepare({}, b"{}", method="POST")[2])
+        session.harvest(_Response("csrftoken=; Path=/"),
+                        Request("http://127.0.0.1:1/m", method="GET"))
+        self.assertEqual(session.prepare({}, b"{}", method="POST")[2],
+                         "capture_cookie_expired")
+
+    def test_control_a_cookie_the_target_never_set_is_still_unresolved(self) -> None:
+        session = self._session()
+        self.assertEqual(session.prepare({}, b"{}", method="POST")[2], "unresolved_reference")
+
+    def test_control_a_new_login_forgets_what_the_last_one_saw(self) -> None:
+        session = self._session(_cookie("csrftoken", CSRF_SENTINEL))
+        self.assertIn("csrftoken", session._seen)
+        session.establish = sequence.IdentitySession.establish.__get__(session)
+        with patch.object(core, "_perform_request", lambda *a, **k: {
+                "request": {"method": "POST", "url": "http://127.0.0.1:1/login"},
+                "response": {"status": 200, "duration_ms": 1, "body_bytes": 0,
+                             "body_sha256": "0" * 64},
+                "error": None}):
+            session.establish()
+        # The new login set no cookie at all, so nothing is established and
+        # nothing remembered from the previous login.
+        self.assertEqual(session.state, "failed")
+        self.assertEqual(session._seen, set())
+
+    def test_the_reason_gets_session_advice_and_is_not_configuration(self) -> None:
+        error = core.UNSENT_REASONS["capture_cookie_expired"]
+        advice = core.unsent_remediation(error)
+        self.assertIsNotNone(advice)
+        self.assertIn("reestablish", advice)
+        self.assertNotIn("capture_cookie_expired", core.CONFIGURATION_UNSENT_ERRORS.values())
+        self.assertTrue(core.execution_message(error).startswith("Request not sent: "))
+
+
+# --------------------------------------------------------------------------
+# Liveness proof belongs to the login it was measured under
+# --------------------------------------------------------------------------
+
+
+class ProvenUnderSameLoginTest(unittest.TestCase):
+    """For an identity that logs in again per check and sequence, which proof counts."""
+
+    @staticmethod
+    def _record(sequence_id: str) -> dict:
+        def step(identity: str, status: int) -> dict:
+            return {"as": identity, "request": {"method": "GET", "url": "/docs/2"},
+                    "response": {"status": status}, "error": None}
+
+        return {"sequence_id": sequence_id,
+                "steps": [step("anonymous", 401), step("attacker", 200)]}
+
+    def _proven(self, entry: dict) -> bool:
+        return core._proven_under_same_login(
+            entry, {"checks": []}, {}, [self._record("s1")], {"attacker"})
+
+    def test_control_a_2xx_in_the_same_sequence_proves_it(self) -> None:
+        self.assertTrue(self._proven({"identity": "attacker", "sequence_id": "s1"}))
+
+    def test_a_2xx_in_another_sequence_does_not(self) -> None:
+        self.assertFalse(self._proven({"identity": "attacker", "sequence_id": "s2"}))
+
+    def test_nothing_at_run_level_proves_a_check_denial(self) -> None:
+        self.assertFalse(self._proven({"identity": "attacker", "check_id": "c"}))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class ReloginLivenessProofTest(unittest.TestCase):
+    """``"reestablish": "check"``: an earlier login's proof does not cover a later one.
+
+    The marker control runs once, under the login before the first check; each
+    check then logs in again. A re-login the target answered with a cookie it
+    treats as anonymous drew the 404 the declaration lists, and the denial was
+    graded safe with ``liveness.unproven`` empty, on the strength of the first
+    login's marker -- or of a 2xx in an earlier check under its own login.
+    """
+
+    @staticmethod
+    def _execute(sids: list[str], *, own_doc_check: bool = False,
+                 marker: bool = True, reestablish: str = "check", idor: bool = True):
+        logins: list[str] = []
+
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                if who == "victim":
+                    return 200, [("Set-Cookie", "sid=victim; Path=/")], b"ok"
+                sid = sids[min(len(logins), len(sids) - 1)]
+                logins.append(sid)
+                return 200, [("Set-Cookie", f"sid={sid}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "victim") or (
+                    not idor and sid == "attacker" and entry["path"] == "/docs/1"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            body = {"/m": {"m": MARKER_ATTACKER if sid == "attacker" else MARKER_VICTIM},
+                    "/docs/2": {"provenance": MARKER_ATTACKER}}.get(
+                        entry["path"], {"provenance": MARKER_VICTIM})
+            return 200, [("Content-Type", "application/json")], json.dumps(body).encode()
+
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            if marker:
+                identity["marker_probe"] = {"method": "GET", "path": "/m"}
+            identity["session"]["reestablish"] = reestablish
+        checks = []
+        if own_doc_check:
+            checks.append({"id": "own-doc", "request": {"method": "GET", "path": "/docs/2"},
+                           "expect": {"attacker": {"status": [200]},
+                                      "victim": {"status": [200]}}})
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        checks.append(check)
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": checks}
+        with _server(responder) as (url, _log):
+            result, _sessions, _ = _run(config, url)
+        unproven = [entry for entry in result["liveness"]["unproven"]
+                    if entry["identity"] == "attacker"]
+        return result, logins, unproven
+
+    def test_control_every_login_real_the_idor_is_confirmed(self) -> None:
+        result, logins, _unproven = self._execute(["attacker"])
+        self.assertEqual(logins, ["attacker", "attacker"])
+        verdict = _finding_map(result)[("cross-tenant-doc-read", "attacker")]
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable"))
+
+    def test_a_guest_relogin_is_not_proven_by_the_first_logins_marker(self) -> None:
+        result, logins, unproven = self._execute(["attacker", "guest"])
+        self.assertEqual(logins, ["attacker", "guest"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual([entry["check_id"] for entry in unproven], ["cross-tenant-doc-read"])
+        self.assertIn('"reestablish": "check"', unproven[0]["remediation"])
+
+    def test_a_guest_relogin_is_not_proven_by_an_earlier_checks_2xx(self) -> None:
+        result, logins, unproven = self._execute(
+            ["attacker", "attacker", "guest"], own_doc_check=True, marker=False)
+        self.assertEqual(logins, ["attacker", "attacker", "guest"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual([entry["check_id"] for entry in unproven], ["cross-tenant-doc-read"])
+
+    def test_control_one_login_for_the_run_is_proven_by_its_marker(self) -> None:
+        """Without a re-login the marker proves the login every request used."""
+        result, logins, unproven = self._execute(["attacker"], reestablish="run", idor=False)
+        self.assertEqual(logins, ["attacker"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(unproven, [])
+
+    def test_a_relogin_denial_is_disclosed_even_when_every_login_is_real(self) -> None:
+        """The behaviour change: no proof under the login the probe used is listed.
+
+        Every login here is real and the boundary holds, but nothing measured
+        that under the check's own login: the marker ran under the first one,
+        and the fabricated credential drew the same 404.
+        """
+        result, logins, unproven = self._execute(["attacker"], idor=False)
+        self.assertEqual(logins, ["attacker", "attacker"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual([entry["check_id"] for entry in unproven], ["cross-tenant-doc-read"])
+
+
+# --------------------------------------------------------------------------
+# A proof made of several cookies stops being one when they disagree
+# --------------------------------------------------------------------------
+
+
+def _harvested_session(base_url: str, *set_cookies: str) -> sequence.IdentitySession:
+    """establish() with the login answered in process by these Set-Cookie headers.
+
+    Parsed by the jar from a response, as a real login is, so ``Domain=`` and
+    ``Path=`` attributes mean what they mean on the wire.
+    """
+    session = sequence.IdentitySession(
+        "attacker",
+        {"headers": {}, "session": {"login": _login(), "establishes": {"cookie": "sid"}}},
+        base_url, 5, {},
+    )
+
+    def perform(base_url, timeout, request_config, identity, *, session=None, **_):
+        session.harvest(_Response(*set_cookies), Request(f"{base_url}/login", method="POST"))
+        return {
+            "request": {"method": "POST", "url": f"{base_url}/login"},
+            "response": {"status": 200, "duration_ms": 1, "body_bytes": 2,
+                         "body_sha256": "0" * 64},
+            "error": None,
+        }
+
+    with patch.object(core, "_perform_request", perform):
+        session.establish()
+    return session
+
+
+class ProofCookiesDisagreeTest(unittest.TestCase):
+    """The cookies that proved a session must still carry one value.
+
+    A login that sets the proving cookie twice with one value -- on two paths,
+    or host-only and with ``Domain=`` -- establishes, and both copies are the
+    proof. A later response replaced one copy with ``sid=guest``. The attach
+    check compared the request against every proof value, so the guest was not
+    "another" value, and /docs/1 went out as ``sid=guest; sid=attacker``: safe
+    2, vulnerable 0, ``liveness.unproven`` empty against a server that reads
+    the first occurrence. establish() refuses two values under the proving name
+    at login; the same rule now holds on every request after it.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+
+    def _two_paths(self, *later) -> sequence.IdentitySession:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"),
+                                   _cookie("sid", "attacker", path="/docs"))
+        self.assertEqual(session.state, "established", session.reason)
+        for cookie in later:
+            session.jar.set_cookie(cookie)
+        return session
+
+    def _attach(self, session: sequence.IdentitySession, url: str):
+        request = Request(url, method="GET")
+        return session.attach_cookies(request), request.get_header("Cookie")
+
+    def test_one_proof_path_replaced_with_another_value_is_refused(self) -> None:
+        session = self._two_paths(_cookie("sid", "guest", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_also_where_only_the_unchanged_copy_would_go_out(self) -> None:
+        """Behaviour change: the session is ambiguous, not only this request."""
+        session = self._two_paths(_cookie("sid", "guest", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/m")
+        self.assertEqual(cookie, "sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_the_same_value_set_again_goes_out(self) -> None:
+        session = self._two_paths(_cookie("sid", "attacker", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=attacker; sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_both_copies_rotated_to_one_new_value_go_out(self) -> None:
+        session = self._two_paths(_cookie("sid", "rotated"),
+                                  _cookie("sid", "rotated", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=rotated; sid=rotated")
+        self.assertIsNone(reason)
+
+    def test_control_another_name_on_the_proof_path_goes_out(self) -> None:
+        session = self._two_paths(_cookie("other", "guest", path="/docs"))
+        reason, _cookie_header = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertIsNone(reason)
+
+    def test_a_host_only_and_a_domain_copy_that_disagree_are_refused(self) -> None:
+        session = _harvested_session(
+            "http://app.example.test",
+            "sid=attacker; Path=/", "sid=attacker; Domain=example.test; Path=/")
+        self.assertEqual(session.state, "established", session.reason)
+        self.assertEqual(len(session._proof), 2)
+        self.assertIsNone(self._attach(session, "http://app.example.test/docs/1")[0])
+        session.harvest(_Response("sid=guest; Domain=example.test; Path=/"),
+                        Request("http://app.example.test/m", method="GET"))
+        reason, cookie = self._attach(session, "http://app.example.test/docs/1")
+        self.assertEqual(sorted(cookie.split("; ")), ["sid=attacker", "sid=guest"])
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+
+class CaseVariantCookieNameTest(unittest.TestCase):
+    """A second value under the proof's name in another case is a second value.
+
+    ``SID=guest; Path=/docs`` beside ``sid=attacker`` went out as
+    ``SID=guest; sid=attacker``: the jar keeps them apart, and the same-name
+    check compared names exactly. A server that folds cookie names and reads
+    the first occurrence authenticated the guest, whose 404 matched the
+    declared denial (safe 2, vulnerable 0).
+    """
+
+    _attach = SameNamedCookieOnTheRequestTest._attach
+    COOKIE = SameNamedCookieOnTheRequestTest.COOKIE
+
+    def test_a_case_variant_name_beside_the_proof_is_refused(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("SID", "guest", path="/docs"))
+        self.assertEqual(cookie, "SID=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_a_case_variant_beside_a_carried_csrf_cookie_is_refused(self) -> None:
+        self.assertEqual(
+            SameNamedCookieOnTheRequestTest._csrf(
+                self, _cookie("CSRFTOKEN", "other", path="/docs")),
+            "session_cookie_ambiguous")
+
+    def test_control_another_name_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("XID", "guest", path="/docs"))
+        self.assertEqual(cookie, "XID=guest; sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_a_case_variant_with_the_proofs_value_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("SID", "attacker", path="/docs"))
+        self.assertEqual(cookie, "SID=attacker; sid=attacker")
+        self.assertIsNone(reason)
+
+    def _attach_named(self, proof: str, later) -> tuple:
+        """The same, for a proof cookie named ``proof`` rather than ``sid``."""
+        session = _offline_session(
+            {"login": _login(), "establishes": {"cookie": proof}},
+            _cookie(proof, "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        session.jar.set_cookie(later)
+        request = Request("http://127.0.0.1:1/docs/1", method="GET")
+        return session.attach_cookies(request), request.get_header("Cookie")
+
+    def test_an_upper_case_proof_name_is_folded_too(self) -> None:
+        """Only the sent name was lowercased once; ``sid`` hid that."""
+        for later in ("JSESSIONID", "jsessionid"):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    "JSESSIONID", _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; JSESSIONID=attacker")
+                self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_an_upper_case_proof_beside_another_name_goes_out(self) -> None:
+        reason, cookie = self._attach_named(
+            "JSESSIONID", _cookie("XSESSIONID", "guest", path="/docs"))
+        self.assertEqual(cookie, "XSESSIONID=guest; JSESSIONID=attacker")
+        self.assertIsNone(reason)
+
+
+class FoldedCookieNameTest(unittest.TestCase):
+    """A name PHP folds onto the proof's is a second value under it.
+
+    PHP 8.5 stores ``s.id`` and ``s id`` as ``s_id`` and ``sid[x]`` as an
+    array under ``sid``. Measured against ``php -S``: ``sid[x]=guest`` beside
+    ``sid=attacker`` left no session string, ``s.id=guest`` beside
+    ``s_id=attacker`` read as ``s_id=guest``, and either 404 matched the
+    declared denial (safe 2, vulnerable 0, ``liveness.unproven`` empty).
+    """
+
+    _attach_named = CaseVariantCookieNameTest._attach_named
+
+    def test_a_bracketed_name_beside_the_proof_is_refused(self) -> None:
+        reason, cookie = self._attach_named("sid", _cookie("sid[x]", "guest", path="/docs"))
+        self.assertEqual(cookie, "sid[x]=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_a_dot_or_space_name_beside_an_underscore_proof_is_refused(self) -> None:
+        for later in ("s.id", "s id", "S.ID"):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    "s_id", _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; s_id=attacker")
+                self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_an_unclosed_bracket_beside_an_underscore_proof_is_refused(self) -> None:
+        # PHP 8.5 reads an unclosed "[" as "_": Cookie "s[id=guest; s_id=attacker"
+        # gave $_COOKIE {"s_id": "guest"}, and the guest's 404 matched the
+        # declared denial when only the cut-at-"[" reading was compared.
+        reason, cookie = self._attach_named("s_id", _cookie("s[id", "guest", path="/docs"))
+        self.assertEqual(cookie, "s[id=guest; s_id=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_names_php_keeps_apart_go_out(self) -> None:
+        for proof, later in (("s_id", "s-id"), ("sid", "sidx"), ("sid", "x[sid]")):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    proof, _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; {proof}=attacker")
+                self.assertIsNone(reason)
+
+    def test_control_a_folded_name_with_the_proofs_value_goes_out(self) -> None:
+        reason, cookie = self._attach_named("s_id", _cookie("s.id", "attacker", path="/docs"))
+        self.assertEqual(cookie, "s.id=attacker; s_id=attacker")
+        self.assertIsNone(reason)
+
+
+class IPv6LiteralTargetTest(unittest.TestCase):
+    """A base_url naming an IPv6 literal gets a working jar, and only for that host.
+
+    The policy's host came from urlsplit().hostname ('::1') and the request's
+    from http.cookiejar.request_host() ('[::1]'), so set_ok refused every
+    cookie and a session against http://[::1]:port never established
+    (not_established, nothing graded). It failed closed; it also never worked.
+    """
+
+    def test_a_session_against_an_ipv6_literal_establishes_and_sends(self) -> None:
+        session = _harvested_session("http://[::1]:8080", "sid=attacker; Path=/")
+        self.assertEqual(session.state, "established", session.reason)
+        request = Request("http://[::1]:8080/docs/1", method="GET")
+        self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_the_policy_recognises_its_own_ipv6_host(self) -> None:
+        v6 = sequence._SameOriginCookiePolicy("::1")
+        self.assertTrue(v6._is_target(Request("http://[::1]:8080/", method="GET")))
+
+    def test_control_another_host_is_still_refused_both_ways(self) -> None:
+        session = sequence.IdentitySession(
+            "attacker", {"headers": {}, "session": {"login": _login(),
+                                                    "establishes": {"cookie": "sid"}}},
+            "http://[::1]:8080", 5, {})
+        for url in ("http://[::2]:8080/m", "http://127.0.0.1:8080/m",
+                    "http://[::1:0]:8080/m"):
+            # A response from another host sets nothing ...
+            session.harvest(_Response("planted=1; Path=/"), Request(url, method="GET"))
+        self.assertEqual(list(session.jar), [])
+        # ... and a cookie the jar holds goes to no other host.
+        session.jar.set_cookie(http.cookiejar.Cookie(
+            0, "sid", "attacker", None, False, "::1", False, False, "/", True,
+            False, int(time.time()) + 100, False, None, None, {}))
+        for url in ("http://[::2]:8080/docs/1", "http://127.0.0.1:8080/docs/1"):
+            other = Request(url, method="GET")
+            session.jar.add_cookie_header(other)
+            self.assertIsNone(other.get_header("Cookie"), url)
+
+    def test_control_the_bracket_rule_does_not_widen_other_targets(self) -> None:
+        policy = sequence._SameOriginCookiePolicy("127.0.0.1")
+        self.assertFalse(policy._is_target(Request("http://[::1]:8080/", method="GET")))
+        self.assertTrue(policy._is_target(Request("http://127.0.0.1:8080/", method="GET")))
+        v6 = sequence._SameOriginCookiePolicy("::1")
+        self.assertFalse(v6._is_target(Request("http://[::1:0]:8080/", method="GET")))
+        self.assertFalse(v6._is_target(Request("http://127.0.0.1:8080/", method="GET")))
+
+
+class SessionEpochTest(unittest.TestCase):
+    """Which credential a session is sending, as a counter liveness compares.
+
+    A response that replaced the proof cookie (same name, domain and path) was
+    treated as rotation, and the marker_probe taken before it went on proving
+    denials drawn after it. Each login, and each change of the proof cookie's
+    value, now starts a new epoch.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+
+    def _harvest(self, session: sequence.IdentitySession, *set_cookies: str) -> None:
+        session.harvest(_Response(*set_cookies), Request("http://127.0.0.1:1/m", method="GET"))
+
+    def _session(self) -> sequence.IdentitySession:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        return session
+
+    def test_a_new_value_for_the_proof_cookie_starts_a_new_epoch(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "sid=guest; Path=/")
+        self.assertEqual(session.epoch, before + 1)
+
+    def test_a_login_starts_a_new_epoch(self) -> None:
+        session = self._session()
+        before = session.epoch
+        with patch.object(core, "_perform_request", lambda *a, **k: {
+                "request": {"method": "POST", "url": "http://127.0.0.1:1/login"},
+                "response": {"status": 200, "duration_ms": 1, "body_bytes": 0,
+                             "body_sha256": "0" * 64},
+                "error": None}):
+            session.establish()
+        self.assertGreater(session.epoch, before)
+
+    def test_control_the_same_value_set_again_keeps_the_epoch(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "sid=attacker; Path=/; Max-Age=500")
+        self.assertEqual(session.epoch, before)
+
+    def test_control_other_cookies_keep_the_epoch(self) -> None:
+        """Another name, or the proof's name on a path that is not the proof's."""
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "csrftoken=x; Path=/", "sid=guest; Path=/docs")
+        self.assertEqual(session.epoch, before)
+
+    def test_a_proof_cookie_the_jar_drops_starts_a_new_epoch(self) -> None:
+        """A browser ignores the bad Max-Age and keeps ``sid=attacker2``.
+
+        http.cookiejar drops the whole cookie, so ``sid=attacker`` goes on
+        being sent. If the target rotated, that value may be dead, and the
+        epoch stayed put: safe 2, ``liveness.unproven`` empty.
+        """
+        for attribute in ("Max-Age=3600.5", "Max-Age=abc"):
+            with self.subTest(attribute=attribute):
+                session = self._session()
+                before = session.epoch
+                self._harvest(session, f"sid=attacker2; Path=/; {attribute}")
+                self.assertEqual(session._proof_values(), ["attacker"])
+                self.assertEqual(session.epoch, before + 1)
+                self.assertEqual(session.note, sequence.PROOF_COOKIE_DROPPED)
+                self.assertEqual(session.report()["note"], sequence.PROOF_COOKIE_DROPPED)
+
+    def test_the_same_for_a_name_that_folds_onto_the_proofs(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "SID=guest; Path=/; Max-Age=abc")
+        self.assertEqual(session.epoch, before + 1)
+
+    def test_control_set_cookies_the_jar_keeps_or_that_delete_leave_no_note(self) -> None:
+        """Kept, deleting, or dropped under another name: no new epoch, no note."""
+        for set_cookie in ("sid=attacker; Path=/; Max-Age=abc",
+                           "sid=x; Path=/docs; Max-Age=0",
+                           "sid=deleted; Path=/docs; Expires=Thu, 01 Jan 1970 00:00:01 GMT",
+                           "other=x; Path=/; Max-Age=abc",
+                           "sid=guest; Path=/docs; Max-Age=60"):
+            with self.subTest(set_cookie=set_cookie):
+                session = self._session()
+                before = session.epoch
+                self._harvest(session, set_cookie)
+                self.assertEqual(session._proof_values(), ["attacker"])
+                self.assertEqual(session.epoch, before)
+                self.assertIsNone(session.note)
+
+    def test_control_a_rotation_the_jar_takes_leaves_no_note(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "sid=attacker2; Path=/; Max-Age=3600")
+        self.assertEqual(session._proof_values(), ["attacker2"])
+        self.assertEqual(session.epoch, before + 1)
+        self.assertIsNone(session.note)
+
+    def test_stamp_records_the_epoch_a_request_went_out_under(self) -> None:
+        session = self._session()
+        session.stamp(("marker",))
+        self._harvest(session, "sid=guest; Path=/")
+        session.stamp(("check", "c"))
+        self.assertEqual(session.sent_epochs[("check", "c")],
+                         session.sent_epochs[("marker",)] + 1)
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class StaleCookieLivenessProofTest(unittest.TestCase):
+    """Liveness proven under one value of the proof cookie does not cover another.
+
+    The attacker logs in with ``sid=attacker``; its marker probe (GET /m) runs
+    once before the checks, and in these scenarios its response replaces the
+    cookie on the same path. The target refuses the attacker on /docs/1 with a
+    404 and refuses an unknown or guest session with the same 404, so a working
+    boundary and a downgraded session look the same there.
+    """
+
+    @staticmethod
+    def _execute(late: str | None, *, own_doc_check: bool = False, idor: bool = False):
+        def responder(entry: dict):
+            who = _who(entry)
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sids = [part.strip()[4:] for part in entry["cookie"].split(";")
+                    if part.strip().startswith("sid=")]
+            sid = sids[0] if sids else None
+            if sid not in ("attacker", "attacker2", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            if entry["path"] == "/m":
+                headers = list(json_type)
+                if who == "attacker" and late:
+                    headers.append(("Set-Cookie", late))
+                owner = MARKER_VICTIM if sid == "victim" else MARKER_ATTACKER
+                return 200, headers, json.dumps({"m": owner}).encode()
+            if entry["path"] == "/docs/2":
+                return 200, json_type, json.dumps({"provenance": MARKER_ATTACKER}).encode()
+            if sid != "victim" and not idor:
+                return 404, json_type, b'{"e":"denied"}'
+            return 200, json_type, json.dumps({"provenance": MARKER_VICTIM}).encode()
+
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        checks = [check]
+        if own_doc_check:
+            checks.append({"id": "own-doc", "request": {"method": "GET", "path": "/docs/2"},
+                           "expect": {"attacker": {"status": [200]},
+                                      "victim": {"status": [200]}}})
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": checks}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        sent = [entry["cookie"] for entry in log.entries
+                if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        unproven = [entry for entry in result["liveness"]["unproven"]
+                    if entry["identity"] == "attacker"]
+        return result, sent, unproven
+
+    def test_control_nothing_replaced_the_marker_proves_the_denial(self) -> None:
+        result, sent, unproven = self._execute(None)
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(unproven, [])
+
+    def test_control_the_same_value_set_again_keeps_the_proof(self) -> None:
+        _result, sent, unproven = self._execute("sid=attacker; Path=/")
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(unproven, [])
+
+    def test_a_guest_session_after_the_marker_is_disclosed(self) -> None:
+        result, sent, unproven = self._execute("sid=guest; Path=/")
+        self.assertEqual(sent, ["sid=guest"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual([(entry["check_id"], entry.get("proof_scope"))
+                          for entry in unproven],
+                         [("cross-tenant-doc-read", "cookie_value")])
+        self.assertIn("different value", unproven[0]["remediation"])
+        self.assertNotIn("Give 'attacker' a marker_probe", unproven[0]["remediation"])
+
+    def test_the_same_where_the_route_is_a_live_idor(self) -> None:
+        """The round-3 shape: a real session reads /docs/1, the guest gets 404."""
+        _result, sent, unproven = self._execute("sid=guest; Path=/", idor=True)
+        self.assertEqual(sent, ["sid=guest"])
+        self.assertEqual([entry["check_id"] for entry in unproven],
+                         ["cross-tenant-doc-read"])
+
+    def test_a_rotation_is_disclosed_too(self) -> None:
+        """Behaviour change: rotation and a downgrade are indistinguishable here."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/")
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+
+    def test_a_rotation_the_jar_drops_is_disclosed(self) -> None:
+        """The old value keeps going out, and nothing says the target still takes it."""
+        for attribute in ("Max-Age=3600.5", "Max-Age=abc"):
+            with self.subTest(attribute=attribute):
+                result, sent, unproven = self._execute(f"sid=attacker2; Path=/; {attribute}")
+                self.assertEqual(sent, ["sid=attacker"])
+                self.assertEqual(result["summary"]["vulnerable"], 0)
+                self.assertEqual([(entry["check_id"], entry.get("proof_scope"))
+                                  for entry in unproven],
+                                 [("cross-tenant-doc-read", "cookie_value")])
+
+    def test_control_a_2xx_under_the_new_value_proves_it(self) -> None:
+        """Served on /docs/2 as attacker2, where the fabricated credential is refused."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/", own_doc_check=True)
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual(unproven, [])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class ProofScopeGateAdviceTest(unittest.TestCase):
+    """Through the engine and the gate: the exit line says what proves each one.
+
+    The run-level advice said "Give the identity a marker_probe" for an
+    identity whose marker_probe already ran and could not count.
+    """
+
+    @staticmethod
+    def _line(result: dict) -> str:
+        from veridor import gate
+
+        messages = gate.evaluate(result, require_complete=True).messages
+        return next(line for line in messages if "satisfied by a denial" in line)
+
+    def test_a_relogin_identity(self) -> None:
+        result, _logins, unproven = ReloginLivenessProofTest._execute(["attacker", "guest"])
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["login"])
+        line = self._line(result)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn('"reestablish": "run"', line)
+
+    def test_a_replaced_cookie(self) -> None:
+        result, _sent, unproven = StaleCookieLivenessProofTest._execute("sid=guest; Path=/")
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+        line = self._line(result)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn("a 2xx sent after the change", line)
+
+    def test_control_no_marker_probe_is_told_to_add_one(self) -> None:
+        result, _logins, unproven = ReloginLivenessProofTest._execute(
+            ["attacker"], marker=False, reestablish="run", idor=False)
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], [None])
+        self.assertIn("Give the identity a marker_probe naming something it should be "
+                      "served, or accept", self._line(result))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class StaleCookieSequenceLivenessTest(unittest.TestCase):
+    """Inside a sequence: a 2xx before the cookie changed does not prove a step after.
+
+    Step 0 serves the attacker GET /m and, in the defect scenario, replaces its
+    cookie with ``sid=guest``; step 1 shows an identity with no credential is
+    refused on the same request, which is what makes step 0's 2xx proof; step 2
+    asserts the attacker is refused on /docs/1, and a guest session is refused
+    there too.
+    """
+
+    @staticmethod
+    def _execute(late: str | None):
+        def responder(entry: dict):
+            who = _who(entry) if entry["auth"] else "anonymous"
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            if entry["path"] == "/m":
+                headers = list(json_type)
+                if who == "attacker" and late:
+                    headers.append(("Set-Cookie", late))
+                return 200, headers, b'{"m":"ok"}'
+            if sid == "attacker":
+                return 404, json_type, b'{"e":"denied"}'
+            return 200, json_type, json.dumps({"provenance": MARKER_VICTIM}).encode()
+
+        identities = _identities(sessions=True, marker=False)
+        identities["anonymous"] = {"headers": {}}
+        steps = [
+            {"role": "setup", "as": "attacker", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "anonymous", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [404]}},
+            {"role": "assert", "as": "attacker",
+             "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [403, 404]}},
+        ]
+        config = {"version": 2,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [],
+                  "sequences": [{"id": "seq", "steps": steps}]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        sent = [entry["cookie"] for entry in log.entries
+                if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        return result, sent, result["liveness"]["unproven"]
+
+    def test_control_nothing_replaced_the_earlier_step_proves_the_assert(self) -> None:
+        result, sent, unproven = self._execute(None)
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual(unproven, [])
+
+    def test_a_guest_cookie_after_the_earlier_step_is_disclosed(self) -> None:
+        result, sent, unproven = self._execute("sid=guest; Path=/")
+        self.assertEqual(sent, ["sid=guest"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual([(entry["identity"], entry.get("step_index"), entry.get("proof_scope"))
+                          for entry in unproven], [("attacker", 2, "cookie_value")])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SessionOnlySequenceLivenessTest(unittest.TestCase):
+    """The same for identities whose only credential is the session cookie.
+
+    StaleCookieSequenceLivenessTest's identities also send a static
+    Authorization header, which is what put their assert step in the liveness
+    plan at all. Here they send nothing else: step 1's response replaces the
+    attacker's cookie, step 2 went out as ``sid=guest``, drew the 404 a guest
+    gets, and was graded matched with ``liveness.unproven`` empty.
+    """
+
+    @staticmethod
+    def _execute(late: str | None, *, prove_after: bool = False):
+        def responder(entry: dict):
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                who = "victim" if b"u=victim" in entry["body"] else "attacker"
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "attacker2", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            if entry["path"] == "/m":
+                headers = list(json_type)
+                if sid == "attacker" and late:
+                    headers.append(("Set-Cookie", late))
+                return 200, headers, b'{"m":"ok"}'
+            if entry["path"] == "/own" or sid == "victim":
+                return 200, json_type, json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 404, json_type, b'{"e":"denied"}'
+
+        def identity(who: str) -> dict:
+            return {"headers": {}, "session": {
+                "login": [{"method": "POST", "path": "/login", "body": f"u={who}",
+                           "expect_status": [200]}],
+                "establishes": {"cookie": "sid"}}}
+
+        identities = {"victim": identity("victim"), "attacker": identity("attacker"),
+                      "anonymous": {"headers": {}}}
+        steps = [
+            {"role": "setup", "as": "victim", "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "attacker", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [200]}},
+        ]
+        if prove_after:
+            steps += [
+                {"role": "setup", "as": "attacker",
+                 "request": {"method": "GET", "path": "/own"}, "expect": {"status": [200]}},
+                {"role": "setup", "as": "anonymous",
+                 "request": {"method": "GET", "path": "/own"}, "expect": {"status": [404]}},
+            ]
+        steps.append({"role": "assert", "as": "attacker",
+                      "request": {"method": "GET", "path": "/docs/1"},
+                      "expect": {"status": [403, 404]}})
+        config = {"version": 2,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [],
+                  "sequences": [{"id": "seq", "steps": steps}]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        sent = [entry["cookie"] for entry in log.entries
+                if entry["path"] == "/docs/1" and "victim" not in entry["cookie"]]
+        return result, sent, result["liveness"]["unproven"]
+
+    def test_control_nothing_replaced_the_login_proves_the_assert(self) -> None:
+        result, sent, unproven = self._execute(None)
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual(unproven, [])
+
+    def test_control_the_same_value_set_again_lists_nothing(self) -> None:
+        _result, sent, unproven = self._execute("sid=attacker; Path=/")
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(unproven, [])
+
+    def test_a_guest_cookie_before_the_assert_is_disclosed(self) -> None:
+        result, sent, unproven = self._execute("sid=guest; Path=/")
+        self.assertEqual(sent, ["sid=guest"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual([(entry["identity"], entry.get("step_index"), entry.get("proof_scope"))
+                          for entry in unproven], [("attacker", 2, "cookie_value")])
+        self.assertIn("different value", unproven[0]["remediation"])
+        self.assertNotIn("Give 'attacker' a marker_probe", unproven[0]["remediation"])
+
+    def test_the_same_for_a_rotation_the_jar_drops(self) -> None:
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/; Max-Age=abc")
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual([(entry.get("step_index"), entry.get("proof_scope"))
+                          for entry in unproven], [(2, "cookie_value")])
+
+    def test_control_a_2xx_after_the_change_proves_it(self) -> None:
+        """Served /own as attacker2, where an identity with no credential is refused."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/", prove_after=True)
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual(unproven, [])
+
+    def test_a_rotation_is_disclosed_too(self) -> None:
+        """Behaviour change: rotation and a downgrade are indistinguishable here."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/")
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class TeardownLivenessProofTest(unittest.TestCase):
+    """A teardown 2xx proves the session for the epoch it was sent in, and only that.
+
+    The attacker's cookie is rotated to ``sid=attacker2`` by step 1, so the
+    assert step (3) goes out in a later epoch than the login. An identity with
+    no credential is refused GET /own in step 2; the attacker is served GET
+    /own only in teardown. That 2xx is the one proof for the assert's epoch.
+    Nothing exercised the teardown half of the epoch stamp: deleting it, or
+    stamping teardown under the step key, passed every tier.
+    """
+
+    @staticmethod
+    def _execute(*, teardown: bool = True, rotate_on_assert: bool = False):
+        def responder(entry: dict):
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                who = "victim" if b"u=victim" in entry["body"] else "attacker"
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "attacker2", "attacker3", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            headers = list(json_type)
+            if entry["path"] == "/m" and sid == "attacker":
+                headers.append(("Set-Cookie", "sid=attacker2; Path=/"))
+            if entry["path"] == "/docs/1" and sid == "attacker2" and rotate_on_assert:
+                headers.append(("Set-Cookie", "sid=attacker3; Path=/"))
+            if entry["path"] in ("/m", "/own") or sid == "victim":
+                return 200, headers, json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 404, headers, b'{"e":"denied"}'
+
+        def identity(who: str) -> dict:
+            return {"headers": {}, "session": {
+                "login": [{"method": "POST", "path": "/login", "body": f"u={who}",
+                           "expect_status": [200]}],
+                "establishes": {"cookie": "sid"}}}
+
+        steps = [
+            {"role": "setup", "as": "victim", "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "attacker", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "anonymous", "request": {"method": "GET", "path": "/own"},
+             "expect": {"status": [404]}},
+            {"role": "assert", "as": "attacker",
+             "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [403, 404]}},
+        ]
+        sequence_config = {"id": "seq", "steps": steps}
+        if teardown:
+            sequence_config["teardown"] = [
+                {"as": "attacker", "request": {"method": "GET", "path": "/own"},
+                 "expect": {"status": [200]}}]
+        config = {"version": 2,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": {"victim": identity("victim"), "attacker": identity("attacker"),
+                                 "anonymous": {"headers": {}}},
+                  "checks": [], "sequences": [sequence_config]}
+        with _server(responder) as (url, log):
+            result, sessions, _ = _run(config, url)
+        wire = [(entry["path"], entry["cookie"]) for entry in log.entries
+                if entry["path"] in ("/docs/1", "/own") and "victim" not in entry["cookie"]]
+        return result, wire, sessions["attacker"]
+
+    def test_a_teardown_2xx_in_the_asserts_epoch_proves_it(self) -> None:
+        result, wire, session = self._execute()
+        self.assertEqual(wire, [("/own", ""), ("/docs/1", "sid=attacker2"),
+                                ("/own", "sid=attacker2")])
+        self.assertEqual(result["sequences"][0]["teardown"][0]["status"], 200)
+        self.assertEqual(result["liveness"]["unproven"], [])
+        self.assertEqual(session.sent_epochs.get(("teardown", "seq", 0)),
+                         session.sent_epochs[("step", "seq", 3)])
+
+    def test_control_without_the_teardown_the_assert_is_listed(self) -> None:
+        result, _wire, _session = self._execute(teardown=False)
+        self.assertEqual([(entry["step_index"], entry.get("proof_scope"))
+                          for entry in result["liveness"]["unproven"]],
+                         [(3, "cookie_value")])
+
+    def test_a_teardown_2xx_in_a_later_epoch_does_not_prove_it(self) -> None:
+        """The assert's response rotates again; teardown goes out as attacker3."""
+        result, wire, _session = self._execute(rotate_on_assert=True)
+        self.assertEqual(wire[-1], ("/own", "sid=attacker3"))
+        self.assertEqual([(entry["step_index"], entry.get("proof_scope"))
+                          for entry in result["liveness"]["unproven"]],
+                         [(3, "cookie_value")])
+
+
+class ServedWhereRefusedRequestKeyTest(unittest.TestCase):
+    """The request a proving 2xx names is keyed as the session stamped it. Socket-free."""
+
+    @staticmethod
+    def _records(served_in: str) -> list[dict]:
+        refused = {"index": 0, "as": "anonymous",
+                   "request": {"method": "GET", "url": "/own"},
+                   "response": {"status": 404}, "error": None}
+        served = {"index": 1 if served_in == "steps" else 0, "as": "attacker",
+                  "request": {"method": "GET", "url": "/own"}, "error": None}
+        if served_in == "steps":
+            served["response"] = {"status": 200}
+            return [{"sequence_id": "seq", "steps": [refused, served], "teardown": []}]
+        served["status"] = 200
+        return [{"sequence_id": "seq", "steps": [refused], "teardown": [served]}]
+
+    def _proofs(self, records: list[dict]) -> list:
+        return core._served_where_refused({"checks": []}, (), {}, records, {"attacker"})
+
+    def test_a_teardown_2xx_names_its_teardown_entry(self) -> None:
+        self.assertEqual(self._proofs(self._records("teardown")),
+                         [("attacker", ("teardown", "seq", 0))])
+
+    def test_control_a_step_2xx_names_its_step(self) -> None:
+        self.assertEqual(self._proofs(self._records("steps")),
+                         [("attacker", ("step", "seq", 1))])
+
+
+class ReplacedCookieSequenceStepsTest(unittest.TestCase):
+    """Which steps the run-level pass considers, read off the config. Socket-free."""
+
+    CONFIG = {
+        "identities": {
+            "cookie": {"headers": {}, "session": {"login": [], "establishes": {"cookie": "sid"}}},
+            "static": {"headers": {"Authorization": "Bearer x"},
+                       "session": {"login": [], "establishes": {"cookie": "sid"}}},
+        },
+        "sequences": [{"id": "s", "steps": [
+            {"role": "assert", "as": "cookie", "request": {"method": "get", "path": "/a"},
+             "expect": {"status": [403, 404]}},
+            {"role": "assert", "as": "static", "request": {"path": "/b"},
+             "expect": {"status": [404]}},
+            {"role": "setup", "as": "cookie", "request": {"path": "/c"},
+             "expect": {"status": [404]}},
+            {"role": "assert", "as": "cookie", "request": {"path": "/d"},
+             "expect": {"status": [200, 404]}},
+        ]}],
+    }
+
+    def test_only_a_session_only_denial_only_assert_sent_after_the_change(self) -> None:
+        self.assertEqual(
+            core._replaced_cookie_sequence_steps(self.CONFIG, lambda identity, request: True),
+            [("s", 0, "GET", "/a", (403, 404))])
+
+    def test_control_nothing_replaced_lists_nothing(self) -> None:
+        asked = []
+        self.assertEqual(core._replaced_cookie_sequence_steps(
+            self.CONFIG, lambda identity, request: asked.append((identity, request)) or False),
+            [])
+        self.assertEqual(asked, [("cookie", ("step", "s", 0))])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class ProofCookiesDisagreeEndToEndTest(unittest.TestCase):
+    """The same through the engine: a server that authenticates the first ``sid``.
+
+    The attacker's login sets ``sid=attacker`` on / and on /docs. Its marker
+    probe's response then sets ``late``; /docs/1 is an IDOR any logged-in caller
+    reads, and a request whose first ``sid`` is not a session gets 404.
+    """
+
+    @staticmethod
+    def _execute(late: str):
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", f"sid={who}; Path=/"),
+                             ("Set-Cookie", f"sid={who}; Path=/docs")], b"ok"
+            sids = [part.strip()[4:] for part in entry["cookie"].split(";")
+                    if part.strip().startswith("sid=")]
+            if not sids or sids[0] not in ("attacker", "victim"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            headers = [("Content-Type", "application/json")]
+            if entry["path"] == "/m":
+                if who == "attacker":
+                    headers.append(("Set-Cookie", late))
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, headers, json.dumps({"m": owner}).encode()
+            return 200, headers, json.dumps({"provenance": MARKER_VICTIM}).encode()
+
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [check]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        probes = [entry["cookie"] for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        return result, probes, _finding_map(result).get(("cross-tenant-doc-read", "attacker"))
+
+    def test_control_a_later_cookie_of_another_name_leaves_the_idor_confirmed(self) -> None:
+        result, probes, verdict = self._execute("other=guest; Path=/docs")
+        self.assertEqual(probes, ["sid=attacker; other=guest; sid=attacker"])
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable"))
+
+    def test_a_guest_value_on_one_proof_path_sends_nothing(self) -> None:
+        result, probes, verdict = self._execute("sid=guest; Path=/docs")
+        self.assertEqual(probes, [], "the probe reached the target as the guest")
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn("no longer carry one value", verdict["message"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(result["summary"]["safe"], 1)  # the victim's alone
+
+
 if __name__ == "__main__":
     unittest.main()

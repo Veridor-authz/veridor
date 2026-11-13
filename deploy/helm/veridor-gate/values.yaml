@@ -148,12 +148,16 @@ gate:
   # presents a credential, where some identity was served in the same check
   # or sequence, not proven live elsewhere (a 2xx on a request where an
   # identity with no credential, or the fabricated credential, was refused;
-  # or its marker_probe), and the fabricated credential drew the same denial,
-  # none was sent (only GET, HEAD and OPTIONS get one, and only when an
-  # identity declares a credential header; never on a write or in a
+  # or its marker_probe; for a session, either one only under the same login
+  # and session cookie value), and the fabricated credential drew the same
+  # denial, none was sent (only GET, HEAD and OPTIONS get one, and only when
+  # an identity declares a credential header; never on a write or in a
   # sequence), its request failed, or its answer was neither a refusal nor a
-  # success; give that identity a marker_probe); README "Exit 3" has the
-  # rest. ON
+  # success; give that identity a marker_probe; for one with "reestablish":
+  # "check" a marker_probe proves only the first login, so use "reestablish":
+  # "run" or show it served in the same sequence, and one whose session
+  # cookie the target replaced needs a 2xx sent after the change); README
+  # "Exit 3" has the rest. ON
   # here, as in the GitHub Action: selecting a gate is the request for a
   # gate. false lets a partially measured run pass; a run where NOTHING
   # answered still exits 3.

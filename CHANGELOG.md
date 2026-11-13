@@ -16,6 +16,212 @@ something you installed.
 
 ### Security
 
+- **A session proved by two copies of its cookie kept sending after one copy
+  changed.** A login that set `sid=attacker` on `/` and on `/docs` (or
+  host-only and with `Domain=`) established, with both copies as the proof. A
+  later response set `sid=guest; Path=/docs`, replacing one copy, and
+  `/docs/1` went out as `Cookie: sid=guest; sid=attacker`. The refusal of a
+  second value beside the proof (next entry) compared the request with every
+  proof value, and the guest was one of them, so it found nothing different. A
+  server that reads the first occurrence authenticated the guest, whose `404`
+  matched the declared denial (reproduced: safe 2, vulnerable 0,
+  `liveness.unproven` empty; with `other=guest` instead, `VERIDOR-AUTHZ-001`
+  confirmed). Once the cookies that proved a session no longer carry one
+  value, every request of that session is now refused as
+  `session_cookie_ambiguous`, the rule a login already followed. Behaviour
+  change: that includes a request that only the unchanged copy would reach.
+- **A second value under the session cookie's name in another case was not
+  refused.** `SID=guest; Path=/docs` beside `sid=attacker` went out as
+  `Cookie: SID=guest; sid=attacker`: the jar keeps the two names apart, and the
+  refusal of a second value compared names exactly. A server that folds cookie
+  names and reads the first occurrence authenticated the guest (reproduced:
+  safe 2, vulnerable 0; with `XID=guest`, `VERIDOR-AUTHZ-001` confirmed). Names
+  now compare without case for that refusal, for the proof cookie and for a
+  cookie a `${capture.…}` value was read from. Behaviour change: a server that
+  keeps case apart, and would have read the right one, now gets
+  `inconclusive` for such a request too.
+- **A name PHP folds onto the session cookie's was not a second value.**
+  The same refusal compared names only without case. PHP reads a cookie named
+  `s.id` or `s id` as `s_id`, and `sid[x]` as an array under `sid`. Measured
+  against PHP 8.5's built-in server: `sid[x]=guest` beside `sid=attacker`, and
+  `s.id=guest` beside `s_id=attacker`, went out, the target read no session or
+  the guest's, and its `404` matched the declared denial (safe 2, vulnerable
+  0, `liveness.unproven` empty; with `other=guest`, `VERIDOR-AUTHZ-001`
+  confirmed). Names are now also compared with `.` and space read as `_`, and
+  a `[` read both as the end of the name and as `_` (PHP 8.5 stores an
+  unclosed `s[id` as `s_id`, measured the same way), and these requests are
+  refused as `session_cookie_ambiguous`. Behaviour change: a server that keeps those
+  names apart gets `inconclusive` for such a request too.
+- **A session cookie replaced after the marker probe kept the marker's
+  liveness proof.** A response that gives the cookie that established the
+  session a different value on the same name, domain and path is treated as
+  rotation, and requests go out with the new value. A target that swapped the
+  session for an anonymous one looks the same: the marker probe's response
+  set `sid=guest; Path=/`, the check went out as `sid=guest`, drew the `404`
+  the declaration lists, and was graded `safe` with `liveness.unproven` empty
+  on the strength of the marker probe taken under `sid=attacker`
+  (reproduced: safe 2, vulnerable 0; with the cookie left alone the marker
+  proves it, and on a route that is a live IDOR the guest's `404` hid it the
+  same way). A 2xx sent with the old value cancelled the disclosure the same
+  way, in a check or a sequence. Liveness evidence now counts only for
+  requests sent with the same value of that cookie: each login and each change
+  of its value starts a new session epoch, and the `marker_probe` and every
+  2xx prove only the epoch they were sent in. A denial with no proof in its
+  own epoch is listed in `liveness.unproven` with `"proof_scope":
+  "cookie_value"` and advice to prove the new value; a 2xx sent with the new
+  value, where an identity with no credential or the fabricated credential is
+  refused, proves it. Behaviour change: a target that rotates the session
+  cookie after the marker probe now has those denials listed as unproven, and
+  under `--require-complete` exits `3`, unless something proves the new value.
+  A `"reestablish": "check"` identity's unproven denials carry `"proof_scope":
+  "login"`. Not detected, and now said in the README: a credential the target
+  revokes during the run without changing anything Veridor sees, such as a
+  bearer token or static header, or a session revoked server-side while its
+  cookie keeps its value; the marker probe's evidence still counts for it
+  (measured: safe 2, vulnerable 0, `liveness.unproven` empty).
+- **A rotated session cookie the cookie jar dropped kept the old value's
+  proof.** A target that rotated the session in the marker probe's response
+  with `Set-Cookie: sid=attacker2; Path=/; Max-Age=3600.5` (or `Max-Age=abc`)
+  invalidated `sid=attacker`. A browser ignores the bad `Max-Age` and keeps
+  the cookie; Python's cookie jar drops the whole cookie without a word, so
+  the check went out as `sid=attacker`, drew the `404` the target gives a dead
+  session, and was graded `safe` on the marker probe taken before it
+  (reproduced: safe 2, vulnerable 0, `liveness.unproven` empty; with
+  `Max-Age=3600`, `VERIDOR-AUTHZ-001` confirmed). A response that sets the
+  proof cookie, or a name that folds onto it, in a form the jar does not keep
+  now starts a new session epoch as a changed value does, so the denial is
+  listed with `"proof_scope": "cookie_value"`, and the session's entry in the
+  run document carries a `note`. A deletion (`Max-Age=0`, or an `Expires` in
+  the past) does not. Behaviour change: such a target's denials are now
+  unproven, and exit `3` under `--require-complete`, unless a 2xx sent after it
+  proves the session.
+- **A sequence step of a cookie-only session sent after its cookie was
+  replaced was graded on the login.** Liveness planning for sequence steps
+  covers only identities with a static credential header; a session's own
+  rule catches a `401` and nothing else. A setup step's response set
+  `sid=guest; Path=/`, the denial-only assert step after it went out as
+  `sid=guest`, drew the `404` a guest gets, and was graded `matched` with
+  `liveness.unproven` empty (reproduced with identities that send only the
+  session cookie; the existing test passed only because its identities also
+  sent an `Authorization` header). A denial-only assert step of a
+  session-only identity sent after a response replaced its session cookie,
+  or set it in a form the jar dropped, is now judged like any other: listed
+  in `liveness.unproven` with `"proof_scope": "cookie_value"` unless a 2xx
+  sent after the change, where an identity with no credential is refused,
+  proves the session. An unproven denial sent after such a replacement now
+  carries `"proof_scope": "cookie_value"` even for a `"reestablish": "check"`
+  identity or one with nothing proven, whose entries carried `"login"` or no
+  `proof_scope` before. Behaviour change: a target that rotates a cookie-only
+  session during a sequence now has the assert steps after it listed as
+  unproven, and exits `3` under `--require-complete`.
+- **A same-named cookie set after login rode in front of the session's
+  cookie, and a live IDOR was graded safe.** A response after login set
+  `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for
+  `/docs/1` went out as `Cookie: sid=guest; sid=attacker`. The check on the
+  outgoing request found the proof cookie's value and let it go. A server that
+  reads the first occurrence (Express's cookie-parser, PHP, Go's `r.Cookie`)
+  authenticated the guest, whose `404` matched the declared denial
+  (reproduced: safe 2, vulnerable 0, `liveness.unproven` empty, because the
+  marker probe ran before the guest cookie arrived; with `other=guest`
+  instead, `VERIDOR-AUTHZ-001` confirmed). A request that would carry the
+  proof cookie, or a cookie a `${capture.…}` value was read from, beside a
+  different value under the same name is now not sent and is graded
+  `inconclusive`, with its own reason (`session_cookie_ambiguous`), the rule a
+  login already followed. Behaviour change: a target that sets a second,
+  differently valued session cookie on a sub-path now gets `inconclusive` on
+  every request under that path, including where it would have authenticated
+  the right one.
+- **With `"reestablish": "check"`, a denial was proven live by a login it was
+  not sent under.** The identity's `marker_probe` runs once, under the login
+  before the first check; every check then logs in again. A re-login that drew
+  a cookie the target treats as anonymous got the declared `404`, and the
+  denial was graded `safe` with `liveness.unproven` empty, on the strength of
+  the first login's marker (reproduced: safe 2, vulnerable 0; every login real,
+  `VERIDOR-AUTHZ-001` confirmed). A 2xx in an earlier check, under that
+  check's own login, cancelled it the same way. For such an identity, only a
+  2xx in the same sequence, or the fabricated credential's answer, now proves
+  a denial; otherwise it is listed in `liveness.unproven`, with advice to use
+  `"reestablish": "run"` if sessions last the run. Behaviour change: a
+  `"reestablish": "check"` identity whose denials were proven only by its
+  `marker_probe` is now listed as unproven, and exits `3` under
+  `--require-complete`.
+- **A cookie read live is held to the checks a captured value gets.** A
+  `cookie` capture read from the jar at send time now passes the same size,
+  control-character and ASCII checks as one captured from a login response, a
+  change made with the live login-step capture below and not recorded until
+  now. Before it, a value with a space, a
+  Latin-1 character or over 4096 bytes was injected into the request as is,
+  and one outside Latin-1 failed inside the HTTP client and was reported as a
+  failed request rather than one not sent (measured on each). Such a
+  reference is now unresolved and the request is not sent. No test covered
+  it; one does now.
+- **A CSRF cookie that expired since login was reported as a configuration
+  error.** A `${capture.…}` read from a cookie the target had set, and that
+  had since expired, was refused as `unresolved_reference`: "the capture it
+  names is not declared, or the login step meant to produce it did not find
+  it", with configuration advice, and counted by the gate's vacuous-run message
+  as withheld by the configuration. It now has its own reason,
+  `capture_cookie_expired`, with session advice. A capture whose cookie never
+  had a value in the current login keeps `unresolved_reference`. Nothing is
+  sent either way, and the verdict stays `inconclusive`.
+- **A login step's cookie capture outlived its cookie, and as the session's
+  proof it kept an expired session live.** A capture declared on a login step
+  was copied once and frozen, whatever its source. With `establishes:
+  {"capture": NAME}` naming one read from a cookie, the session still looked
+  live after that cookie expired, and the check on the outgoing request had no
+  cookie to look for: the graded probe went out with an empty `Cookie` header,
+  drew the target's anonymous `404`, and a confirmed IDOR was graded `safe`
+  (reproduced: safe 2, vulnerable 0; with the cookie alive, `VERIDOR-AUTHZ-001`
+  confirmed). A login step's `cookie` capture is now read from the jar when it
+  is used, like a session-level one, so it expires with its cookie and is the
+  cookie the request is checked for.
+- **An empty session cookie established the session.** `Set-Cookie: sid=` is
+  how a target clears a cookie, but establishing and liveness asked only
+  whether a cookie of that name existed, so `establishes: {"cookie": "sid"}`
+  succeeded on it and every probe went out as `sid=`, which the target
+  answered as anonymous (reproduced: safe 2, vulnerable 0 over a confirmed
+  IDOR). A capture proof already had to be non-empty. An empty cookie is now
+  no value anywhere: it does not establish a session, keeps none live, and a
+  `${capture.…}` reference to one is unresolved, so an empty CSRF cookie is
+  no longer injected as an empty `X-CSRFToken` header that drew a CSRF `403`
+  (reproduced: safe 2, vulnerable 0).
+- **A different cookie of the same name stood in for the one that proved the
+  session.** Liveness took any usable cookie of the proving name, and the
+  check on the outgoing request matched by name. A `sid=guest; Path=/docs`
+  beside the real `sid` outlived it, and the probe went out as the guest
+  (reproduced: safe 2, vulnerable 0; the liveness disclosure listed the check
+  as unproven). The proof is now the cookie itself, by name, domain and path,
+  checked on the request by its current value; and a login that leaves two
+  different values under the proving name does not establish, because which
+  one the target authenticates is unknowable.
+- **A CSRF token went out without the cookie it was read from.** A request
+  carrying a value captured from a cookie, such as a CSRF cookie injected as
+  `X-CSRFToken`, was sent when the jar left that cookie off: because its
+  `Path` did not cover the URL, or because it expired between the moment its
+  value was read and the moment the jar attached cookies. A double-submit CSRF
+  check refused it with a `403` the declaration listed, and a confirmed IDOR
+  was graded `safe` (reproduced both ways: safe 2, vulnerable 0). Such a
+  request is now not sent and is graded `inconclusive`, with its own reason
+  (`capture_cookie_not_sent`).
+- **A session cookie that expired between the liveness check and the send
+  went out missing, and a live IDOR was graded safe.** Each request asked
+  whether the session was still live, then the cookie jar read the clock
+  again when it attached cookies and silently left off one that had expired
+  in between. The probe went out anonymous; against a target that answers an
+  anonymous request with a `403` or `404` the declaration lists, a check
+  probe was graded `safe` and a sequence assert step `matched` over a
+  confirmed IDOR (reproduced by forcing the expiry into that gap; measured on
+  a real clock, the gap is about 0.012 ms median and 0.113 ms at worst, so
+  rare but silent). Only a `401` was caught, by the session-401 rule. The cookie
+  named in `establishes` (or behind an `establishes` capture read from a
+  cookie) is now looked for on the request after the jar has attached its
+  cookies; if it is missing nothing is sent and the request is graded
+  `inconclusive` as an expired session. The same check refuses an
+  establishing cookie whose `Path` or `Domain` does not cover the request's
+  URL, which also went out anonymous, with its own reason
+  (`session_cookie_not_sent`). A session established by a capture from a
+  login response's header or body is unaffected: its value is already in the
+  request.
 - **A drift document's counts were pasted into the Markdown summary as
   markup.** `report --from-drift` checked the drift document's kind, schema
   version and containers but not its counts, and the summary interpolated
@@ -1577,6 +1783,43 @@ something you installed.
 
 ### Fixed
 
+- **The unproven-denial advice told an identity to add the `marker_probe` it
+  already had.** The gate's exit line, the `require_complete` rows in the
+  README and the Action's `require-complete` input all said "Give that
+  identity a `marker_probe`". For a `"reestablish": "check"` identity a
+  `marker_probe` proves only the first login, which no graded request uses,
+  and for one whose session cookie the target replaced it proves only the old
+  value. The exit line now names those identities, from the entry's
+  `proof_scope`, and says what proves each (`"reestablish": "run"` or a 2xx in
+  the same sequence; a 2xx sent after the change), keeping the
+  `marker_probe` advice, word for word, for the rest. The docs, the liveness
+  banner, `--no-prove-liveness` help, the config schema's `marker_probe`
+  description and `capsule verify`'s gap text say the same, and so do the
+  GitLab template's `require_complete` input, the `liveness_unproven` row in
+  `docs/report-formats.md`, the Argo CD README, and the Helm chart's values
+  and README, which still gave only the generic advice when this entry first
+  said so. The chart README's "Exit 3" and the report-formats row now also
+  say that liveness proof is point-in-time, and the README's liveness section
+  lists the session cookie rules' other limits.
+- **A session against an IPv6 literal never established.** With
+  `target.base_url` such as `http://[::1]:8080`, the cookie policy held the
+  host as `::1` and compared it with the request's host as the standard
+  library writes it, `[::1]`. Every cookie was refused, the login's cookie
+  never reached the jar, and each identity with a session reported
+  `not_established` with nothing graded (measured: every probe
+  `inconclusive`; the same target as `http://localhost:port`,
+  `VERIDOR-AUTHZ-001` confirmed). It failed closed. The brackets are now
+  dropped before comparing; any other host is still refused in both
+  directions.
+- **A sequence step whose session never established was told to check the
+  network.** Its finding said "Request failed" and "Confirm the target is
+  reachable from the runner and retry", while a check probe for the same
+  identity got session-login advice. That was wrong when the login answered
+  `200` and its cookie was the problem (already expired, `Secure` over
+  `http`, a different name). The step now says "Request not sent" and gets
+  the check path's advice, and a request withheld because the session
+  expired or its cookie would not be sent says how to fix that instead of
+  naming the network. Verdicts and exit codes are unchanged.
 - **A run with no `--baseline` reported a regression diff it never made.**
   The summary printed "Regression diff: 1 new, 0 resolved, 0 unchanged" and
   "Evidence: ... 0 escalated since the baseline" whether or not a baseline

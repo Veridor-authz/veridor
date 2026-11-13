@@ -1053,6 +1053,13 @@ REDACTED_COOKIE_NAME: str = "[REDACTED_NAME]"
 #: to response bytes, extended to the request side.
 COOKIE_ERROR: str = "the server sent a cookie Veridor could not process"
 
+#: A response set the session's proof cookie in a form the cookie jar dropped
+#: (a ``Max-Age`` that is not a whole number), so requests kept the old value.
+PROOF_COOKIE_DROPPED: str = (
+    "the server set the session cookie in a form Veridor's cookie jar did not "
+    "keep, and requests went on carrying the earlier value"
+)
+
 #: Closed vocabulary for why a session failed. Constants, never derived from
 #: anything the server sent.
 #: Failure reasons a retry could plausibly clear: nothing was answered, so
@@ -1120,9 +1127,16 @@ class _SameOriginCookiePolicy(http.cookiejar.DefaultCookiePolicy):
 
     def _is_target(self, request: Any) -> bool:
         try:
-            return http.cookiejar.request_host(request).lower() == self.target_host
+            host = http.cookiejar.request_host(request).lower()
         except Exception:  # pragma: no cover - defensive; request shape is ours
             return False
+        # ``target_host`` comes from urlsplit().hostname, which strips the
+        # brackets off an IPv6 literal; request_host() keeps them. Compared
+        # as is, '[::1]' never equalled '::1', every cookie was refused, and
+        # a session against http://[::1]:port never established.
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        return host == self.target_host
 
     def set_ok(self, cookie: Any, request: Any) -> bool:
         return self._is_target(request) and super().set_ok(cookie, request)
@@ -1243,6 +1257,76 @@ def _content_type(headers: Mapping[str, str]) -> str:
     return ""
 
 
+def _cookie_pairs(header: str) -> set[tuple[str, str]]:
+    """The ``(name, value)`` pairs in a ``Cookie`` request header, as the jar wrote it."""
+    pairs = set()
+    for part in header.split(";"):
+        name, _, value = part.strip().partition("=")
+        if name:
+            pairs.add((name, value))
+    return pairs
+
+
+def _folded_cookie_names(name: str) -> set[str]:
+    """``name`` as the most lenient servers read it, for the same-name refusal.
+
+    Lowercased, with ``.`` and space as ``_``. A ``[`` is read both ways PHP
+    reads one: cut there (``sid[x]`` is an array under ``sid``) and as ``_``
+    (PHP 8.5 stores ``s[id``, whose ``[`` is never closed, as ``s_id``).
+    Comparing every reading refuses a few names a stricter server keeps
+    apart; missing one PHP folds let a guest's 404 match a declared denial.
+    """
+    base = name.lower().replace(".", "_").replace(" ", "_")
+    return {base.partition("[")[0], base.replace("[", "_")}
+
+
+def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> bool:
+    """Does ``sent`` carry a value under ``name`` that is none of ``wires``?
+
+    Names compare as :func:`_folded_cookie_names` folds them. The jar treats
+    ``SID``, ``sid[x]`` and ``s.id`` as cookies apart from ``sid`` and
+    ``s_id``, but a server that folds names reads ``SID=guest; sid=…`` as two
+    values of one, and may take the guest. PHP 8.5 read
+    ``sid[x]=guest; sid=attacker`` as an array (no session) and
+    ``s.id=guest; s_id=attacker`` as ``s_id=guest``, and either guest's 404
+    matched a declared denial. Refusing a request a stricter server would
+    have read correctly is the cheaper mistake.
+    """
+    names = _folded_cookie_names(name)
+    return any(
+        not names.isdisjoint(_folded_cookie_names(sent_name)) and value not in wires
+        for sent_name, value in sent
+    )
+
+
+def _cookie_wire_values(value: str) -> set[str]:
+    """How the jar may write ``value`` into a ``Cookie`` header.
+
+    As is, or -- for a cookie set with a ``Version`` attribute -- quoted with
+    its quotes and backslashes escaped, which is what ``http.cookiejar`` does.
+    """
+    escaped = re.sub(r'(["\\])', r"\\\1", value)
+    return {value, f'"{escaped}"'}
+
+
+def _capture_value(value: Any) -> str | None:
+    """``value`` if it may go onto the wire as a captured value, else None."""
+    if not isinstance(value, str) or not value:
+        return None
+    if len(value.encode("utf-8", "ignore")) > MAX_CAPTURE_VALUE_BYTES:
+        return None
+    if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
+        # This value goes onto the wire in a header, where a '\r' is a
+        # second request.
+        return None
+    if not value.isascii():
+        # http.client encodes header values as latin-1, so a non-ASCII
+        # token raises UnicodeEncodeError from inside the opener. A failed
+        # capture is a typed login failure; that was an unhandled crash.
+        return None
+    return value
+
+
 class IdentitySession:
     """One identity's live session. Credentials live here and nowhere else.
 
@@ -1283,15 +1367,66 @@ class IdentitySession:
         self._values: dict[str, str] = {}
         #: name -> declared source, for the run document. A SOURCE, never a value.
         self._sources: dict[str, str] = {}
+        #: capture name -> cookie name, for every capture whose source is a
+        #: cookie. Each is read from the jar at the moment it is used, never
+        #: from a copy, so an expired cookie reads as missing.
         self._live_cookies: dict[str, str] = {}
+        #: The session-level ones, fixed by the declaration. Login-step cookie
+        #: captures join them in :meth:`establish` as the steps run.
+        self._session_cookies: dict[str, str] = {}
+        #: (domain, path, name) of the jar cookie(s) that proved this session,
+        #: fixed when it established. Liveness asks after these cookies and no
+        #: other: a different cookie that merely shares the name, set on a
+        #: narrower path or by a later response, is not the proof.
+        self._proof: frozenset[tuple[str, str, str]] = frozenset()
+        #: cookie name -> value, for each cookie-sourced capture the last
+        #: :meth:`prepare` wrote into its request. :meth:`attach_cookies`, which
+        #: always runs next on that same request, requires each of these
+        #: cookies to go out with it.
+        self._carried: dict[str, str] = {}
+        #: Names of the cookies the target has set, usable and non-empty, since
+        #: the current login began. A capture whose cookie is among them and
+        #: no longer reads is a cookie that expired or was cleared, which is
+        #: the target's doing, not a misspelt capture.
+        self._seen: set[str] = set()
+        #: Which credential this session is sending, as a counter: bumped by
+        #: every login, and whenever a response changes the value of the
+        #: cookie that proved the session. Liveness evidence -- a marker_probe
+        #: that came back, a 2xx where a caller without the credential was
+        #: refused -- is evidence about the epoch it was sent under and no
+        #: other: a response that replaced ``sid=attacker`` with ``sid=guest``
+        #: on the same path looks exactly like rotation from here.
+        self.epoch = 0
+        #: The epochs a login started. A request sent under any other epoch
+        #: went out after a response replaced the proof cookie (or set one the
+        #: jar dropped), with a value the login never proved.
+        self.login_epochs: set[int] = set()
+        #: request key -> the epoch it was sent under. Keys are ``("marker",)``,
+        #: ``("check", check_id)``, ``("step", sequence_id, index)`` and
+        #: ``("teardown", sequence_id, index)``. Kept across logins: the
+        #: counter never goes back, so an old key never matches a new epoch.
+        self.sent_epochs: dict[tuple[Any, ...], int] = {}
         self._injecting = False
         for capture_name, spec in (self.declaration.get("capture") or {}).items():
-            self._live_cookies[capture_name] = spec["name"]
+            self._session_cookies[capture_name] = spec["name"]
             self._sources[capture_name] = f"cookie:{spec['name']}"
+        self._live_cookies.update(self._session_cookies)
 
     # -- jar -------------------------------------------------------------
 
-    def attach_cookies(self, request: Request) -> None:
+    def attach_cookies(self, request: Request) -> str | None:
+        """Put the jar's cookies on ``request``; a reason not to send it, or None.
+
+        The reason is a key of :data:`core.UNSENT_REASONS`, and the caller must
+        then send nothing. :meth:`prepare` already asked :meth:`is_live`, but
+        ``add_cookie_header`` reads the clock again: a cookie that expired in
+        between was silently left off and the probe went out anonymous. Against
+        a target that answers an anonymous request with a 403 or 404 a denial
+        declaration lists, that graded a live IDOR as safe. So the cookie that
+        established the session is looked for on the request itself, after the
+        jar has had its say, rather than trusted from the earlier check -- and
+        so is every cookie whose value :meth:`prepare` wrote into the request.
+        """
         if request.has_header("Cookie"):
             # Guaranteed unreachable by the load-time refusal of a static Cookie
             # header alongside a session. Asserted anyway, because the failure
@@ -1301,16 +1436,166 @@ class IdentitySession:
                 f"identity {quoted(self.name)} request already carries a Cookie header"
             )
         self.jar.add_cookie_header(request)
+        carried, self._carried = self._carried, {}
+        if self.state != "established":
+            # Login steps run before the session exists and carry whatever the
+            # jar holds so far, as they always have.
+            return None
+        if len(set(self._proof_values())) > 1:
+            # The cookies that proved the session -- one value on two paths, or
+            # a host-only and a Domain= copy -- no longer agree: a later
+            # response replaced one of them (``sid=guest; Path=/docs``). Both
+            # are the proof, so the check below found no "other" value, and
+            # /docs/1 went out as ``sid=guest; sid=attacker``. The rule
+            # establish() applies at login, applied to every request, whether
+            # or not both would ride on this one.
+            return "session_cookie_ambiguous"
+        sent = _cookie_pairs(request.get_header("Cookie") or "")
+        name = self._establishing_cookie()
+        # The proof cookie itself, by value: a same-named cookie scoped to a
+        # narrower path (``sid=guest; Path=/docs``) goes out under the same
+        # name and would pass a check by name alone.
+        if name is not None and not any(
+            (name, wire) in sent
+            for value in self._proof_values()
+            for wire in _cookie_wire_values(value)
+        ):
+            if not self.is_live():
+                return "session_expired"
+            # Still live, yet the jar would not send it here: the cookie's Path
+            # or Domain does not cover this URL. The request would go out just
+            # as anonymous as an expired one.
+            return "session_cookie_not_sent"
+        if name is not None and _other_values(sent, name, {
+            wire for value in self._proof_values() for wire in _cookie_wire_values(value)
+        }):
+            # The proof is on the request, and so is a different value under
+            # its name: a later response set ``sid=guest; Path=/docs`` and the
+            # jar writes the longer path first. A server that reads the first
+            # occurrence authenticates the guest, and the guest's 404 matched
+            # the declared denial. Which one the target reads is unknowable,
+            # the rule establish() applies at login, applied to every request.
+            return "session_cookie_ambiguous"
+        for cookie, value in carried.items():
+            wires = _cookie_wire_values(value)
+            if not any((cookie, wire) in sent for wire in wires):
+                # The request carries a value read from this cookie, in a header
+                # or the body, and the jar left the cookie itself off: it
+                # expired since prepare() read it, or its Path or Domain does
+                # not cover this URL. A double-submit CSRF check compares the
+                # two, draws a 403, and the 403 matches a declared denial.
+                return "capture_cookie_not_sent"
+            if _other_values(sent, cookie, wires):
+                # Sent, but beside a different value under the same name, so the
+                # CSRF check may compare the header with the other one.
+                return "session_cookie_ambiguous"
+        return None
+
+    def _establishing_cookie(self) -> str | None:
+        """The jar cookie whose presence proves this session, if one does.
+
+        ``establishes: {"cookie": NAME}`` names it outright. A capture read
+        from a cookie -- on the session or on a login step -- is the same proof
+        by another name. Any other capture is a value already written into the
+        request by :meth:`prepare`, which the jar cannot take back off.
+        """
+        establishes = self.declaration["establishes"]
+        if "cookie" in establishes:
+            return str(establishes["cookie"])
+        return self._live_cookies.get(establishes["capture"])
+
+    def _proof_values(self) -> list[str]:
+        """The current values of the cookies that proved this session.
+
+        Only those still usable and non-empty; an empty list once every one
+        has expired, however many other cookies of that name the jar holds.
+        """
+        if not self._proof:
+            return []
+        return [
+            cookie.value
+            for cookie in self.jar
+            if (cookie.domain, cookie.path, cookie.name) in self._proof
+            and cookie.value
+            and self._usable(cookie)
+        ]
 
     def harvest(self, response: Any, request: Request) -> None:
+        before = set(self._proof_values()) if self.state == "established" else None
         try:
             self.jar.extract_cookies(response, request)
         except Exception:
             self.note = COOKIE_ERROR
+        self._note_cookies()
+        if before is None:
+            return
+        if set(self._proof_values()) != before:
+            # The target gave the proof cookie another value. Rotation and a
+            # downgrade to an anonymous session look the same from here, so
+            # what proved the old value live proves nothing about this one.
+            self.epoch += 1
+        elif self._dropped_proof_cookie(response):
+            # The target set the proof cookie and the jar would not take it
+            # (``Max-Age=3600.5`` or ``Max-Age=abc``, which a browser ignores
+            # and keeps the cookie), so the old value goes on being sent. If
+            # that was a rotation the old value may be dead now; it is still
+            # sent, so nothing proved about it before counts after.
+            self.epoch += 1
+            self.note = self.note or PROOF_COOKIE_DROPPED
+
+    def _dropped_proof_cookie(self, response: Any) -> bool:
+        """Did ``response`` set the proof cookie in a form the jar did not keep?
+
+        A ``Set-Cookie`` whose name folds (:func:`_folded_cookie_names`) onto
+        the proof cookie's, that is not a deletion, and whose name and value
+        the jar does not now hold. The same value set again, or the name on
+        another path, is in the jar and is not one.
+        """
+        try:
+            headers = response.info().get_all("Set-Cookie") or ()
+            parsed = http.cookiejar.parse_ns_headers([str(header) for header in headers])
+        except Exception:
+            return False
+        proof = {folded for _domain, _path, name in self._proof
+                 for folded in _folded_cookie_names(name)}
+        held = {(cookie.name, cookie.value) for cookie in self.jar}
+        now = time.time()
+        for pairs in parsed:
+            if not pairs:
+                continue
+            name, value = pairs[0]
+            if proof.isdisjoint(_folded_cookie_names(name)) or (name, value) in held:
+                continue
+            attributes = dict(pairs[1:])
+            max_age = str(attributes.get("max-age") or "").strip()
+            expires = attributes.get("expires")
+            if re.fullmatch(r"-?\d+", max_age):
+                if int(max_age) <= 0:
+                    continue  # a deletion, which a browser honours too
+            elif not max_age and isinstance(expires, (int, float)) and expires <= now:
+                continue
+            return True
+        return False
+
+    def stamp(self, key: tuple[Any, ...]) -> None:
+        """Record the epoch the request ``key`` names is about to be sent under."""
+        self.sent_epochs[key] = self.epoch
+
+    def _note_cookies(self) -> None:
+        """Remember which cookies the jar holds a usable value for, by name."""
+        self._seen.update(
+            cookie.name for cookie in self.jar if cookie.value and self._usable(cookie)
+        )
 
     def _cookie_value(self, name: str) -> str | None:
+        """The value of a usable cookie of this name, or None.
+
+        An empty value (``Set-Cookie: sid=``) is no value: it is how a target
+        clears a cookie, and it authenticates nothing. Counting it as present
+        established a session on it and sent every probe as ``sid=``.
+        """
         for cookie in self.jar:
-            if cookie.name == name and self._usable(cookie):
+            if cookie.name == name and cookie.value and self._usable(cookie):
                 return cookie.value
         return None
 
@@ -1348,25 +1633,20 @@ class IdentitySession:
             value = _json_pointer(sink.get("body") or b"", spec["pointer"])
         else:
             value = _html_meta(sink.get("body") or b"", spec["name"])
-        if not isinstance(value, str) or not value:
-            return None
-        if len(value.encode("utf-8", "ignore")) > MAX_CAPTURE_VALUE_BYTES:
-            return None
-        if any(ord(character) <= 0x20 or ord(character) == 0x7F for character in value):
-            # This value goes onto the wire in a header, where a '\r' is a
-            # second request.
-            return None
-        if not value.isascii():
-            # http.client encodes header values as latin-1, so a non-ASCII
-            # token raises UnicodeEncodeError from inside the opener. A failed
-            # capture is a typed login failure; that was an unhandled crash.
-            return None
-        return value
+        return _capture_value(value)
 
     def lookup(self, name: str) -> str | None:
-        """The current value of one capture. Cookie sources are read live."""
+        """The current value of one capture. Cookie sources are read live.
+
+        A live cookie passes the checks it would have passed when captured: it
+        goes onto the wire just the same.
+        """
         if name in self._live_cookies:
-            return self._cookie_value(self._live_cookies[name])
+            cookie = self._live_cookies[name]
+            if self._proof and cookie == self._establishing_cookie():
+                values = self._proof_values()
+                return _capture_value(values[0]) if values else None
+            return _capture_value(self._cookie_value(cookie))
         return self._values.get(name)
 
     def is_live(self) -> bool:
@@ -1383,10 +1663,9 @@ class IdentitySession:
         """
         if self.state != "established":
             return False
-        establishes = self.declaration["establishes"]
-        if "cookie" in establishes:
-            return self._cookie_value(establishes["cookie"]) is not None
-        return bool(self.lookup(establishes["capture"]))
+        if self._establishing_cookie() is not None:
+            return bool(self._proof_values())
+        return bool(self.lookup(self.declaration["establishes"]["capture"]))
 
     # -- outbound --------------------------------------------------------
 
@@ -1401,6 +1680,8 @@ class IdentitySession:
                 missing = missing or match.group(1)
                 return ""
             substituted.append(value)
+            if match.group(1) in self._live_cookies:
+                self._carried[self._live_cookies[match.group(1)]] = value
             return value
 
         resolved = core._CAPTURE_REF.sub(replace, text)
@@ -1437,6 +1718,7 @@ class IdentitySession:
         is cleanup and is never graded, so the fail-closed refusal that a graded
         probe gets would only orphan the fixture it was meant to remove.
         """
+        self._carried = {}
         if self.state == "established" and not self.is_live():
             # Fail closed. The alternative is an anonymous probe graded against
             # a denial declaration, which is the exact false SAFE this whole
@@ -1510,12 +1792,18 @@ class IdentitySession:
             not_applied.append(_inject_field_label(entry))
         return resolved, body, None, not_applied
 
-    @staticmethod
-    def _block_reason(missing: str) -> str:
+    def _block_reason(self, missing: str) -> str:
         if missing == "\x00marker":
             return "marker_reflection_blocked"
         if missing == "\x00uncheckable":
             return "marker_check_incomplete"
+        cookie = self._live_cookies.get(missing)
+        if cookie is not None and cookie in self._seen and self._cookie_value(cookie) is None:
+            # The target set this cookie under this login and it is gone now:
+            # expired or cleared. That is the session's state, not a capture
+            # the configuration misnamed, so it gets session advice and the
+            # gate does not count it as a configuration error.
+            return "capture_cookie_expired"
         return "unresolved_reference"
 
     # -- establishment ---------------------------------------------------
@@ -1525,6 +1813,11 @@ class IdentitySession:
         self.policy = _SameOriginCookiePolicy(urlsplit(self.base_url).hostname or "")
         self.jar = http.cookiejar.CookieJar(self.policy)
         self._values.clear()
+        self._live_cookies = dict(self._session_cookies)
+        self._proof = frozenset()
+        self._seen = set()
+        self.epoch += 1
+        self.login_epochs.add(self.epoch)
         self.steps = []
         self.note = None
         self.reason = None
@@ -1588,14 +1881,37 @@ class IdentitySession:
                     return
                 # Last write wins, per identity, per name. That is a rule, not a
                 # conditional: there is no "if the token changed" branch.
-                self._values[name] = value
+                if spec["from"] == "cookie":
+                    # Read from the jar when used, like a session-level cookie
+                    # capture. A frozen copy outlived the cookie: as the
+                    # establishing proof it kept an expired session "live"
+                    # and every later probe went out anonymous.
+                    self._live_cookies[name] = spec["name"]
+                    self._values.pop(name, None)
+                else:
+                    self._live_cookies.pop(name, None)
+                    self._values[name] = value
             sink.clear()
 
-        establishes = self.declaration["establishes"]
-        if "cookie" in establishes:
-            proven = self._cookie_value(establishes["cookie"]) is not None
+        self._note_cookies()
+        cookie = self._establishing_cookie()
+        if cookie is not None:
+            proof = [
+                item
+                for item in self.jar
+                if item.name == cookie and item.value and self._usable(item)
+            ]
+            if len({item.value for item in proof}) > 1:
+                # Two different values under the proving name, say one per
+                # Path: which one the target authenticates is unknowable, the
+                # same rule a header capture follows. Guessing could tie the
+                # session to a guest cookie that outlives the real one.
+                self._fail("not_established", cookie=cookie)
+                return
+            self._proof = frozenset((item.domain, item.path, item.name) for item in proof)
+            proven = bool(self._proof)
         else:
-            proven = bool(self.lookup(establishes["capture"]))
+            proven = bool(self.lookup(self.declaration["establishes"]["capture"]))
         if not proven:
             self._fail("not_established")
             return
@@ -1608,6 +1924,7 @@ class IdentitySession:
         index: int | None = None,
         status: int | None = None,
         name: str | None = None,
+        cookie: str | None = None,
     ) -> None:
         self.state = "failed"
         detail = reason
@@ -1617,6 +1934,8 @@ class IdentitySession:
             detail += f" (HTTP {status})"
         if name is not None:
             detail += f" (capture {quoted(name)})"
+        if cookie is not None:
+            detail += f" (cookie {quoted(cookie)} is set more than once with different values)"
         self.reason = detail
         self.reason_code = reason
         self.transient = is_transient_session_failure(reason, status)
@@ -2292,7 +2611,8 @@ class _SequenceRun:
                 f"the session for {quoted(step['as'])} was not established "
                 f"({session.reason}); this step was not issued"
             )
-            self.findings.append(self._exec_finding(index, step, record, name))
+            self.findings.append(self._exec_finding(
+                index, step, record, name, reason="session_unavailable"))
             self._abort(index, "execution_error", record["error"], emitted=True)
             return
 
@@ -2353,6 +2673,8 @@ class _SequenceRun:
         owner = self._needles_owner(step, planted)
         marker = self.markers.get(owner) if owner else None
         sink: dict[str, Any] = {}
+        if session is not None:
+            session.stamp(("step", self.sequence["id"], index))
         result = core._perform_request(
             self.base_url,
             self.timeout,
@@ -2893,7 +3215,7 @@ class _SequenceRun:
             "verdict": "inconclusive",
             "evidence_grade": "n/a",
             "title": f"Could not verify {name} as {step['as']}",
-            "message": core.execution_message(record["error"]),
+            "message": core.execution_message(record["error"], reason),
             **self._base_finding(step, index, record),
             "evidence": self._evidence(step, index, record),
             # A step withheld by its own configuration gets configuration
@@ -3014,6 +3336,8 @@ class _SequenceRun:
         # not refuse the request. Teardown is never graded, so the fail-closed
         # refusal a graded probe gets would only orphan the fixture this entry
         # exists to remove; the request is sent and the drop is noted instead.
+        if session is not None:
+            session.stamp(("teardown", self.sequence["id"], record["index"]))
         result = core._perform_request(
             self.base_url,
             self.teardown_timeout,

@@ -65,14 +65,19 @@ dependency of your app's chart: set its `hook.mode` to `argocd`.
    identity that presents a credential, where some identity was served in
    the same check or sequence, that nothing in the run proved live (a 2xx
    on a request where an identity with no credential, or the fabricated
-   credential, was refused; or its `marker_probe`), because a fabricated
+   credential, was refused; or its `marker_probe`; for a session, either one
+   only under the same login and session cookie value), because a fabricated
    credential got the same denial, none was sent to compare with (one goes
    only with GET, HEAD and OPTIONS, and only when an identity declares a
    credential header to shape it on; never on a write or inside a
    sequence), its request failed, or its answer was neither a refusal nor a
    success. The example gives
    `other_tenant` a `marker_probe` for that reason; the chart README's
-   "Exit 3" says when you need one.
+   "Exit 3" says when you need one. A `marker_probe` proves only the first
+   login of a session with `"reestablish": "check"`, so use
+   `"reestablish": "run"` or show it served in the same sequence, and one
+   whose session cookie the target replaced needs a 2xx sent after the
+   change.
 5. A failed hook Job fails the sync operation, and a passing one lets it
    succeed. Each sync is reported from its own Job (next section). A sync
    that runs no hooks runs no gate and succeeds ("Syncs that run no gate").

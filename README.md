@@ -647,10 +647,19 @@ Coverage still cannot fail silently, and this is the half that matters:
   denial-only request it leaves unchecked. A denial
   counts as unproven, on the console and in `liveness.unproven`, only when
   all of these hold: the identity presents a credential (for a sequence
-  step, a static credential header); some identity was served in the same
+  step, a static credential header, or a session cookie that a response
+  replaced, or set in a form the cookie jar dropped, after login and before
+  the step was sent: the login proved the earlier value only); some identity
+  was served in the same
   check, or the same sequence; nothing else in the run proved the identity
   live (a 2xx it drew on a request where an identity with no credential, or
-  the fabricated credential, was refused; or its `marker_probe`) — a 2xx on
+  the fabricated credential, was refused; or its `marker_probe`; for a session
+  with `"reestablish": "check"`, only a 2xx in the same sequence counts, since
+  each check and sequence is a login of its own; and for any session, only
+  evidence sent with the same value of the cookie that established it, so once
+  a response gives that cookie a different value (or sets it in a form the
+  cookie jar drops), the `marker_probe` and any 2xx sent before stop counting,
+  and only a 2xx sent after it proves its denials) — a 2xx on
   a route that serves every caller proves nothing, so a `GET` that serves
   such an identity gets a fabricated credential too, and its 2xx counts only
   if that is refused (on a route an identity with no credential is declared
@@ -665,13 +674,44 @@ Coverage still cannot fail silently, and this is the half that matters:
   denial exits 3. The fabricated credential is not shaped like your token, so
   a target that refuses a malformed credential but serves a well-formed
   expired one as anonymous can let its refusal prove an expired token live.
+  In `liveness.unproven`, an unproven denial of a `"reestablish": "check"`
+  identity carries `"proof_scope": "login"`, and one sent after a response
+  replaced its session cookie, or whose identity was proven live only under
+  another value of it, carries `"proof_scope": "cookie_value"` (a
+  `"reestablish": "check"` identity's denial sent after such a replacement
+  does too); their advice says what would prove them rather
+  than to add a `marker_probe`.
+
+  Liveness evidence is point-in-time. The `marker_probe` runs once, before the
+  first check, and a 2xx proves the credential at the moment it was served. A
+  credential the target revokes later in the run, without changing anything
+  Veridor sees — a bearer token or static header it stops accepting, a session
+  revoked server-side while its cookie keeps the same value — is not
+  detected: the earlier evidence still counts, and a denial drawn after the
+  revocation is graded on it (measured: a token revoked by the marker probe's
+  own response, then safe 2, vulnerable 0, `liveness.unproven` empty). Keep a
+  run short relative to the credential's lifetime. For a session,
+  `"reestablish": "check"` narrows the window to one check or sequence,
+  because only evidence under that login counts; nothing narrows it for a
+  static credential.
+
+  Other limits of the session cookie rules. A change Veridor sees is a
+  response setting the cookie that established the session: to a new value,
+  or in a form Python's cookie jar drops. A target that ends the session by
+  other means while the cookie stays as it was is the revocation above. A
+  cookie the jar keeps but a browser would reject is not noticed. Cookie
+  names are folded for the same-name refusal as described under sessions
+  (case, `.`, space, `[`), the folds PHP 8.5 was measured to make; a server
+  that folds names some other way is not covered.
 
   This is **stated, never graded**: an identity asserted only to be
   denied and never served anywhere is the ordinary shape of an authorization
   suite, so a finding would fire on most correct configurations. `mutate`'s M6
   reached the same conclusion from the other direction. The remedy is one line
   — give that identity a `marker_probe` naming something it *should* be served,
-  and the line disappears because the credential is now provably live.
+  and the line disappears because the credential is now provably live — for
+  a session, for denials sent under the login and session cookie value the
+  `marker_probe` ran with (above).
   The shipped demo config does exactly that for `other_tenant`.
 
   `--no-prove-liveness` skips the extra requests. The count is printed before
@@ -1363,17 +1403,31 @@ The two kinds are not interchangeable:
 
 | Declared on | May read | Read when |
 | --- | --- | --- |
-| a **login step** | `cookie`, `header`, `json_pointer`, `html_meta` | once, from that step's response, and frozen for the rest of the run |
+| a **login step** | `cookie`, `header`, `json_pointer`, `html_meta` | once, from that step's response, and frozen for the rest of the run — except `cookie`, which is read from the jar at send time like a session-level one |
 | the **session** | `cookie` only | **live, at send time** — so a rotating CSRF cookie needs no logic at all |
 
 A session-level capture is restricted to `cookie` for that reason: the jar is
 the only source that still holds a value after the login response is gone.
 Everything else is a property of one response and belongs on the step that
-produced it.
+produced it. A login step's `cookie` capture is checked when its step runs, so
+a missing cookie still fails the login, but after that it is read live: a frozen
+copy would outlive the cookie, and as the `establishes` proof it would keep an
+expired session looking live. A cookie with an empty value (`Set-Cookie:
+csrftoken=`) is no value: a `${capture.…}` reference to it is unresolved and
+the request is not sent. A cookie read live is held to the same rules as a
+value captured from a login response — at most 4096 bytes, printable ASCII, no
+spaces or control characters — and one that breaks them is unresolved too,
+rather than injected as is (or, for a character outside Latin-1, failing inside
+the HTTP client and reported as a failed request rather than one not sent). If a cookie the target
+set during the current login has since expired or been cleared, the reason is
+`capture_cookie_expired`, with session advice, not `unresolved_reference`, which
+is kept for a capture that never had a value: a misspelt name, or a cookie the
+target has not set yet.
 
 **Cookies never cross identities.** Each identity gets its own jar, built on
 `http.cookiejar` with a policy that accepts and returns cookies for exactly one
-host. The jar reaches a request as an argument, so isolation is a property of
+host, the one in `target.base_url` (an IPv6 literal such as `http://[::1]:8080`
+included). The jar reaches a request as an argument, so isolation is a property of
 the call, not of a registry someone could key wrongly — and there is no API
 anywhere that copies, unions, or seeds one jar from another. This is the single
 most important property in the feature: a leaked jar turns the attacker's probe
@@ -1386,9 +1440,14 @@ load error, because `add_cookie_header` silently does nothing when a `Cookie`
 header is already present — the session cookie would vanish with no diagnostic.
 
 **Establishment is proven, not assumed.** `establishes` is required and names
-exactly one of `cookie` (present in the jar and usable against this origin — a
-`Secure` cookie over plain `http` fails here rather than three checks later) or
-`capture` (non-empty, for bearer flows). `expect_status` is required on every
+exactly one of `cookie` (present in the jar with a non-empty value and usable
+against this origin — a `Secure` cookie over plain `http` fails here rather than
+three checks later) or `capture` (non-empty, for bearer flows). If the jar holds
+two cookies of the proving name with different values, for example one per
+`Path`, the session does not establish: which one the target authenticates is
+unknowable. Otherwise the proof is that cookie — its name, domain and path — and
+not its name alone, so a later same-named cookie on a narrower path cannot stand
+in for it once it expires. `expect_status` is required on every
 login step, because the common real login is `POST /login` → `302`, redirects
 are never followed, and the cookie is on the `302`.
 
@@ -1398,12 +1457,67 @@ If a session does not establish, every probe naming that identity reports
 entries are skipped and reported. Degraded state is never allowed to look like a
 result.
 
+An established session is checked again on every request, on the request
+itself: once the jar has attached its cookies, the cookie that proved the
+session (named in `establishes`, or read by the capture it names) must be on it
+with its current value. If that cookie has expired since login, or its `Path` or
+`Domain` does not cover the URL, the request **is not sent** and is graded
+`inconclusive`, because without the cookie it would go out anonymous and its
+`403` or `404` could match a declared denial. The same holds for every cookie
+whose value the request carries through a `${capture.…}` reference, such as a
+CSRF token injected as a header: if the jar would leave that cookie off, a
+double-submit CSRF check would refuse the request with a `403`, so it is not
+sent either.
+
+Being on the request is not enough if a different value rides beside it. A
+response after login can set a second cookie under the same name on a
+narrower path (`sid=guest; Path=/docs`), and the jar then sends both, longer
+path first: `Cookie: sid=guest; sid=attacker`. A server that reads the first
+occurrence (Express's cookie-parser, PHP, Go's `r.Cookie`) authenticates the
+guest. So a request that would carry the proof cookie, or a cookie a
+`${capture.…}` value was read from, beside a different value under the same
+name **is not sent** and is graded `inconclusive`
+(`session_cookie_ambiguous`) — the rule that stops such a login from
+establishing, applied to every request. "The same name" is compared the way
+the most lenient server reads it: without case, with `.` and space read as
+`_`, and a `[` read both as the end of the name and as `_`. So `SID=guest`
+beside `sid=attacker`, `sid[x]=guest` beside `sid=attacker`, and `s.id=guest`
+or `s[id=guest` beside `s_id=attacker` are refused, because a server that
+folds cookie names (PHP stores `s.id` and an unclosed `s[id` as `s_id`, and
+`sid[x]` as an array under `sid`) reads both as one; a server that does not
+gets `inconclusive` too. The same value under the same name on
+two paths is not ambiguous and goes out. When the login set the proof cookie
+more than once with one value (on two paths, or host-only and with `Domain=`),
+every copy is the proof, and once a later response gives one copy a different
+value, every request of that session is refused the same way, including one
+that only the unchanged copy would reach. A target that replaces the proof
+cookie itself (same name, domain and path) is treated as rotating it: the new
+value is the proof from then on and requests go out with it. Veridor cannot
+tell that from a target that swapped the session for an anonymous one, so
+liveness evidence taken under the old value — the `marker_probe`, an earlier
+2xx — no longer proves a denial drawn under the new one (see "A denial that
+proves nothing says so"). A response that sets the proof cookie in a form
+Python's cookie jar drops (a `Max-Age` that is not a whole number, such as
+`3600.5` or `abc`, which a browser ignores and keeps the cookie) leaves the old
+value going out; that counts the same way, so earlier evidence stops proving
+denials, and the session's entry in the run document carries a `note` saying
+so. A deletion (`Max-Age=0`, or an `Expires` in the past) is not counted.
+
 | Capture `from` | Reads |
 | --- | --- |
 | `cookie` | that identity's own jar, live at send time — so a rotating CSRF cookie works with no logic at all |
 | `header` | the named response header of the login step that declares it |
 | `json_pointer` | an RFC 6901 pointer into that step's response, in memory |
 | `html_meta` | `<meta name="X" content="Y">`, via the stdlib HTML parser |
+
+A `json_pointer` resolves a string, number or boolean leaf, a number or boolean
+as its JSON text (`0`, `false`); an object, an array or `null` does not
+resolve. A capture that resolves proves only that the login response held a
+non-empty value there, not that the target accepts it as a credential: `{"tok":
+false}` establishes a session whose token is the text `false`. Whether the
+token works is what the liveness controls measure, and a denial drawn with one
+the target ignores is listed in `liveness.unproven` when the fabricated
+credential draws the same answer (measured with `false`, `0` and `"null"`).
 
 `inject` applies to every request issued as that identity once the session is
 established — check probes, marker probes, sequence steps, and teardown. It sets
@@ -1428,7 +1542,13 @@ another's credential and fabricate a `confirmed` finding out of legitimate
 access. If a reference cannot be resolved, the request **is not sent** — an
 untokened request draws a `403`, and a `403` that matches a declared denial is a
 false pass. Set `"reestablish": "check"` to replace the jar and log in again
-before each check and each sequence.
+before each check and each sequence. Liveness proof then belongs to the login
+it was measured under: the identity's `marker_probe` runs once, under the login
+before the first check, so it no longer proves its denials live, and neither
+does a 2xx it drew in another check or sequence. A denial of such an identity
+is proven only within its own sequence or by the fabricated credential's
+answer, and is otherwise listed in `liveness.unproven`, with advice to use
+`"reestablish": "run"` if the target's sessions last the whole run.
 
 **Credentials never reach an artifact.** Cookie values, captured tokens, and
 `Set-Cookie` attributes are never placed in any object that is serialised,
@@ -2181,7 +2301,7 @@ disagree on a name, a default or a mode.
 | `max-requests` | — | drift | Refuse a matrix plan larger than this |
 | `rate` | — | drift | Requests per second |
 | `read-only` | `false` | run | Refuse a configuration that can send anything but GET, HEAD or OPTIONS |
-| `require-complete` | `true` | both | Exit `3` when any probe went unanswered, or (run mode) a denial is unproven (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe` |
+| `require-complete` | `true` | both | Exit `3` when any probe went unanswered, or (run mode) a denial is unproven (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent after the change |
 | `require-clean-teardown` | `false` | run | Exit `3` when a sequence teardown was unclean |
 
 **Outputs.** The test also fails if an output is missing here or not declared in `action.yml`.
@@ -2342,9 +2462,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,529 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 969 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,498 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,623 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 1,010 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,633 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,
@@ -2549,7 +2669,7 @@ it so by default; when it is not, the job stops with exit 2 and says why.
 | `proxy_from_environment` | boolean | `false` | `false` runs Veridor without any `*_proxy` variable (`http_proxy`, `HTTPS_PROXY`, any case), so its requests go straight to the target, and the log names what was removed. A pipeline variable of that name would otherwise pick where every credential goes, whatever `base_url` says. `true` keeps them, for a target reachable only through a proxy |
 | `wait_for_target` | number | `0` | `--wait-for-target`: seconds to wait before the first request for the target's port to accept a TCP connection; `0` does not wait, and anything but a whole number is refused. Never changes a verdict |
 | `fail_on` | string | `new+confirmed` | `--fail-on`: `new+confirmed`, `new`, `confirmed`, `any` or `none`. The default fails on every finding not in the baseline, and on a confirmed one even when the baseline holds it. A suspected or ungraded finding stops failing once its id is in the baseline |
-| `require_complete` | boolean | `true` | `--require-complete`: an unanswered probe exits 3, and so does an unproven denial (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe` |
+| `require_complete` | boolean | `true` | `--require-complete`: an unanswered probe exits 3, and so does an unproven denial (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent after the change |
 | `allow_unmeasured` | boolean | `false` | Show exit 3 as a warning instead of failing the job |
 | `baseline` | string | (empty) | `--baseline`: a prior run JSON to diff against. It is part of your merge request's diff, so require Code Owner approval for it (GitLab Premium) |
 | `openapi` | string | (empty) | `--openapi`: enables boundary coverage |
