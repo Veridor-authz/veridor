@@ -4208,5 +4208,168 @@ class ReloginLivenessProofTest(unittest.TestCase):
         self.assertEqual([entry["check_id"] for entry in unproven], ["cross-tenant-doc-read"])
 
 
+# --------------------------------------------------------------------------
+# A proof made of several cookies stops being one when they disagree
+# --------------------------------------------------------------------------
+
+
+def _harvested_session(base_url: str, *set_cookies: str) -> sequence.IdentitySession:
+    """establish() with the login answered in process by these Set-Cookie headers.
+
+    Parsed by the jar from a response, as a real login is, so ``Domain=`` and
+    ``Path=`` attributes mean what they mean on the wire.
+    """
+    session = sequence.IdentitySession(
+        "attacker",
+        {"headers": {}, "session": {"login": _login(), "establishes": {"cookie": "sid"}}},
+        base_url, 5, {},
+    )
+
+    def perform(base_url, timeout, request_config, identity, *, session=None, **_):
+        session.harvest(_Response(*set_cookies), Request(f"{base_url}/login", method="POST"))
+        return {
+            "request": {"method": "POST", "url": f"{base_url}/login"},
+            "response": {"status": 200, "duration_ms": 1, "body_bytes": 2,
+                         "body_sha256": "0" * 64},
+            "error": None,
+        }
+
+    with patch.object(core, "_perform_request", perform):
+        session.establish()
+    return session
+
+
+class ProofCookiesDisagreeTest(unittest.TestCase):
+    """The cookies that proved a session must still carry one value.
+
+    A login that sets the proving cookie twice with one value -- on two paths,
+    or host-only and with ``Domain=`` -- establishes, and both copies are the
+    proof. A later response replaced one copy with ``sid=guest``. The attach
+    check compared the request against every proof value, so the guest was not
+    "another" value, and /docs/1 went out as ``sid=guest; sid=attacker``: safe
+    2, vulnerable 0, ``liveness.unproven`` empty against a server that reads
+    the first occurrence. establish() refuses two values under the proving name
+    at login; the same rule now holds on every request after it.
+    """
+
+    COOKIE = {"login": _login(), "establishes": {"cookie": "sid"}}
+
+    def _two_paths(self, *later) -> sequence.IdentitySession:
+        session = _offline_session(self.COOKIE, _cookie("sid", "attacker"),
+                                   _cookie("sid", "attacker", path="/docs"))
+        self.assertEqual(session.state, "established", session.reason)
+        for cookie in later:
+            session.jar.set_cookie(cookie)
+        return session
+
+    def _attach(self, session: sequence.IdentitySession, url: str):
+        request = Request(url, method="GET")
+        return session.attach_cookies(request), request.get_header("Cookie")
+
+    def test_one_proof_path_replaced_with_another_value_is_refused(self) -> None:
+        session = self._two_paths(_cookie("sid", "guest", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_also_where_only_the_unchanged_copy_would_go_out(self) -> None:
+        """Behaviour change: the session is ambiguous, not only this request."""
+        session = self._two_paths(_cookie("sid", "guest", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/m")
+        self.assertEqual(cookie, "sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_the_same_value_set_again_goes_out(self) -> None:
+        session = self._two_paths(_cookie("sid", "attacker", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=attacker; sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_both_copies_rotated_to_one_new_value_go_out(self) -> None:
+        session = self._two_paths(_cookie("sid", "rotated"),
+                                  _cookie("sid", "rotated", path="/docs"))
+        reason, cookie = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertEqual(cookie, "sid=rotated; sid=rotated")
+        self.assertIsNone(reason)
+
+    def test_control_another_name_on_the_proof_path_goes_out(self) -> None:
+        session = self._two_paths(_cookie("other", "guest", path="/docs"))
+        reason, _cookie_header = self._attach(session, "http://127.0.0.1:1/docs/1")
+        self.assertIsNone(reason)
+
+    def test_a_host_only_and_a_domain_copy_that_disagree_are_refused(self) -> None:
+        session = _harvested_session(
+            "http://app.example.test",
+            "sid=attacker; Path=/", "sid=attacker; Domain=example.test; Path=/")
+        self.assertEqual(session.state, "established", session.reason)
+        self.assertEqual(len(session._proof), 2)
+        self.assertIsNone(self._attach(session, "http://app.example.test/docs/1")[0])
+        session.harvest(_Response("sid=guest; Domain=example.test; Path=/"),
+                        Request("http://app.example.test/m", method="GET"))
+        reason, cookie = self._attach(session, "http://app.example.test/docs/1")
+        self.assertEqual(sorted(cookie.split("; ")), ["sid=attacker", "sid=guest"])
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class ProofCookiesDisagreeEndToEndTest(unittest.TestCase):
+    """The same through the engine: a server that authenticates the first ``sid``.
+
+    The attacker's login sets ``sid=attacker`` on / and on /docs. Its marker
+    probe's response then sets ``late``; /docs/1 is an IDOR any logged-in caller
+    reads, and a request whose first ``sid`` is not a session gets 404.
+    """
+
+    @staticmethod
+    def _execute(late: str):
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", f"sid={who}; Path=/"),
+                             ("Set-Cookie", f"sid={who}; Path=/docs")], b"ok"
+            sids = [part.strip()[4:] for part in entry["cookie"].split(";")
+                    if part.strip().startswith("sid=")]
+            if not sids or sids[0] not in ("attacker", "victim"):
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            headers = [("Content-Type", "application/json")]
+            if entry["path"] == "/m":
+                if who == "attacker":
+                    headers.append(("Set-Cookie", late))
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, headers, json.dumps({"m": owner}).encode()
+            return 200, headers, json.dumps({"provenance": MARKER_VICTIM}).encode()
+
+        identities = _identities(sessions=True)
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        config = {"version": 1,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [check]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        probes = [entry["cookie"] for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == "/docs/1"]
+        return result, probes, _finding_map(result).get(("cross-tenant-doc-read", "attacker"))
+
+    def test_control_a_later_cookie_of_another_name_leaves_the_idor_confirmed(self) -> None:
+        result, probes, verdict = self._execute("other=guest; Path=/docs")
+        self.assertEqual(probes, ["sid=attacker; other=guest; sid=attacker"])
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-AUTHZ-001", "vulnerable"))
+
+    def test_a_guest_value_on_one_proof_path_sends_nothing(self) -> None:
+        result, probes, verdict = self._execute("sid=guest; Path=/docs")
+        self.assertEqual(probes, [], "the probe reached the target as the guest")
+        self.assertIsNotNone(verdict, f"graded safe: {result['summary']}")
+        self.assertEqual((verdict["rule_id"], verdict["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn("no longer carry one value", verdict["message"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        self.assertEqual(result["summary"]["safe"], 1)  # the victim's alone
+
+
 if __name__ == "__main__":
     unittest.main()

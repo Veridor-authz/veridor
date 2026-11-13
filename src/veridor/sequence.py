@@ -1383,6 +1383,15 @@ class IdentitySession:
             # Login steps run before the session exists and carry whatever the
             # jar holds so far, as they always have.
             return None
+        if len(set(self._proof_values())) > 1:
+            # The cookies that proved the session -- one value on two paths, or
+            # a host-only and a Domain= copy -- no longer agree: a later
+            # response replaced one of them (``sid=guest; Path=/docs``). Both
+            # are the proof, so the check below found no "other" value, and
+            # /docs/1 went out as ``sid=guest; sid=attacker``. The rule
+            # establish() applies at login, applied to every request, whether
+            # or not both would ride on this one.
+            return "session_cookie_ambiguous"
         sent = _cookie_pairs(request.get_header("Cookie") or "")
         name = self._establishing_cookie()
         # The proof cookie itself, by value: a same-named cookie scoped to a

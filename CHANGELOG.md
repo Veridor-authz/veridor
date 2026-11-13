@@ -16,6 +16,20 @@ something you installed.
 
 ### Security
 
+- **A session proved by two copies of its cookie kept sending after one copy
+  changed.** A login that set `sid=attacker` on `/` and on `/docs` (or
+  host-only and with `Domain=`) established, with both copies as the proof. A
+  later response set `sid=guest; Path=/docs`, replacing one copy, and
+  `/docs/1` went out as `Cookie: sid=guest; sid=attacker`. The refusal of a
+  second value beside the proof (next entry) compared the request with every
+  proof value, and the guest was one of them, so it found nothing different. A
+  server that reads the first occurrence authenticated the guest, whose `404`
+  matched the declared denial (reproduced: safe 2, vulnerable 0,
+  `liveness.unproven` empty; with `other=guest` instead, `VERIDOR-AUTHZ-001`
+  confirmed). Once the cookies that proved a session no longer carry one
+  value, every request of that session is now refused as
+  `session_cookie_ambiguous`, the rule a login already followed. Behaviour
+  change: that includes a request that only the unchanged copy would reach.
 - **A same-named cookie set after login rode in front of the session's
   cookie, and a live IDOR was graded safe.** A response after login set
   `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for

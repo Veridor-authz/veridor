@@ -3219,8 +3219,9 @@ UNSENT_REASONS: dict[str, str] = {
     "session_cookie_ambiguous": (
         "this request would have carried a second, different value under the "
         "name of a cookie this identity's session depends on (the cookie that "
-        "established it, or one a ${capture.…} value was read from), and which "
-        "one the target reads is unknowable, so the request was not sent"
+        "established it, or one a ${capture.…} value was read from), or the "
+        "cookies that established the session no longer carry one value, and "
+        "which one the target reads is unknowable, so the request was not sent"
     ),
     "injection_not_applicable": (
         "this identity's session injects a form_field or json_field, and this "
@@ -3341,8 +3342,10 @@ SESSION_UNSENT_REMEDIATION: dict[str, str] = {
     "session_cookie_ambiguous": (
         "Nothing was sent: a response after login set another cookie under the "
         "name of one this identity's session depends on, scoped so that both "
-        "would go out with this request, and a server that reads the first "
-        "occurrence would have authenticated the other one. Find which response "
+        "would go out with this request, or replaced one of the cookies that "
+        "established the session with a different value, and a server that "
+        "reads the first occurrence would have authenticated the other one. "
+        "Find which response "
         "sets it, or set \"reestablish\": \"check\" on the session so each check "
         "starts from a fresh login."
     ),
