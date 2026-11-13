@@ -133,16 +133,59 @@ class _Ok(BaseHTTPRequestHandler):
         return
 
 
+class _Parked(ThreadingHTTPServer):
+    """Says when its serve loop, after handing off a request, has checked for
+    shutdown and found none -- so its next step is select(poll_interval).
+
+    serve_forever reads the private shutdown flag at the top of every
+    iteration and again only after select returns. A shutdown() that sets it
+    before that top-of-loop read ends the loop without a select, at once and
+    whatever the interval; one that sets it after the read waits for the
+    select. The flag is a property here so the read itself can be seen."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        self.handed_off = threading.Event()
+        self.parked = threading.Event()
+        self._requested = False
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+
+    def process_request(self, request: object, client_address: object) -> None:
+        super().process_request(request, client_address)  # type: ignore[arg-type]
+        self.handed_off.set()
+
+    @property
+    def _BaseServer__shutdown_request(self) -> bool:  # noqa: N802 - the stdlib's mangled name
+        if not self._requested and self.handed_off.is_set():
+            self.parked.set()
+        return self._requested
+
+    @_BaseServer__shutdown_request.setter
+    def _BaseServer__shutdown_request(self, value: bool) -> None:  # noqa: N802
+        self._requested = value
+
+
 @slow("stands up loopback servers and times their shutdown")
 class ShutdownLatencyTest(unittest.TestCase):
-    """What the guard is for, measured: one request, then shutdown()."""
+    """What the guard is for, measured: one request, then shutdown().
+
+    The clock starts only once the serve loop has come back round after the
+    request and is about to select. Before, it started as soon as the client
+    had its reply, which the handler THREAD sends; the serve loop's own
+    thread could still be on its way back to the top of the loop. A shutdown()
+    in that window ended the loop with no select at all, so both tests
+    measured how long that thread was off the CPU, not the poll interval.
+    CI (ubuntu, 3.12, four slow-tier workers) failed the control with 2.5 ms;
+    holding the loop thread 2 ms after the hand-off brought all six of its
+    measurements here in at 3 ms, with no select call after the request, on
+    3.12 and 3.13."""
 
     def shutdown_after_one_request(self) -> float:
-        server = ThreadingHTTPServer(("127.0.0.1", 0), _Ok)
+        server = _Parked(("127.0.0.1", 0), _Ok)
         thread = loopback.start(server)
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/", timeout=5) as reply:
                 reply.read()
+            self.assertTrue(server.parked.wait(timeout=5), "the serve loop never came back round to select")
             began = time.perf_counter()
             server.shutdown()
             return time.perf_counter() - began
@@ -151,15 +194,16 @@ class ShutdownLatencyTest(unittest.TestCase):
             thread.join(timeout=5)
 
     def test_a_helper_server_stops_without_waiting_out_the_default_poll(self) -> None:
-        # About 35 ms measured; the stdlib default costs about 486 ms.
+        # About 50 ms measured, one whole interval; the stdlib default costs about 500 ms.
         self.assertLess(self.shutdown_after_one_request(), 0.25)
 
     def test_control_at_the_stdlib_default_the_same_measurement_fails(self) -> None:
-        # The slowest of three: any connection that reaches the server while
-        # shutdown() waits wakes its select early, so one measurement can come
-        # back fast for a reason that has nothing to do with the interval. It
-        # did once (31 us), in a worker, while two other slow tiers ran on the
-        # machine; eleven runs alone did not repeat it.
+        # The slowest of three: a connection that reaches the server while
+        # shutdown() waits would wake its select early and return fast for a
+        # reason unrelated to the interval. That was never reproduced; both
+        # fast measurements on record (31 us in a loaded local run, 2.5 ms in
+        # CI) fit the loop not yet back at select, which does reproduce and
+        # which shutdown_after_one_request now waits out.
         with mock.patch.object(loopback, "POLL_INTERVAL", 0.5):
             slowest = max(self.shutdown_after_one_request() for _ in range(3))
         self.assertGreaterEqual(slowest, 0.25)
