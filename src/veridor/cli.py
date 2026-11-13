@@ -1067,6 +1067,17 @@ def _print_sequences(result: dict) -> None:
         )
 
 
+def _compared_with_baseline(result: dict) -> bool:
+    """Whether this run was diffed against a baseline file at all.
+
+    `_compare_findings` records the baseline's run id and content digest, both
+    None when no --baseline was given; either one present means a comparison
+    ran (a baseline without a run_id still has a digest).
+    """
+    regression = result.get("regression") or {}
+    return bool(regression.get("baseline_run_id") or regression.get("baseline_digest"))
+
+
 def _print_summary(result: dict) -> None:
     summary = result["summary"]
     # 'safe' is a security claim about a measurement that only compared a
@@ -1087,10 +1098,21 @@ def _print_summary(result: dict) -> None:
     # either way. The run document has always carried it; stdout did not.
     if result.get("target"):
         print(f"Target: {result['target']}")
-    print(
-        f"Regression diff: {summary['new']} new, "
-        f"{summary['resolved']} resolved, {summary['unchanged']} unchanged"
-    )
+    # "1 new, 0 resolved, 0 unchanged" and "escalated since the baseline" on
+    # a run given no --baseline described a comparison that never ran: every
+    # finding is "new" only because there was nothing to compare it with.
+    # The JSON keeps its counts; the sentence says what they mean.
+    compared = _compared_with_baseline(result)
+    if compared:
+        print(
+            f"Regression diff: {summary['new']} new, "
+            f"{summary['resolved']} resolved, {summary['unchanged']} unchanged"
+        )
+    else:
+        print(
+            f"Regression diff: no baseline given, so every finding "
+            f"({summary['new']}) counts as new"
+        )
     # Said on STDOUT and said here, above the findings. With the target down
     # the run correctly exits 3 and says so on stderr -- and then prints
     # "Regression diff: 7 new", which is what catches the eye in a scrolled CI
@@ -1211,12 +1233,14 @@ def _print_summary(result: dict) -> None:
                 )
             if len(proved) > _SUPPRESSED_LISTED:
                 print(f"    ... and {len(proved) - _SUPPRESSED_LISTED} more")
-    print(
+    evidence = (
         f"Evidence: {summary.get('confirmed', 0)} confirmed, "
         f"{summary.get('suspected', 0)} suspected, "
-        f"{summary.get('ungraded', 0)} ungraded, "
-        f"{summary.get('escalated', 0)} escalated since the baseline"
+        f"{summary.get('ungraded', 0)} ungraded"
     )
+    if compared:
+        evidence += f", {summary.get('escalated', 0)} escalated since the baseline"
+    print(evidence)
     _print_sequences(result)
     # Standing, unconditional, and adjacent to the counts it qualifies. The
     # grades above read as verdicts on the target; they are verdicts on the

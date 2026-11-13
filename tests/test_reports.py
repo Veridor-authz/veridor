@@ -1310,6 +1310,29 @@ class MarkdownTest(unittest.TestCase):
                 else:
                     self.assertNotIn("passed", verdict)
 
+    def test_a_run_without_a_baseline_says_nothing_was_compared(self) -> None:
+        """The New/Unchanged/Resolved columns fill whether or not a baseline
+        was given; without one, every finding is "new" only because nothing
+        was compared, and the table alone read as a comparison that ran."""
+        bare = _run()
+        bare["regression"].update(baseline_run_id=None, baseline_digest=None)
+        text = reports.render("markdown", bare)
+        self.assertIn("No baseline was given, so every finding (1) counts as new "
+                      "and nothing was compared.", text)
+        # Control: the same document diffed against a baseline says nothing of the kind.
+        compared = _run()
+        compared["regression"].update(baseline_run_id="20260923T000000Z-aaaaaa",
+                                      baseline_digest="0123456789abcdef0123")
+        self.assertNotIn("No baseline was given", reports.render("markdown", compared))
+        # A baseline file with no run_id still has a digest: it was compared.
+        digest_only = _run()
+        digest_only["regression"].update(baseline_run_id=None,
+                                         baseline_digest="0123456789abcdef0123")
+        self.assertNotIn("No baseline was given", reports.render("markdown", digest_only))
+        # A document that does not record the regression block's baseline at
+        # all is not evidence that there was none.
+        self.assertNotIn("No baseline was given", reports.render("markdown", _run()))
+
     def test_report_only_over_a_run_that_measured_nothing_is_not_a_pass(self) -> None:
         text = reports.render("markdown", _unreachable("none"))
         self.assertIn("**Gate exit 0, and nothing was measured.**", text)

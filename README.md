@@ -176,8 +176,8 @@ above it was a verdict about.
 ```
 Veridor run 20260731T224235Z-ddccef: 5/6 probes matched their declaration, 1 vulnerable, 0 unexpected denial, 0 inconclusive
 Target: http://127.0.0.1:8765
-Regression diff: 1 new, 0 resolved, 0 unchanged
-Evidence: 1 confirmed, 0 suspected, 0 ungraded, 0 escalated since the baseline
+Regression diff: no baseline given, so every finding (1) counts as new
+Evidence: 1 confirmed, 0 suspected, 0 ungraded
 Scope: Veridor evaluates the expectations you declared. A finding means observed behaviour differed from your declaration; it does not establish that the declaration is correct.
 Pass: A matched probe means the target agreed with your declaration for that one request. It is not evidence that the boundary is enforced, and an expectation that accepts both access and denial matches trivially.
 - [vulnerable (confirmed)] invoice-tenant-isolation / other_tenant: Identity 'other_tenant' received HTTP 200 (declared: one of [404]) and the response carried 'invoice_owner''s marker: 'invoice_owner''s declared marker was observed in 'other_tenant''s response. That is proof the string crossed, and proof of data flow insofar as the marker is unique to 'invoice_owner''s data. You declared that 'other_tenant' must not receive 'invoice_owner''s data, and Veridor measured that it did. Whether that declaration is correct is not something Veridor can check.
@@ -2342,9 +2342,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,525 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 961 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,486 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,528 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 964 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,492 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

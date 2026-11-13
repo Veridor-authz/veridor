@@ -1029,7 +1029,58 @@ class SummaryTest(unittest.TestCase):
                  "--fail-on", "none"]
             )
             self.assertIn("Evidence: 0 confirmed, 0 suspected", stdout)
-            self.assertIn("escalated since the baseline", stdout)
+
+    def test_a_run_without_a_baseline_does_not_report_a_comparison(self) -> None:
+        """No --baseline, no comparison, and the summary says so.
+
+        This test used to assert "escalated since the baseline" on a run given
+        no baseline, which pinned the wrong sentence: "Regression diff: 1 new,
+        0 resolved, 0 unchanged" and "... escalated since the baseline"
+        described a comparison that never ran. Every finding is new only
+        because there was nothing to compare it with.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root)
+            run_json = root / "run.json"
+            _, stdout, _ = _run(
+                ["run", "--config", str(config), "--output-dir", str(root / "h"),
+                 "--fail-on", "none", "--json", str(run_json)]
+            )
+            document = json.loads(run_json.read_text(encoding="utf-8"))
+            new = document["summary"]["new"]
+            self.assertGreater(new, 0, "the dead target must leave findings to count")
+            self.assertIn(
+                f"Regression diff: no baseline given, so every finding ({new}) "
+                "counts as new\n", stdout,
+            )
+            self.assertNotIn("since the baseline", stdout)
+            self.assertNotIn(" resolved, ", stdout)
+            evidence = next(l for l in stdout.splitlines() if l.startswith("Evidence:"))
+            self.assertEqual(
+                evidence,
+                f"Evidence: {document['summary']['confirmed']} confirmed, "
+                f"{document['summary']['suspected']} suspected, "
+                f"{document['summary']['ungraded']} ungraded",
+            )
+            # The JSON is unchanged: the counts are still there, worded or not.
+            for key in ("new", "resolved", "unchanged", "escalated"):
+                self.assertIn(key, document["summary"])
+            self.assertIsNone(document["regression"]["baseline_run_id"])
+
+            # Control in the same test: given a baseline, the wording is the
+            # comparison's, byte for byte as before.
+            _, again, _ = _run(
+                ["run", "--config", str(config), "--output-dir", str(root / "h"),
+                 "--fail-on", "none", "--baseline", str(run_json)]
+            )
+            self.assertIn(f"Regression diff: 0 new, 0 resolved, {new} unchanged\n", again)
+            self.assertRegex(
+                again,
+                r"\nEvidence: \d+ confirmed, \d+ suspected, \d+ ungraded, "
+                r"0 escalated since the baseline\n",
+            )
+            self.assertNotIn("no baseline given", again)
 
     def test_evidence_counts_are_always_followed_by_their_scope(self) -> None:
         """The grades read as verdicts on the target; the contract says why not.

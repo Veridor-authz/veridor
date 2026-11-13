@@ -213,9 +213,24 @@ def _counts(document: Mapping[str, Any]) -> list[str]:
         "| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
         "| " + " | ".join(str(item) for item in row) + " |",
         "",
-        f"Evidence: {value('confirmed', 0)} confirmed, {value('suspected', 0)} "
-        f"suspected, {value('ungraded', 0)} ungraded.",
     ]
+    # New/Unchanged/Resolved are relative to a baseline. A run given none
+    # still fills the columns -- every finding is "new" -- and a table alone
+    # reads as a comparison that ran. Said only when the document records
+    # that it had none; a document without a regression block says nothing.
+    regression = document.get("regression")
+    if (isinstance(regression, Mapping) and "baseline_run_id" in regression
+            and not regression.get("baseline_run_id")
+            and not regression.get("baseline_digest")):
+        lines += [
+            f"No baseline was given, so every finding ({row[5]}) counts as new "
+            "and nothing was compared.",
+            "",
+        ]
+    lines.append(
+        f"Evidence: {value('confirmed', 0)} confirmed, {value('suspected', 0)} "
+        f"suspected, {value('ungraded', 0)} ungraded."
+    )
     if "sequences" in summary:
         lines.append(
             f"Sequences: {summary.get('sequences', 0)} executed, "

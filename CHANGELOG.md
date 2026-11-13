@@ -1577,6 +1577,15 @@ something you installed.
 
 ### Fixed
 
+- **A run with no `--baseline` reported a regression diff it never made.**
+  The summary printed "Regression diff: 1 new, 0 resolved, 0 unchanged" and
+  "Evidence: ... 0 escalated since the baseline" whether or not a baseline
+  was given; without one, every finding is "new" only because nothing was
+  compared. Such a run now prints "Regression diff: no baseline given, so
+  every finding (1) counts as new" and an Evidence line without the
+  escalated clause, and the Markdown job summary says the same under its
+  counts table. A run given a baseline prints exactly what it did before,
+  and the run JSON is unchanged.
 - **The viewer's footer was cut off behind the sidebar.** The footer spanned
   both grid columns while the sidebar is sticky to the whole page, so on a
   desktop the sidebar stayed pinned over its first 320px and the visible text
