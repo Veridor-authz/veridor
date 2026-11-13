@@ -695,6 +695,15 @@ Coverage still cannot fail silently, and this is the half that matters:
   because only evidence under that login counts; nothing narrows it for a
   static credential.
 
+  Other limits of the session cookie rules. A change Veridor sees is a
+  response setting the cookie that established the session: to a new value,
+  or in a form Python's cookie jar drops. A target that ends the session by
+  other means while the cookie stays as it was is the revocation above. A
+  cookie the jar keeps but a browser would reject is not noticed. Cookie
+  names are folded for the same-name refusal as described under sessions
+  (case, `.`, space, `[`); a server that folds names some other way, such as
+  percent-decoding them, is not covered.
+
   This is **stated, never graded**: an identity asserted only to be
   denied and never served anywhere is the ordinary shape of an authorization
   suite, so a finding would fire on most correct configurations. `mutate`'s M6

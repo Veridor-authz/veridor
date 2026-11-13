@@ -143,18 +143,27 @@ sequence assert step, by an identity that presents a credential, where some
 identity was served in the same check or sequence, that nothing else in the
 run proved live (a 2xx it drew on a request where an identity with no
 credential, or the fabricated credential, was refused; or its
-`marker_probe`), and that did not establish who was denied, because a
+`marker_probe`; for a session, either one only under the same login and
+session cookie value), and that did not establish who was denied, because a
 fabricated credential received the same denial, failed, or drew neither a
 refusal nor a success, or none was sent to compare with. One is sent only
 with GET, HEAD and OPTIONS, and only when an identity declares a credential
 header to shape it on; never with a write, which can change state, nor
 inside a sequence. A check where every identity is refused is not judged.
-Such a denial may be the answer to a dead credential; the Job
-log names the identity and says "Give the identity a marker_probe".
-Add a `marker` and a `marker_probe` for it, as the quick start does for
-`other_tenant`, or a check where that identity is served and the fabricated
-credential or an identity with no credential is refused on the same request:
-a 2xx on a route that serves every caller proves nothing. Set
+Such a denial may be the answer to a dead credential; the Job log names the
+identity and says what would prove it. Usually that is "Give the identity a
+marker_probe": add a `marker` and a `marker_probe` for it, as the quick
+start does for `other_tenant`, or a check where that identity is served and
+the fabricated credential or an identity with no credential is refused on
+the same request: a 2xx on a route that serves every caller proves nothing.
+For one with `"reestablish": "check"` a `marker_probe` proves only the first
+login, so use `"reestablish": "run"` or show it served in the same sequence,
+and one whose session cookie the target replaced needs a 2xx sent with the
+new value. Liveness proof is point-in-time: the `marker_probe` runs once,
+before the first check, so a credential revoked later in the run without
+anything Veridor sees changing (a token the target stops accepting, a
+session revoked server-side while its cookie keeps its value) is not
+detected, and its denials pass. Set
 `gate.requireComplete` to `false` to let a partially measured run pass.
 Veridor still exits 3 without the flag when not one probe was answered
 (measured against an unresolvable cluster DNS name), and

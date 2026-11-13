@@ -1793,7 +1793,13 @@ something you installed.
   the same sequence; a 2xx sent with the new value), keeping the
   `marker_probe` advice, word for word, for the rest. The docs, the liveness
   banner, `--no-prove-liveness` help, the config schema's `marker_probe`
-  description and `capsule verify`'s gap text say the same.
+  description and `capsule verify`'s gap text say the same, and so do the
+  GitLab template's `require_complete` input, the `liveness_unproven` row in
+  `docs/report-formats.md`, the Argo CD README, and the Helm chart's values
+  and README, which still gave only the generic advice when this entry first
+  said so. The chart README's "Exit 3" and the report-formats row now also
+  say that liveness proof is point-in-time, and the README's liveness section
+  lists the session cookie rules' other limits.
 - **A session against an IPv6 literal never established.** With
   `target.base_url` such as `http://[::1]:8080`, the cookie policy held the
   host as `::1` and compared it with the request's host as the standard
