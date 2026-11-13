@@ -40,9 +40,10 @@
     re-runs the ``versions`` check on the result before writing anything.
 
 ``notes``
-    Print the release notes for the tag: the opening paragraph of the
-    CHANGELOG section for its version (the text under its ``## [VERSION]``
-    heading before its first subheading, when there is any) and a link to
+    Print the release notes for the tag: all the text of the CHANGELOG
+    section for its version that comes before the section's first heading
+    (every paragraph under its ``## [VERSION]`` heading up to its first
+    ``###``, when there is any) and a link to
     that section in CHANGELOG.md at the tag, on the repository pyproject.toml
     names. The link's anchor is the id GitHub gives the heading. The notes
     were the whole section, and the first release's, about 223,000
@@ -972,21 +973,24 @@ def tree_repository(root: Path) -> str:
 
 
 def release_notes_summary(changelog: str, tag: str, repository: str) -> str:
-    """What a GitHub release says for the tag: the opening paragraph of its
-    CHANGELOG section, if the section has one before its first heading, and a
-    link to the section at the tag. publishable_notes() checks the section first.
+    """What a GitHub release says for the tag: all the text of its CHANGELOG
+    section before the section's first heading, every paragraph of it, if
+    there is any, and a link to the section at the tag. publishable_notes()
+    checks the section first.
 
     The notes were the whole section, and the first release's was about 223,000
     characters, so GitHub refused the release (RELEASE_BODY_LIMIT) after
-    everything else had published."""
+    everything else had published. They were then only the first paragraph of
+    that text, which dropped anything after it, such as an upgrade note, from
+    the release page. Nothing is cut to fit: `notes` refuses a body over the
+    limit instead."""
     body = publishable_notes(changelog, tag)
     semver = tag.removeprefix("v")
     lines = changelog.splitlines()
     start, _ = _section(lines, {semver, semver_to_pep440(semver)})
     heading = start - 1
     label = re.match(r"^## \[([^\]]+)\]", lines[heading]).group(1)
-    preamble = re.split(r"^ {0,3}#", body, maxsplit=1, flags=re.M)[0].strip()
-    opening = re.split(r"\n[ \t]*\n", preamble, maxsplit=1)[0].strip() if preamble else ""
+    opening = re.split(r"^ {0,3}#{1,6}(?:[ \t]|$)", body, maxsplit=1, flags=re.M)[0].strip()
     url = f"https://github.com/{repository}/blob/{tag}/CHANGELOG.md#{heading_anchor(changelog, heading)}"
     link = f"The full release notes are the [{label}] section of CHANGELOG.md:\n{url}\n"
     return f"{opening}\n\n{link}" if opening else link
@@ -1364,7 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
     bumper.add_argument("--write", action="store_true",
                         help="apply the change (default: print the diff and change nothing)")
     notes = commands.add_parser("notes", help="print the release notes for a tag: the CHANGELOG "
-                                "section's opening paragraph and a link to the section")
+                                "section's text before its first ### and a link to the section")
     notes.add_argument("tag")
     notes.add_argument("--repository", help="OWNER/REPO for the link; defaults to pyproject.toml's Repository")
     body = commands.add_parser("release-body", help="run release.yml's release step with gh stubbed and "

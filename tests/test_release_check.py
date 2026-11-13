@@ -1069,6 +1069,23 @@ class ReleaseBodyTest(unittest.TestCase):
                          "https://github.com/Veridor-authz/veridor/blob/v0.1.0/CHANGELOG.md#"
                          f"{FIRST_RELEASE_ANCHOR}\n")
 
+    def test_every_paragraph_before_the_first_subheading_is_in_the_notes(self) -> None:
+        """The notes kept only the first paragraph of that text, so an upgrade
+        note written as the second paragraph never reached the release page."""
+        changelog = ("# Changelog\n\n## [Unreleased]\n\n## [0.2.0] - 2026-10-01\n\n"
+                     "Second release.\n\nUpgrading: re-run `veridor map` first.\n\n"
+                     "#7 in the tracker is not a heading.\n\n### Added\n\n- a thing\n")
+        notes = release_check.release_notes_summary(changelog, "v0.2.0", "Veridor-authz/veridor")
+        opening, _, link = notes.rpartition("\n\n")
+        self.assertEqual(opening, "Second release.\n\nUpgrading: re-run `veridor map` first.\n\n"
+                         "#7 in the tracker is not a heading.")
+        self.assertTrue(link.startswith("The full release notes are the [0.2.0] section"), link)
+        self.assertNotIn("- a thing", notes)
+        # With no subheading at all, the whole section is the text before one.
+        bare = changelog.replace("### Added\n\n- a thing\n", "")
+        self.assertIn("is not a heading.\n\nThe full release notes",
+                      release_check.release_notes_summary(bare, "v0.2.0", "Veridor-authz/veridor"))
+
     def test_the_limit_counts_characters_not_bytes(self) -> None:
         self.assertEqual(release_check.release_body_problems("é" * release_check.RELEASE_BODY_LIMIT), [])
         self.assertTrue(release_check.release_body_problems("e" * (release_check.RELEASE_BODY_LIMIT + 1)))

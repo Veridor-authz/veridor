@@ -373,12 +373,12 @@ maintainers.
 2. **Changelog.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD`, drop
    its opening paragraph that says nothing has been released, and add an empty
    `## [Unreleased]` above it. The GitHub release's notes come from that
-   section: `python3.12 scripts/release_check.py notes vX.Y.Z` prints its
-   opening paragraph (the text before its first `###` heading, if any) and a
-   link to the section in `CHANGELOG.md` at the tag, and the release stops in
-   its first job if it cannot. It refuses a missing or empty section, a
-   section that still says it is not released, and an `## [Unreleased]` with
-   anything under it. The notes are not the whole section because GitHub
+   section: `python3.12 scripts/release_check.py notes vX.Y.Z` prints all of
+   its text before its first `###` heading, every paragraph of it, if there is
+   any, and a link to the section in `CHANGELOG.md` at the tag, and the
+   release stops in its first job if it cannot. It refuses a missing or empty
+   section, a section that still says it is not released, and an
+   `## [Unreleased]` with anything under it. The notes are not the whole section because GitHub
    refuses a release body over 125,000 characters: the first release's
    section was about 223,000, and its release job failed after everything
    else had published.
@@ -387,8 +387,10 @@ maintainers.
    placeholder digests, and fails if what it would post is empty or over the
    limit. To run it locally, add `--repository Veridor-authz/veridor --image
    ghcr.io/veridor-authz/veridor --chart-repository
-   oci://ghcr.io/veridor-authz/charts`. Write the section's opening paragraph
-   for a reader of the release page: it is all of the section they see there.
+   oci://ghcr.io/veridor-authz/charts`. Write the text before the first `###`
+   for a reader of the release page, upgrade notes included: it is all of the
+   section they see there. Nothing is cut to fit; over the limit, `notes`
+   fails.
    For the first release:
    `## [0.1.0]` already exists and was never tagged, so a 0.1.0 release folds
    `[Unreleased]` into it and replaces its "Not released" paragraph.

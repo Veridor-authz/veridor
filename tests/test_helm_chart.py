@@ -133,6 +133,18 @@ class ChartMetadataTest(unittest.TestCase):
         self.assertEqual(chart["name"], "veridor-gate")
         self.assertEqual(chart["version"], "0.1.0")
 
+    def test_artifact_hub_license_is_the_package_license(self) -> None:
+        """Artifact Hub shows the chart's license from this annotation; the
+        chart ships in the same tree as the package, under its license."""
+        import tomllib  # noqa: PLC0415
+
+        license_ = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["license"]
+        annotations = load_yaml(CHART / "Chart.yaml")["annotations"]
+        self.assertEqual(annotations["artifacthub.io/license"], license_)
+        links = load_yaml_documents(annotations["artifacthub.io/links"])[0]
+        self.assertEqual([link["url"] for link in links],
+                         ["https://github.com/Veridor-authz/veridor", "https://docs.veridor.org/"])
+
     def test_app_version_is_the_package_version(self) -> None:
         """The image tag defaults to appVersion, so a drift here deploys a
         different Veridor than the chart documents.

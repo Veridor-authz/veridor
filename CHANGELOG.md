@@ -7,6 +7,13 @@ caveat that the interface may still move.
 
 ## [Unreleased]
 
+### Changed
+
+- The `veridor-gate` chart carries Artifact Hub annotations: its license
+  (Apache-2.0) and links to the source repository and the docs. Artifact Hub
+  reads them from a published chart version, so they appear from the next
+  chart release; 0.1.0's page does not change.
+
 ### Fixed
 
 - **The release workflow's last step failed for 0.1.0.** `release.yml` posted
@@ -15,13 +22,14 @@ caveat that the interface may still move.
   125,000 (HTTP 422, "body is too long"), so the `github-release` job failed
   after PyPI, the image and the chart had published, and the v0.1.0 release
   was created by hand from that run's files. Nothing counted the notes before
-  then. The notes are now the section's opening paragraph and a link to the
-  section in `CHANGELOG.md` at the tag, with the anchor GitHub gives its
-  heading. The first job runs `release_check.py release-body`, which runs
-  the release job's own "Create the release" step with `gh` stubbed and
-  placeholder digests, and fails if the body it would post is empty or over
-  125,000 characters. Against the tree v0.1.0 was tagged from it fails, at
-  223,758.
+  then. The notes are now the section's text before its first `###`, every
+  paragraph of it, and a link to the section in `CHANGELOG.md` at the tag,
+  with the anchor GitHub gives its heading. Nothing is cut to fit: `notes`
+  fails on a body over the limit. The first job runs `release_check.py
+  release-body`, which runs the release job's own "Create the release" step
+  with `gh` stubbed and placeholder digests, and fails if the body it would
+  post is empty or over 125,000 characters. Against the tree v0.1.0 was
+  tagged from it fails, at 223,758.
 
 ## [0.1.0] - 2026-11-13
 
