@@ -4108,7 +4108,10 @@ def plan_sequence_liveness(
     header -- any header :func:`_credential_bearing_header` accepts, so an
     ``Accept``-only anonymous identity is not one. A session identity's step
     already has its own rule (``session_not_live``), and an identity that
-    sends nothing has no credential that could be dead. Socket-free.
+    sends nothing has no credential that could be dead. A session-only
+    identity's step sent after a response replaced its session cookie is
+    added once the sequences have run (:func:`_replaced_cookie_sequence_steps`).
+    Socket-free.
 
     No fabricated credential is sent inside a sequence: a step's request
     depends on what earlier steps captured and created, and a sham replaying
@@ -4138,6 +4141,46 @@ def plan_sequence_liveness(
                 tuple((step.get("expect") or {}).get("status") or ()),
             ))
     return planned
+
+
+def _replaced_cookie_sequence_steps(
+    config: Mapping[str, Any],
+    replaced: Callable[[Any, tuple[Any, ...]], bool],
+) -> list[tuple[str, int, str, str, tuple[int, ...]]]:
+    """Denial-only assert steps of a session-only identity sent after its cookie changed.
+
+    Shaped as :func:`plan_sequence_liveness` plans them. That plan leaves out
+    an identity whose only credential is its session: its login proves the
+    session cookie, and ``session_not_live`` catches a 401 after it. Once a
+    response gives that cookie a different value -- or sets it in a form the
+    jar dropped -- the login proved a value the request no longer carries, and
+    a guest session's ``404`` matched the declared denial with nothing listed
+    unproven. ``replaced(identity, request)`` says whether the step went out
+    after such a change; it can only be known once the sequences have run.
+    """
+    identities = config.get("identities") or {}
+    steps: list[tuple[str, int, str, str, tuple[int, ...]]] = []
+    for sequence in config.get("sequences") or ():
+        sequence_id = str(sequence.get("id"))
+        for index, step in enumerate(sequence.get("steps") or ()):
+            identity = identities.get(step.get("as"))
+            if (
+                step.get("role") != "assert"
+                or not _denial_only(step.get("expect"))
+                or not isinstance(identity, Mapping)
+                or _presents_static_credential(identity)
+                or not replaced(step.get("as"), ("step", sequence.get("id"), index))
+            ):
+                continue
+            request = step.get("request") or {}
+            steps.append((
+                sequence_id,
+                index,
+                str(request.get("method", "GET")).upper(),
+                str(request.get("path", "")),
+                tuple((step.get("expect") or {}).get("status") or ()),
+            ))
+    return steps
 
 
 def _refused(status: Any) -> bool:
@@ -4274,16 +4317,16 @@ RELOGGED_LIVENESS_REMEDIATION: str = (
     "on the same request proves that sequence's login."
 )
 
-#: Advice on an unproven denial for an identity proven live only under an
-#: earlier value of its session cookie: a response replaced the cookie that
-#: established the session (or set it in a form the cookie jar dropped), and
-#: nothing proved the session live since.
+#: Advice on an unproven denial sent after a response replaced the cookie that
+#: established the session (or set it in a form the cookie jar dropped): the
+#: login, and any proof of life, covered the earlier value only, and nothing
+#: proved the session live since.
 STALE_COOKIE_LIVENESS_REMEDIATION: str = (
-    "{identity} was proven live (by its marker_probe, or a 2xx where a caller "
-    "without its credential was refused) before a response gave the cookie "
-    "that established its session a different value, or set it in a form "
-    "Veridor's cookie jar dropped so the earlier value went on being sent, "
-    "and nothing proved the session live since. Veridor cannot tell a target "
+    "{identity} logged in, or was proven live (by its marker_probe, or a 2xx "
+    "where a caller without its credential was refused), before a response "
+    "gave the cookie that established its session a different value, or set "
+    "it in a form Veridor's cookie jar dropped so the earlier value went on "
+    "being sent, and nothing proved the session live since. Veridor cannot tell a target "
     "rotating the session from one replacing it with an anonymous session. "
     "Find which response sets it; a check or sequence step sent after it, "
     "where {identity} is served and an identity with no credential is refused "
@@ -7110,8 +7153,16 @@ def execute_run(
     # by the same rule, and a step that served an identity beside a refusal
     # proves its credential as well as a check does.
     if liveness_controls is not None:
+        def replaced(identity: Any, request: tuple[Any, ...]) -> bool:
+            """Sent after a response replaced (or set a dropped) proof cookie."""
+            session = sessions.get(identity)
+            epoch = None if session is None else session.sent_epochs.get(request)
+            return epoch is not None and epoch not in session.login_epochs
+
         liveness_unproven = liveness_unproven + _sequence_liveness_unproven(
-            _sequence_liveness, sequence_records
+            _sequence_liveness
+            + _replaced_cookie_sequence_steps(config, replaced),
+            sequence_records,
         )
         # (identity, session epoch) for every piece of evidence that a
         # credential was live when it was sent. See sent_under above.
@@ -7122,13 +7173,15 @@ def execute_run(
             )
         }
 
-        def denied_under(entry: Mapping[str, Any]) -> int | None:
-            request = (
+        def denied_by(entry: Mapping[str, Any]) -> tuple[Any, ...]:
+            return (
                 ("step", entry["sequence_id"], entry["step_index"])
                 if entry.get("sequence_id") is not None
                 else ("check", entry["check_id"])
             )
-            return sent_under(entry["identity"], request)
+
+        def denied_under(entry: Mapping[str, Any]) -> int | None:
+            return sent_under(entry["identity"], denied_by(entry))
 
         liveness_unproven = [
             entry
@@ -7144,7 +7197,16 @@ def execute_run(
             )
         ]
         for entry in liveness_unproven:
-            if entry["identity"] in relogged:
+            if replaced(entry["identity"], denied_by(entry)):
+                # Whatever proved this session -- its login, its marker_probe,
+                # an earlier 2xx -- proved the value the target has since
+                # replaced; logging in again or a marker_probe would not prove
+                # the value this denial went out with.
+                entry["proof_scope"] = "cookie_value"
+                entry["remediation"] = STALE_COOKIE_LIVENESS_REMEDIATION.format(
+                    identity=quoted(entry["identity"])
+                )
+            elif entry["identity"] in relogged:
                 # The generic advice is to add a marker_probe, which proves
                 # nothing for this identity past its first login.
                 entry["proof_scope"] = "login"

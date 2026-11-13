@@ -4773,6 +4773,143 @@ class StaleCookieSequenceLivenessTest(unittest.TestCase):
 
 
 @slow("stands up a loopback HTTP server and runs the engine against it")
+class SessionOnlySequenceLivenessTest(unittest.TestCase):
+    """The same for identities whose only credential is the session cookie.
+
+    StaleCookieSequenceLivenessTest's identities also send a static
+    Authorization header, which is what put their assert step in the liveness
+    plan at all. Here they send nothing else: step 1's response replaces the
+    attacker's cookie, step 2 went out as ``sid=guest``, drew the 404 a guest
+    gets, and was graded matched with ``liveness.unproven`` empty.
+    """
+
+    @staticmethod
+    def _execute(late: str | None, *, prove_after: bool = False):
+        def responder(entry: dict):
+            json_type = [("Content-Type", "application/json")]
+            if entry["path"] == "/login":
+                who = "victim" if b"u=victim" in entry["body"] else "attacker"
+                return 200, [("Set-Cookie", f"sid={who}; Path=/")], b"ok"
+            sid = entry["cookie"].partition("sid=")[2].partition(";")[0]
+            if sid not in ("attacker", "attacker2", "victim"):
+                return 404, json_type, b'{"e":"anon"}'
+            if entry["path"] == "/m":
+                headers = list(json_type)
+                if sid == "attacker" and late:
+                    headers.append(("Set-Cookie", late))
+                return 200, headers, b'{"m":"ok"}'
+            if entry["path"] == "/own" or sid == "victim":
+                return 200, json_type, json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 404, json_type, b'{"e":"denied"}'
+
+        def identity(who: str) -> dict:
+            return {"headers": {}, "session": {
+                "login": [{"method": "POST", "path": "/login", "body": f"u={who}",
+                           "expect_status": [200]}],
+                "establishes": {"cookie": "sid"}}}
+
+        identities = {"victim": identity("victim"), "attacker": identity("attacker"),
+                      "anonymous": {"headers": {}}}
+        steps = [
+            {"role": "setup", "as": "victim", "request": {"method": "GET", "path": "/docs/1"},
+             "expect": {"status": [200]}},
+            {"role": "setup", "as": "attacker", "request": {"method": "GET", "path": "/m"},
+             "expect": {"status": [200]}},
+        ]
+        if prove_after:
+            steps += [
+                {"role": "setup", "as": "attacker",
+                 "request": {"method": "GET", "path": "/own"}, "expect": {"status": [200]}},
+                {"role": "setup", "as": "anonymous",
+                 "request": {"method": "GET", "path": "/own"}, "expect": {"status": [404]}},
+            ]
+        steps.append({"role": "assert", "as": "attacker",
+                      "request": {"method": "GET", "path": "/docs/1"},
+                      "expect": {"status": [403, 404]}})
+        config = {"version": 2,
+                  "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                  "identities": identities, "checks": [],
+                  "sequences": [{"id": "seq", "steps": steps}]}
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        sent = [entry["cookie"] for entry in log.entries
+                if entry["path"] == "/docs/1" and "victim" not in entry["cookie"]]
+        return result, sent, result["liveness"]["unproven"]
+
+    def test_control_nothing_replaced_the_login_proves_the_assert(self) -> None:
+        result, sent, unproven = self._execute(None)
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual(unproven, [])
+
+    def test_control_the_same_value_set_again_lists_nothing(self) -> None:
+        _result, sent, unproven = self._execute("sid=attacker; Path=/")
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual(unproven, [])
+
+    def test_a_guest_cookie_before_the_assert_is_disclosed(self) -> None:
+        result, sent, unproven = self._execute("sid=guest; Path=/")
+        self.assertEqual(sent, ["sid=guest"])
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 3)
+        self.assertEqual([(entry["identity"], entry.get("step_index"), entry.get("proof_scope"))
+                          for entry in unproven], [("attacker", 2, "cookie_value")])
+        self.assertIn("different value", unproven[0]["remediation"])
+        self.assertNotIn("Give 'attacker' a marker_probe", unproven[0]["remediation"])
+
+    def test_the_same_for_a_rotation_the_jar_drops(self) -> None:
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/; Max-Age=abc")
+        self.assertEqual(sent, ["sid=attacker"])
+        self.assertEqual([(entry.get("step_index"), entry.get("proof_scope"))
+                          for entry in unproven], [(2, "cookie_value")])
+
+    def test_control_a_2xx_after_the_change_proves_it(self) -> None:
+        """Served /own as attacker2, where an identity with no credential is refused."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/", prove_after=True)
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual(unproven, [])
+
+    def test_a_rotation_is_disclosed_too(self) -> None:
+        """Behaviour change: rotation and a downgrade are indistinguishable here."""
+        _result, sent, unproven = self._execute("sid=attacker2; Path=/")
+        self.assertEqual(sent, ["sid=attacker2"])
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+
+
+class ReplacedCookieSequenceStepsTest(unittest.TestCase):
+    """Which steps the run-level pass considers, read off the config. Socket-free."""
+
+    CONFIG = {
+        "identities": {
+            "cookie": {"headers": {}, "session": {"login": [], "establishes": {"cookie": "sid"}}},
+            "static": {"headers": {"Authorization": "Bearer x"},
+                       "session": {"login": [], "establishes": {"cookie": "sid"}}},
+        },
+        "sequences": [{"id": "s", "steps": [
+            {"role": "assert", "as": "cookie", "request": {"method": "get", "path": "/a"},
+             "expect": {"status": [403, 404]}},
+            {"role": "assert", "as": "static", "request": {"path": "/b"},
+             "expect": {"status": [404]}},
+            {"role": "setup", "as": "cookie", "request": {"path": "/c"},
+             "expect": {"status": [404]}},
+            {"role": "assert", "as": "cookie", "request": {"path": "/d"},
+             "expect": {"status": [200, 404]}},
+        ]}],
+    }
+
+    def test_only_a_session_only_denial_only_assert_sent_after_the_change(self) -> None:
+        self.assertEqual(
+            core._replaced_cookie_sequence_steps(self.CONFIG, lambda identity, request: True),
+            [("s", 0, "GET", "/a", (403, 404))])
+
+    def test_control_nothing_replaced_lists_nothing(self) -> None:
+        asked = []
+        self.assertEqual(core._replaced_cookie_sequence_steps(
+            self.CONFIG, lambda identity, request: asked.append((identity, request)) or False),
+            [])
+        self.assertEqual(asked, [("cookie", ("step", "s", 0))])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
 class ProofCookiesDisagreeEndToEndTest(unittest.TestCase):
     """The same through the engine: a server that authenticates the first ``sid``.
 

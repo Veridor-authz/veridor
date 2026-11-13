@@ -1394,6 +1394,10 @@ class IdentitySession:
         #: other: a response that replaced ``sid=attacker`` with ``sid=guest``
         #: on the same path looks exactly like rotation from here.
         self.epoch = 0
+        #: The epochs a login started. A request sent under any other epoch
+        #: went out after a response replaced the proof cookie (or set one the
+        #: jar dropped), with a value the login never proved.
+        self.login_epochs: set[int] = set()
         #: request key -> the epoch it was sent under. Keys are ``("marker",)``,
         #: ``("check", check_id)``, ``("step", sequence_id, index)`` and
         #: ``("teardown", sequence_id, index)``. Kept across logins: the
@@ -1809,6 +1813,7 @@ class IdentitySession:
         self._proof = frozenset()
         self._seen = set()
         self.epoch += 1
+        self.login_epochs.add(self.epoch)
         self.steps = []
         self.note = None
         self.reason = None

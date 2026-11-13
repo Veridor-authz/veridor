@@ -94,6 +94,25 @@ something you installed.
   the past) does not. Behaviour change: such a target's denials are now
   unproven, and exit `3` under `--require-complete`, unless a 2xx sent after it
   proves the session.
+- **A sequence step of a cookie-only session sent after its cookie was
+  replaced was graded on the login.** Liveness planning for sequence steps
+  covers only identities with a static credential header; a session's own
+  rule catches a `401` and nothing else. A setup step's response set
+  `sid=guest; Path=/`, the denial-only assert step after it went out as
+  `sid=guest`, drew the `404` a guest gets, and was graded `matched` with
+  `liveness.unproven` empty (reproduced with identities that send only the
+  session cookie; the existing test passed only because its identities also
+  sent an `Authorization` header). A denial-only assert step of a
+  session-only identity sent after a response replaced its session cookie,
+  or set it in a form the jar dropped, is now judged like any other: listed
+  in `liveness.unproven` with `"proof_scope": "cookie_value"` unless a 2xx
+  sent after the change, where an identity with no credential is refused,
+  proves the session. An unproven denial sent after such a replacement now
+  carries `"proof_scope": "cookie_value"` even for a `"reestablish": "check"`
+  identity or one with nothing proven, whose entries carried `"login"` or no
+  `proof_scope` before. Behaviour change: a target that rotates a cookie-only
+  session during a sequence now has the assert steps after it listed as
+  unproven, and exits `3` under `--require-complete`.
 - **A same-named cookie set after login rode in front of the session's
   cookie, and a live IDOR was graded safe.** A response after login set
   `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for

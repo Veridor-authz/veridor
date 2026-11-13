@@ -647,16 +647,19 @@ Coverage still cannot fail silently, and this is the half that matters:
   denial-only request it leaves unchecked. A denial
   counts as unproven, on the console and in `liveness.unproven`, only when
   all of these hold: the identity presents a credential (for a sequence
-  step, a static credential header); some identity was served in the same
+  step, a static credential header, or a session cookie that a response
+  replaced, or set in a form the cookie jar dropped, after login and before
+  the step was sent: the login proved the earlier value only); some identity
+  was served in the same
   check, or the same sequence; nothing else in the run proved the identity
   live (a 2xx it drew on a request where an identity with no credential, or
   the fabricated credential, was refused; or its `marker_probe`; for a session
   with `"reestablish": "check"`, only a 2xx in the same sequence counts, since
   each check and sequence is a login of its own; and for any session, only
   evidence sent with the same value of the cookie that established it, so once
-  a response gives that cookie a different value, the `marker_probe` and any
-  2xx sent with the old value stop counting, and only a 2xx sent with the new
-  value proves its denials) — a 2xx on
+  a response gives that cookie a different value (or sets it in a form the
+  cookie jar drops), the `marker_probe` and any 2xx sent before stop counting,
+  and only a 2xx sent after it proves its denials) — a 2xx on
   a route that serves every caller proves nothing, so a `GET` that serves
   such an identity gets a fabricated credential too, and its 2xx counts only
   if that is refused (on a route an identity with no credential is declared
@@ -672,10 +675,12 @@ Coverage still cannot fail silently, and this is the half that matters:
   a target that refuses a malformed credential but serves a well-formed
   expired one as anonymous can let its refusal prove an expired token live.
   In `liveness.unproven`, an unproven denial of a `"reestablish": "check"`
-  identity carries `"proof_scope": "login"`, and one whose identity was proven
-  live only under another value of its session cookie carries
-  `"proof_scope": "cookie_value"`; their advice says what would prove them
-  rather than to add a `marker_probe`.
+  identity carries `"proof_scope": "login"`, and one sent after a response
+  replaced its session cookie, or whose identity was proven live only under
+  another value of it, carries `"proof_scope": "cookie_value"` (a
+  `"reestablish": "check"` identity's denial sent after such a replacement
+  does too); their advice says what would prove them rather
+  than to add a `marker_probe`.
 
   Liveness evidence is point-in-time. The `marker_probe` runs once, before the
   first check, and a 2xx proves the credential at the moment it was served. A
@@ -2447,9 +2452,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,615 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 1,001 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,616 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,617 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 1,007 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,624 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,
