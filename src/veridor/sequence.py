@@ -1260,17 +1260,32 @@ def _cookie_pairs(header: str) -> set[tuple[str, str]]:
     return pairs
 
 
+def _folded_cookie_name(name: str) -> str:
+    """``name`` as the most lenient server reads it, for the same-name refusal.
+
+    Lowercased, with ``.`` and space as ``_``, and cut at the first ``[``.
+    PHP stores a cookie named ``s.id`` or ``s id`` as ``$_COOKIE['s_id']``,
+    and one named ``sid[x]`` as an array under ``sid``.
+    """
+    return name.partition("[")[0].lower().replace(".", "_").replace(" ", "_")
+
+
 def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> bool:
     """Does ``sent`` carry a value under ``name`` that is none of ``wires``?
 
-    Names compare without case. The jar treats ``SID`` and ``sid`` as two
-    cookies, but a server that folds cookie names reads ``SID=guest; sid=…``
-    as two values of one, and may take the guest. Refusing a request a
-    case-sensitive server would have read correctly is the cheaper mistake.
+    Names compare as :func:`_folded_cookie_name` folds them. The jar treats
+    ``SID``, ``sid[x]`` and ``s.id`` as cookies apart from ``sid`` and
+    ``s_id``, but a server that folds names reads ``SID=guest; sid=…`` as two
+    values of one, and may take the guest. PHP 8.5 read
+    ``sid[x]=guest; sid=attacker`` as an array (no session) and
+    ``s.id=guest; s_id=attacker`` as ``s_id=guest``, and either guest's 404
+    matched a declared denial. Refusing a request a stricter server would
+    have read correctly is the cheaper mistake.
     """
-    name = name.lower()
+    name = _folded_cookie_name(name)
     return any(
-        sent_name.lower() == name and value not in wires for sent_name, value in sent
+        _folded_cookie_name(sent_name) == name and value not in wires
+        for sent_name, value in sent
     )
 
 

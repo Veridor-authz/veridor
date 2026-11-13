@@ -1464,10 +1464,13 @@ guest. So a request that would carry the proof cookie, or a cookie a
 `${capture.…}` value was read from, beside a different value under the same
 name **is not sent** and is graded `inconclusive`
 (`session_cookie_ambiguous`) — the rule that stops such a login from
-establishing, applied to every request. "The same name" ignores case here:
-`SID=guest` beside `sid=attacker` is refused, because a server that folds
-cookie names reads both as one, and a server that does not gets `inconclusive`
-too. The same value under the same name on
+establishing, applied to every request. "The same name" is compared the way
+the most lenient server reads it: without case, with `.` and space read as
+`_`, and up to the first `[`. So `SID=guest` beside `sid=attacker`,
+`sid[x]=guest` beside `sid=attacker`, and `s.id=guest` beside `s_id=attacker`
+are refused, because a server that folds cookie names (PHP stores `s.id` as
+`s_id` and `sid[x]` as an array under `sid`) reads both as one; a server that
+does not gets `inconclusive` too. The same value under the same name on
 two paths is not ambiguous and goes out. When the login set the proof cookie
 more than once with one value (on two paths, or host-only and with `Domain=`),
 every copy is the proof, and once a later response gives one copy a different
@@ -2439,9 +2442,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,605 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,611 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 1,000 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,605 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,611 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

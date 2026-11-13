@@ -40,6 +40,17 @@ something you installed.
   cookie a `${capture.…}` value was read from. Behaviour change: a server that
   keeps case apart, and would have read the right one, now gets
   `inconclusive` for such a request too.
+- **A name PHP folds onto the session cookie's was not a second value.**
+  The same refusal compared names only without case. PHP reads a cookie named
+  `s.id` or `s id` as `s_id`, and `sid[x]` as an array under `sid`. Measured
+  against PHP 8.5's built-in server: `sid[x]=guest` beside `sid=attacker`, and
+  `s.id=guest` beside `s_id=attacker`, went out, the target read no session or
+  the guest's, and its `404` matched the declared denial (safe 2, vulnerable
+  0, `liveness.unproven` empty; with `other=guest`, `VERIDOR-AUTHZ-001`
+  confirmed). Names are now also compared with `.` and space read as `_` and
+  cut at the first `[`, and both requests are refused as
+  `session_cookie_ambiguous`. Behaviour change: a server that keeps those
+  names apart gets `inconclusive` for such a request too.
 - **A session cookie replaced after the marker probe kept the marker's
   liveness proof.** A response that gives the cookie that established the
   session a different value on the same name, domain and path is treated as

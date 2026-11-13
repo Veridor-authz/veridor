@@ -4345,6 +4345,70 @@ class CaseVariantCookieNameTest(unittest.TestCase):
         self.assertEqual(cookie, "SID=attacker; sid=attacker")
         self.assertIsNone(reason)
 
+    def _attach_named(self, proof: str, later) -> tuple:
+        """The same, for a proof cookie named ``proof`` rather than ``sid``."""
+        session = _offline_session(
+            {"login": _login(), "establishes": {"cookie": proof}},
+            _cookie(proof, "attacker"))
+        self.assertEqual(session.state, "established", session.reason)
+        session.jar.set_cookie(later)
+        request = Request("http://127.0.0.1:1/docs/1", method="GET")
+        return session.attach_cookies(request), request.get_header("Cookie")
+
+    def test_an_upper_case_proof_name_is_folded_too(self) -> None:
+        """Only the sent name was lowercased once; ``sid`` hid that."""
+        for later in ("JSESSIONID", "jsessionid"):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    "JSESSIONID", _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; JSESSIONID=attacker")
+                self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_an_upper_case_proof_beside_another_name_goes_out(self) -> None:
+        reason, cookie = self._attach_named(
+            "JSESSIONID", _cookie("XSESSIONID", "guest", path="/docs"))
+        self.assertEqual(cookie, "XSESSIONID=guest; JSESSIONID=attacker")
+        self.assertIsNone(reason)
+
+
+class FoldedCookieNameTest(unittest.TestCase):
+    """A name PHP folds onto the proof's is a second value under it.
+
+    PHP 8.5 stores ``s.id`` and ``s id`` as ``s_id`` and ``sid[x]`` as an
+    array under ``sid``. Measured against ``php -S``: ``sid[x]=guest`` beside
+    ``sid=attacker`` left no session string, ``s.id=guest`` beside
+    ``s_id=attacker`` read as ``s_id=guest``, and either 404 matched the
+    declared denial (safe 2, vulnerable 0, ``liveness.unproven`` empty).
+    """
+
+    _attach_named = CaseVariantCookieNameTest._attach_named
+
+    def test_a_bracketed_name_beside_the_proof_is_refused(self) -> None:
+        reason, cookie = self._attach_named("sid", _cookie("sid[x]", "guest", path="/docs"))
+        self.assertEqual(cookie, "sid[x]=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_a_dot_or_space_name_beside_an_underscore_proof_is_refused(self) -> None:
+        for later in ("s.id", "s id", "S.ID"):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    "s_id", _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; s_id=attacker")
+                self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_control_names_php_keeps_apart_go_out(self) -> None:
+        for proof, later in (("s_id", "s-id"), ("sid", "sidx"), ("sid", "x[sid]")):
+            with self.subTest(later=later):
+                reason, cookie = self._attach_named(
+                    proof, _cookie(later, "guest", path="/docs"))
+                self.assertEqual(cookie, f"{later}=guest; {proof}=attacker")
+                self.assertIsNone(reason)
+
+    def test_control_a_folded_name_with_the_proofs_value_goes_out(self) -> None:
+        reason, cookie = self._attach_named("s_id", _cookie("s.id", "attacker", path="/docs"))
+        self.assertEqual(cookie, "s.id=attacker; s_id=attacker")
+        self.assertIsNone(reason)
+
 
 class IPv6LiteralTargetTest(unittest.TestCase):
     """A base_url naming an IPv6 literal gets a working jar, and only for that host.
