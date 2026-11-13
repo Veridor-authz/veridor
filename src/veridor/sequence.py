@@ -1254,8 +1254,17 @@ def _cookie_pairs(header: str) -> set[tuple[str, str]]:
 
 
 def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> bool:
-    """Does ``sent`` carry a value under ``name`` that is none of ``wires``?"""
-    return any(sent_name == name and value not in wires for sent_name, value in sent)
+    """Does ``sent`` carry a value under ``name`` that is none of ``wires``?
+
+    Names compare without case. The jar treats ``SID`` and ``sid`` as two
+    cookies, but a server that folds cookie names reads ``SID=guest; sid=…``
+    as two values of one, and may take the guest. Refusing a request a
+    case-sensitive server would have read correctly is the cheaper mistake.
+    """
+    name = name.lower()
+    return any(
+        sent_name.lower() == name and value not in wires for sent_name, value in sent
+    )
 
 
 def _cookie_wire_values(value: str) -> set[str]:

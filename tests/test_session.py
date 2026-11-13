@@ -4311,6 +4311,41 @@ class ProofCookiesDisagreeTest(unittest.TestCase):
         self.assertEqual(reason, "session_cookie_ambiguous")
 
 
+class CaseVariantCookieNameTest(unittest.TestCase):
+    """A second value under the proof's name in another case is a second value.
+
+    ``SID=guest; Path=/docs`` beside ``sid=attacker`` went out as
+    ``SID=guest; sid=attacker``: the jar keeps them apart, and the same-name
+    check compared names exactly. A server that folds cookie names and reads
+    the first occurrence authenticated the guest, whose 404 matched the
+    declared denial (safe 2, vulnerable 0).
+    """
+
+    _attach = SameNamedCookieOnTheRequestTest._attach
+    COOKIE = SameNamedCookieOnTheRequestTest.COOKIE
+
+    def test_a_case_variant_name_beside_the_proof_is_refused(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("SID", "guest", path="/docs"))
+        self.assertEqual(cookie, "SID=guest; sid=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
+    def test_a_case_variant_beside_a_carried_csrf_cookie_is_refused(self) -> None:
+        self.assertEqual(
+            SameNamedCookieOnTheRequestTest._csrf(
+                self, _cookie("CSRFTOKEN", "other", path="/docs")),
+            "session_cookie_ambiguous")
+
+    def test_control_another_name_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("XID", "guest", path="/docs"))
+        self.assertEqual(cookie, "XID=guest; sid=attacker")
+        self.assertIsNone(reason)
+
+    def test_control_a_case_variant_with_the_proofs_value_goes_out(self) -> None:
+        reason, cookie = self._attach(self.COOKIE, _cookie("SID", "attacker", path="/docs"))
+        self.assertEqual(cookie, "SID=attacker; sid=attacker")
+        self.assertIsNone(reason)
+
+
 @slow("stands up a loopback HTTP server and runs the engine against it")
 class ProofCookiesDisagreeEndToEndTest(unittest.TestCase):
     """The same through the engine: a server that authenticates the first ``sid``.

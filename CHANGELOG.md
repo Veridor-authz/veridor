@@ -30,6 +30,16 @@ something you installed.
   value, every request of that session is now refused as
   `session_cookie_ambiguous`, the rule a login already followed. Behaviour
   change: that includes a request that only the unchanged copy would reach.
+- **A second value under the session cookie's name in another case was not
+  refused.** `SID=guest; Path=/docs` beside `sid=attacker` went out as
+  `Cookie: SID=guest; sid=attacker`: the jar keeps the two names apart, and the
+  refusal of a second value compared names exactly. A server that folds cookie
+  names and reads the first occurrence authenticated the guest (reproduced:
+  safe 2, vulnerable 0; with `XID=guest`, `VERIDOR-AUTHZ-001` confirmed). Names
+  now compare without case for that refusal, for the proof cookie and for a
+  cookie a `${capture.…}` value was read from. Behaviour change: a server that
+  keeps case apart, and would have read the right one, now gets
+  `inconclusive` for such a request too.
 - **A same-named cookie set after login rode in front of the session's
   cookie, and a live IDOR was graded safe.** A response after login set
   `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for

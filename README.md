@@ -1439,7 +1439,10 @@ guest. So a request that would carry the proof cookie, or a cookie a
 `${capture.…}` value was read from, beside a different value under the same
 name **is not sent** and is graded `inconclusive`
 (`session_cookie_ambiguous`) — the rule that stops such a login from
-establishing, applied to every request. The same value under the same name on
+establishing, applied to every request. "The same name" ignores case here:
+`SID=guest` beside `sid=attacker` is refused, because a server that folds
+cookie names reads both as one, and a server that does not gets `inconclusive`
+too. The same value under the same name on
 two paths is not ambiguous and goes out. When the login set the proof cookie
 more than once with one value (on two paths, or host-only and with `Domain=`),
 every copy is the proof, and once a later response gives one copy a different
@@ -2407,9 +2410,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,587 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,591 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 989 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,576 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,580 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,
