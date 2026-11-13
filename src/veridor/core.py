@@ -4892,8 +4892,19 @@ def denial_remediation(status: int | None) -> str:
     return _DENIAL_REMEDIATION
 
 
-def credential_suspects(result: Mapping[str, Any]) -> list[str]:
+def credential_suspects(
+    result: Mapping[str, Any], credentialed: Iterable[str]
+) -> list[str]:
     """Identities refused with 401/407 on every request they were answered on.
+
+    Only an identity in ``credentialed`` -- one that presents a credential,
+    by :func:`presents_credential` -- can be named. An anonymous identity
+    declared ``"headers": {}`` and declared served on a route that requires
+    authentication drew 401 everywhere, and was told its credential "looks
+    expired or invalid" and to check a VERIDOR_* variable it does not have.
+    It sends no credential; the 401 is the boundary answering, not a token
+    going stale. Required, not defaulted: a default of "everyone" is the
+    filter that filters nothing.
 
     Counted over everything the identity sent -- check probes, its
     marker_probe, sequence steps and teardown entries -- because one 200
@@ -4930,10 +4941,13 @@ def credential_suspects(result: Mapping[str, Any]) -> list[str]:
         for finding in result.get("findings") or ()
         if finding.get("verdict") == "unexpected_denial"
     }
+    credentialed = set(credentialed)
     return sorted(
         identity
         for identity, seen in statuses.items()
-        if identity in denied and all(status in _CREDENTIAL_STATUSES for status in seen)
+        if identity in denied
+        and identity in credentialed
+        and all(status in _CREDENTIAL_STATUSES for status in seen)
     )
 
 
@@ -7128,6 +7142,13 @@ def execute_run(
             else {}
         ),
     }
+    # Computed here, where `credentialed` is known, because the summary that
+    # prints it sees only this document. Omitted when nobody is named, so a
+    # run without the hint produces the document it produced before. A hint,
+    # never a verdict: nothing in veridor.gate reads it.
+    suspects = credential_suspects(result, credentialed)
+    if suspects:
+        result["credential_suspects"] = suspects
     persist_run(result, output_dir, extra_paths=extra_paths)
     return result
 

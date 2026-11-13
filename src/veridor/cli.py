@@ -52,7 +52,6 @@ from veridor.core import (
     _proxy_sentence,
     _validate_http_url,
     announce_proxy,
-    credential_suspects,
     execute_run,
     generate_marker,
     load_config,
@@ -1119,11 +1118,13 @@ def _print_summary(result: dict) -> None:
                 "every entry above is a probe that did not run, not a finding "
                 "about your target."
             )
-    # One line per identity the target refused on every request it answered,
-    # with 401 or 407. Four unexpected denials for one rotated token read as
-    # four boundary problems; the shared cause is the credential, and nothing
-    # in the summary said so. A hint only: the verdicts above are unchanged.
-    for identity in credential_suspects(result):
+    # One line per identity that presents a credential and that the target
+    # refused on every request it answered, with 401 or 407 (execute_run
+    # decides; see credential_suspects). Four unexpected denials for one
+    # rotated token read as four boundary problems; the shared cause is the
+    # credential, and nothing in the summary said so. A hint only: the
+    # verdicts above are unchanged.
+    for identity in result.get("credential_suspects") or ():
         print(
             f"Credential: {terminal_text(identity)} was refused with 401/407 on "
             "every request the target answered for it, so its credential looks "

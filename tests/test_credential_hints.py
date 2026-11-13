@@ -36,6 +36,9 @@ from veridor import core  # noqa: E402
 from veridor.cli import main as veridor_main  # noqa: E402
 
 HINT = "credential looks expired or invalid"
+#: The hand-built results below name identities "a" and "anonymous"; "a"
+#: presents a credential, "anonymous" does not.
+CREDENTIALED = ("a",)
 
 
 def _config() -> dict:
@@ -48,13 +51,13 @@ def _config() -> dict:
     }
 
 
-def _run(answer, *, env: dict | None = None) -> dict:
+def _run(answer, *, env: dict | None = None, config: dict | None = None) -> dict:
     opener = _TargetOpener(answer)
     stdout, stderr = io.StringIO(), io.StringIO()
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         path = root / "veridor.json"
-        path.write_text(json.dumps(_config()), encoding="utf-8")
+        path.write_text(json.dumps(config or _config()), encoding="utf-8")
         argv = ["run", "--config", str(path), "--output-dir", str(root / "out")]
         with patch.dict(os.environ, VERIFIER_ENV if env is None else env), \
                 patch.object(core, "_OPENER", opener):
@@ -96,6 +99,26 @@ class CredentialHintRunTest(unittest.TestCase):
         self.assertEqual(result["code"], 0, result["stdout"] + result["stderr"])
         self.assertNotIn(HINT, result["stdout"])
 
+    def test_an_anonymous_identity_declared_served_is_not_named(self) -> None:
+        """`"headers": {}` declared [200] on an authenticated route draws 401.
+
+        Reproduced on the journey lane: the run printed "anonymous was refused
+        ... its credential looks expired or invalid -- check the VERIDOR_*
+        variable that supplies it" for an identity that sends no credential.
+        """
+        config = _config()
+        self.assertEqual(config["identities"]["anonymous"], {"headers": {}})
+        config["checks"][0]["expect"]["anonymous"] = {"status": [200]}
+        result = _run(_demo_target(vulnerable=False), config=config)
+        self.assertIn(("anonymous", "unexpected_denial"),
+                      [(f["identity"], f["verdict"]) for f in result["document"]["findings"]])
+        self.assertNotIn(HINT, result["stdout"])
+        self.assertNotIn("credential_suspects", result["document"])
+
+    def test_the_run_document_records_whom_the_hint_named(self) -> None:
+        result = _run(_demo_target(vulnerable=False), env=_expired())
+        self.assertEqual(result["document"]["credential_suspects"], ["other_tenant"])
+
     def test_a_marker_probe_the_target_served_rules_the_hint_out(self) -> None:
         """One 200 anywhere proves the credential worked."""
         demo = _demo_target(vulnerable=False)
@@ -130,7 +153,7 @@ class CredentialSuspectsTest(unittest.TestCase):
     def test_407_counts_as_a_credential_refusal(self) -> None:
         result = {"probes": [self._probe("a", 407), self._probe("a", 401)],
                   "findings": [self._denied("a")]}
-        self.assertEqual(core.credential_suspects(result), ["a"])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), ["a"])
 
     def test_a_served_sequence_step_rules_the_hint_out(self) -> None:
         result = {
@@ -138,7 +161,7 @@ class CredentialSuspectsTest(unittest.TestCase):
             "sequences": [{"steps": [{"as": "a", "response": {"status": 200}}]}],
             "findings": [self._denied("a")],
         }
-        self.assertEqual(core.credential_suspects(result), [])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
 
     def test_a_served_teardown_entry_rules_the_hint_out(self) -> None:
         """A teardown record keeps its status at the top level, not in a response."""
@@ -149,9 +172,9 @@ class CredentialSuspectsTest(unittest.TestCase):
             ]}],
             "findings": [self._denied("a")],
         }
-        self.assertEqual(core.credential_suspects(result), [])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
         result["sequences"][0]["teardown"][0]["status"] = 401
-        self.assertEqual(core.credential_suspects(result), ["a"])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), ["a"])
 
     def test_a_marker_probe_answered_otherwise_rules_the_hint_out(self) -> None:
         result = {
@@ -159,17 +182,24 @@ class CredentialSuspectsTest(unittest.TestCase):
             "marker_controls": [{"identity": "a", "response": {"status": 403}}],
             "findings": [self._denied("a")],
         }
-        self.assertEqual(core.credential_suspects(result), [])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
 
     def test_an_unanswered_probe_is_neither_a_refusal_nor_a_pass(self) -> None:
         result = {"probes": [self._probe("a", None)], "findings": [self._denied("a")]}
-        self.assertEqual(core.credential_suspects(result), [])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
         result["probes"].append(self._probe("a", 401))
-        self.assertEqual(core.credential_suspects(result), ["a"])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), ["a"])
+
+    def test_an_identity_with_no_credential_is_never_named(self) -> None:
+        """It sends nothing that could expire; its 401 is the boundary answering."""
+        result = {"probes": [self._probe("anonymous", 401)],
+                  "findings": [self._denied("anonymous")]}
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
+        self.assertEqual(core.credential_suspects(result, ("anonymous",)), ["anonymous"])
 
     def test_declared_refusals_alone_name_nobody(self) -> None:
         result = {"probes": [self._probe("anonymous", 401)], "findings": []}
-        self.assertEqual(core.credential_suspects(result), [])
+        self.assertEqual(core.credential_suspects(result, CREDENTIALED), [])
 
     def test_other_denial_statuses_keep_the_old_remediation(self) -> None:
         for status in (403, 404, 500, None):
@@ -217,7 +247,7 @@ class CredentialSuspectsSequenceRunTest(unittest.TestCase):
             result = _sequence_run(config, url)
         self.assertIn(("owner", "unexpected_denial"),
                       [(f["identity"], f["verdict"]) for f in result["findings"]])
-        return core.credential_suspects(result)
+        return result.get("credential_suspects", [])
 
     def test_a_teardown_the_target_served_rules_the_hint_out(self) -> None:
         self.assertEqual(self._suspects(204), [])
