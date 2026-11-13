@@ -29,6 +29,11 @@ an unstated one is not. -->
 broke to see it fail. Several tests here record exactly that, and it is the
 habit that catches vacuous assertions. -->
 
+## Sign-off
+
+- [ ] Every commit carries a `Signed-off-by` matching its author
+      (CONTRIBUTING.md, "Signing off your commits")
+
 ## Claims
 
 - [ ] This change makes no claim stronger than the evidence supports

@@ -444,6 +444,28 @@ so one it does not cover passes. It does not list `scripts/release_check.py` or
 `tests/test_release_check.py`, so a rename changes the patterns and release
 literals there by hand.
 
+## Signing off your commits (DCO)
+
+Every commit in a pull request carries a sign-off under the
+[Developer Certificate of Origin](https://developercertificate.org/) (DCO). A
+`Signed-off-by` line is your statement that you can make the DCO's
+certification for that change, and that you understand the contribution and the
+sign-off are public and kept with the project. `git commit -s` adds it:
+
+    Signed-off-by: Your Name <you@example.com>
+
+using the name and email you commit as; the sign-off has to match the commit's
+author. Nothing checks it on pull requests yet, so a reviewer does. Commits
+merged before this section was written carry no sign-off.
+
+## AI-assisted commits and provenance
+
+A commit written with AI assistance has a human author: the maintainer or
+contributor who reviewed it, understands it and answers for it, and who adds the
+`Signed-off-by` above. A tool is never recorded as an author or co-author and
+cannot sign off, because it cannot make the DCO's certification. No commit in
+this repository's history has a tool as its author or co-author.
+
 ## Licence
 
 By contributing you agree that your contributions are licensed under the

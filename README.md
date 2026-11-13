@@ -2424,7 +2424,10 @@ severity mappings, and what each format does not claim.
 checks and the claim discipline a change has to stay inside.
 [CHANGELOG.md](CHANGELOG.md) records what moved between releases,
 [GOVERNANCE.md](GOVERNANCE.md) how decisions are made, and
-[SUPPORT.md](SUPPORT.md) where questions go.
+[SUPPORT.md](SUPPORT.md) where questions go. Commits are signed off under the
+DCO, and [CONTRIBUTING.md](CONTRIBUTING.md#ai-assisted-commits-and-provenance)
+says who is the author of a commit written with AI assistance. Running Veridor
+somewhere real? Add yourself to [ADOPTERS.md](ADOPTERS.md).
 
 Found something that would let an attacker reach a target, escape a safety gate,
 or read a credential? Report it privately — [SECURITY.md](SECURITY.md) has the
