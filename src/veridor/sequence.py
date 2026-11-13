@@ -1053,6 +1053,13 @@ REDACTED_COOKIE_NAME: str = "[REDACTED_NAME]"
 #: to response bytes, extended to the request side.
 COOKIE_ERROR: str = "the server sent a cookie Veridor could not process"
 
+#: A response set the session's proof cookie in a form the cookie jar dropped
+#: (a ``Max-Age`` that is not a whole number), so requests kept the old value.
+PROOF_COOKIE_DROPPED: str = (
+    "the server set the session cookie in a form Veridor's cookie jar did not "
+    "keep, and requests went on carrying the earlier value"
+)
+
 #: Closed vocabulary for why a session failed. Constants, never derived from
 #: anything the server sent.
 #: Failure reasons a retry could plausibly clear: nothing was answered, so
@@ -1513,11 +1520,54 @@ class IdentitySession:
         except Exception:
             self.note = COOKIE_ERROR
         self._note_cookies()
-        if before is not None and set(self._proof_values()) != before:
+        if before is None:
+            return
+        if set(self._proof_values()) != before:
             # The target gave the proof cookie another value. Rotation and a
             # downgrade to an anonymous session look the same from here, so
             # what proved the old value live proves nothing about this one.
             self.epoch += 1
+        elif self._dropped_proof_cookie(response):
+            # The target set the proof cookie and the jar would not take it
+            # (``Max-Age=3600.5`` or ``Max-Age=abc``, which a browser ignores
+            # and keeps the cookie), so the old value goes on being sent. If
+            # that was a rotation the old value may be dead now; it is still
+            # sent, so nothing proved about it before counts after.
+            self.epoch += 1
+            self.note = self.note or PROOF_COOKIE_DROPPED
+
+    def _dropped_proof_cookie(self, response: Any) -> bool:
+        """Did ``response`` set the proof cookie in a form the jar did not keep?
+
+        A ``Set-Cookie`` whose name folds (:func:`_folded_cookie_name`) onto
+        the proof cookie's, that is not a deletion, and whose name and value
+        the jar does not now hold. The same value set again, or the name on
+        another path, is in the jar and is not one.
+        """
+        try:
+            headers = response.info().get_all("Set-Cookie") or ()
+            parsed = http.cookiejar.parse_ns_headers([str(header) for header in headers])
+        except Exception:
+            return False
+        proof = {_folded_cookie_name(name) for _domain, _path, name in self._proof}
+        held = {(cookie.name, cookie.value) for cookie in self.jar}
+        now = time.time()
+        for pairs in parsed:
+            if not pairs:
+                continue
+            name, value = pairs[0]
+            if _folded_cookie_name(name) not in proof or (name, value) in held:
+                continue
+            attributes = dict(pairs[1:])
+            max_age = str(attributes.get("max-age") or "").strip()
+            expires = attributes.get("expires")
+            if re.fullmatch(r"-?\d+", max_age):
+                if int(max_age) <= 0:
+                    continue  # a deletion, which a browser honours too
+            elif not max_age and isinstance(expires, (int, float)) and expires <= now:
+                continue
+            return True
+        return False
 
     def stamp(self, key: tuple[Any, ...]) -> None:
         """Record the epoch the request ``key`` names is about to be sent under."""

@@ -78,6 +78,22 @@ something you installed.
   bearer token or static header, or a session revoked server-side while its
   cookie keeps its value; the marker probe's evidence still counts for it
   (measured: safe 2, vulnerable 0, `liveness.unproven` empty).
+- **A rotated session cookie the cookie jar dropped kept the old value's
+  proof.** A target that rotated the session in the marker probe's response
+  with `Set-Cookie: sid=attacker2; Path=/; Max-Age=3600.5` (or `Max-Age=abc`)
+  invalidated `sid=attacker`. A browser ignores the bad `Max-Age` and keeps
+  the cookie; Python's cookie jar drops the whole cookie without a word, so
+  the check went out as `sid=attacker`, drew the `404` the target gives a dead
+  session, and was graded `safe` on the marker probe taken before it
+  (reproduced: safe 2, vulnerable 0, `liveness.unproven` empty; with
+  `Max-Age=3600`, `VERIDOR-AUTHZ-001` confirmed). A response that sets the
+  proof cookie, or a name that folds onto it, in a form the jar does not keep
+  now starts a new session epoch as a changed value does, so the denial is
+  listed with `"proof_scope": "cookie_value"`, and the session's entry in the
+  run document carries a `note`. A deletion (`Max-Age=0`, or an `Expires` in
+  the past) does not. Behaviour change: such a target's denials are now
+  unproven, and exit `3` under `--require-complete`, unless a 2xx sent after it
+  proves the session.
 - **A same-named cookie set after login rode in front of the session's
   cookie, and a live IDOR was graded safe.** A response after login set
   `sid=guest; Path=/docs`; the jar sends longer paths first, so a request for

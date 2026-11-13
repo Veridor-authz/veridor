@@ -1481,7 +1481,12 @@ value is the proof from then on and requests go out with it. Veridor cannot
 tell that from a target that swapped the session for an anonymous one, so
 liveness evidence taken under the old value — the `marker_probe`, an earlier
 2xx — no longer proves a denial drawn under the new one (see "A denial that
-proves nothing says so").
+proves nothing says so"). A response that sets the proof cookie in a form
+Python's cookie jar drops (a `Max-Age` that is not a whole number, such as
+`3600.5` or `abc`, which a browser ignores and keeps the cookie) leaves the old
+value going out; that counts the same way, so earlier evidence stops proving
+denials, and the session's entry in the run document carries a `note` saying
+so. A deletion (`Max-Age=0`, or an `Expires` in the past) is not counted.
 
 | Capture `from` | Reads |
 | --- | --- |
@@ -2442,9 +2447,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,611 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 1,000 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,611 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,615 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 1,001 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,616 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

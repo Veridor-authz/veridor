@@ -4507,6 +4507,52 @@ class SessionEpochTest(unittest.TestCase):
         self._harvest(session, "csrftoken=x; Path=/", "sid=guest; Path=/docs")
         self.assertEqual(session.epoch, before)
 
+    def test_a_proof_cookie_the_jar_drops_starts_a_new_epoch(self) -> None:
+        """A browser ignores the bad Max-Age and keeps ``sid=attacker2``.
+
+        http.cookiejar drops the whole cookie, so ``sid=attacker`` goes on
+        being sent. If the target rotated, that value may be dead, and the
+        epoch stayed put: safe 2, ``liveness.unproven`` empty.
+        """
+        for attribute in ("Max-Age=3600.5", "Max-Age=abc"):
+            with self.subTest(attribute=attribute):
+                session = self._session()
+                before = session.epoch
+                self._harvest(session, f"sid=attacker2; Path=/; {attribute}")
+                self.assertEqual(session._proof_values(), ["attacker"])
+                self.assertEqual(session.epoch, before + 1)
+                self.assertEqual(session.note, sequence.PROOF_COOKIE_DROPPED)
+                self.assertEqual(session.report()["note"], sequence.PROOF_COOKIE_DROPPED)
+
+    def test_the_same_for_a_name_that_folds_onto_the_proofs(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "SID=guest; Path=/; Max-Age=abc")
+        self.assertEqual(session.epoch, before + 1)
+
+    def test_control_set_cookies_the_jar_keeps_or_that_delete_leave_no_note(self) -> None:
+        """Kept, deleting, or dropped under another name: no new epoch, no note."""
+        for set_cookie in ("sid=attacker; Path=/; Max-Age=abc",
+                           "sid=x; Path=/docs; Max-Age=0",
+                           "sid=deleted; Path=/docs; Expires=Thu, 01 Jan 1970 00:00:01 GMT",
+                           "other=x; Path=/; Max-Age=abc",
+                           "sid=guest; Path=/docs; Max-Age=60"):
+            with self.subTest(set_cookie=set_cookie):
+                session = self._session()
+                before = session.epoch
+                self._harvest(session, set_cookie)
+                self.assertEqual(session._proof_values(), ["attacker"])
+                self.assertEqual(session.epoch, before)
+                self.assertIsNone(session.note)
+
+    def test_control_a_rotation_the_jar_takes_leaves_no_note(self) -> None:
+        session = self._session()
+        before = session.epoch
+        self._harvest(session, "sid=attacker2; Path=/; Max-Age=3600")
+        self.assertEqual(session._proof_values(), ["attacker2"])
+        self.assertEqual(session.epoch, before + 1)
+        self.assertIsNone(session.note)
+
     def test_stamp_records_the_epoch_a_request_went_out_under(self) -> None:
         session = self._session()
         session.stamp(("marker",))
@@ -4605,6 +4651,17 @@ class StaleCookieLivenessProofTest(unittest.TestCase):
         _result, sent, unproven = self._execute("sid=attacker2; Path=/")
         self.assertEqual(sent, ["sid=attacker2"])
         self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+
+    def test_a_rotation_the_jar_drops_is_disclosed(self) -> None:
+        """The old value keeps going out, and nothing says the target still takes it."""
+        for attribute in ("Max-Age=3600.5", "Max-Age=abc"):
+            with self.subTest(attribute=attribute):
+                result, sent, unproven = self._execute(f"sid=attacker2; Path=/; {attribute}")
+                self.assertEqual(sent, ["sid=attacker"])
+                self.assertEqual(result["summary"]["vulnerable"], 0)
+                self.assertEqual([(entry["check_id"], entry.get("proof_scope"))
+                                  for entry in unproven],
+                                 [("cross-tenant-doc-read", "cookie_value")])
 
     def test_control_a_2xx_under_the_new_value_proves_it(self) -> None:
         """Served on /docs/2 as attacker2, where the fabricated credential is refused."""

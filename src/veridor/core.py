@@ -4276,16 +4276,19 @@ RELOGGED_LIVENESS_REMEDIATION: str = (
 
 #: Advice on an unproven denial for an identity proven live only under an
 #: earlier value of its session cookie: a response replaced the cookie that
-#: established the session, and nothing proved the new value.
+#: established the session (or set it in a form the cookie jar dropped), and
+#: nothing proved the session live since.
 STALE_COOKIE_LIVENESS_REMEDIATION: str = (
     "{identity} was proven live (by its marker_probe, or a 2xx where a caller "
     "without its credential was refused) before a response gave the cookie "
-    "that established its session a different value, and nothing proved the "
-    "new value live. Veridor cannot tell a target rotating the session from "
-    "one replacing it with an anonymous session. Find which response sets it; "
-    "a check or sequence step sent with the new value, where {identity} is "
-    "served and an identity with no credential is refused on the same "
-    "request, proves it, or stop the target replacing the cookie during the run."
+    "that established its session a different value, or set it in a form "
+    "Veridor's cookie jar dropped so the earlier value went on being sent, "
+    "and nothing proved the session live since. Veridor cannot tell a target "
+    "rotating the session from one replacing it with an anonymous session. "
+    "Find which response sets it; a check or sequence step sent after it, "
+    "where {identity} is served and an identity with no credential is refused "
+    "on the same request, proves it, or stop the target replacing the cookie "
+    "during the run."
 )
 
 
