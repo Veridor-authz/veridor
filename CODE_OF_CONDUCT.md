@@ -25,9 +25,9 @@ never forced to choose between disclosure and being ignored.
 
 Report through the private vulnerability reporting form linked from
 [SECURITY.md](SECURITY.md) and say it is a conduct report; it is not public.
-There is no conduct mailbox. If the form is unavailable, open a public issue
-with the "Question" issue form asking for a contact, and leave out every detail
-of the report.
+If the form is unavailable, write to opensource@veridor.org and say it is a
+conduct report. If that fails too, open a public issue with the "Question" issue
+form asking for a contact, and leave out every detail of the report.
 
 Veridor has one maintainer, @Santoshkumarpuppala
 ([GOVERNANCE.md](GOVERNANCE.md)), who reads those reports and keeps them

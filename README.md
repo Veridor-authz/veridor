@@ -9,6 +9,8 @@ declaration is right — only whether your target still agrees with it. Read
 [what a finding does and does not mean](#what-a-veridor-finding-does-and-does-not-mean)
 before you read a report. Runtime is the Python standard library only.
 
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/veridor)](https://artifacthub.io/packages/helm/veridor/veridor-gate)
+
 **Status: early alpha.** Each release is listed in [CHANGELOG.md](CHANGELOG.md).
 The configuration format, commands, flags and report formats may still change
 between minor versions. What Veridor does not claim is set out in

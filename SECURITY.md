@@ -6,9 +6,9 @@ Report privately through this repository's private vulnerability reporting form:
 
 **<https://github.com/Veridor-authz/veridor/security/advisories/new>**
 
-If the form is unavailable, open a public issue with the "Question" issue form
-asking for a contact, and leave out every detail of the problem. There is no
-email route.
+If the form is unavailable, write to **security@veridor.org**. If that fails
+too, open a public issue with the "Question" issue form asking for a contact,
+and leave out every detail of the problem.
 
 Please do not open a public issue for anything that would let an attacker reach
 a target, escape a safety gate, or read a credential. A public issue is

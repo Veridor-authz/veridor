@@ -649,7 +649,10 @@ class IdentityTest(_Tree):
         The held hosts pass in any shipped file; the rest of the domain does not."""
         held = ('  "$comment": "see https://docs.veridor.org/schema",\n'
                 "/* veridor.org's mark: a shield and a tick. */\n"
-                'Homepage = "https://veridor.org/"\n')
+                'Homepage = "https://veridor.org/"\n'
+                # The two addresses the domain takes mail for (MX to Zoho since
+                # 2026-11-13), at a sentence end and in bold too.
+                "write to security@veridor.org. Or **opensource@veridor.org**\n")
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
         for path in ("schema/other.json", "src/veridor/web/styles.css", "pyproject.toml"):
@@ -660,10 +663,13 @@ class IdentityTest(_Tree):
             self.assertEqual(release_check.main(["--root", str(root), "identity"]), 0)
         # Control: the same files fail on a host or an address the project does not hold.
         with (root / "src/veridor/web/styles.css").open("a", encoding="utf-8") as styles:
-            styles.write("/* see https://www.veridor.org/ */\n/* or write to someone@veridor.org */\n")
+            styles.write("/* see https://www.veridor.org/ */\n/* or write to someone@veridor.org */\n"
+                         "/* not ours: xsecurity@veridor.org */\n/* nor security@docs.veridor.org */\n")
         self.assertEqual([(path, line, name) for path, line, name, _ in release_check.identity_leftovers(root)],
-                         [("src/veridor/web/styles.css", 4, "host.veridor.org"),
-                          ("src/veridor/web/styles.css", 5, "@veridor.org")])
+                         [("src/veridor/web/styles.css", 5, "host.veridor.org"),
+                          ("src/veridor/web/styles.css", 6, "@veridor.org"),
+                          ("src/veridor/web/styles.css", 7, "@veridor.org"),
+                          ("src/veridor/web/styles.css", 8, "@veridor.org")])
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(release_check.main(["--root", str(root), "identity"]), 1)
 

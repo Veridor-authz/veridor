@@ -245,16 +245,23 @@ class GovernanceTest(unittest.TestCase):
 
 class ConductReportingTest(unittest.TestCase):
     """CODE_OF_CONDUCT.md sends a report to the private form SECURITY.md links,
-    and no mailbox exists. A reporter must never be sent to an address nobody
-    has shown receives mail, or be left with no confidential route at all: an
-    earlier edit replaced an address with "not set", which did the second."""
+    with an address as the fallback. A reporter must never be sent to an address
+    nobody has shown receives mail, or be left with no confidential route at
+    all: an earlier edit replaced an address with "not set", which did the
+    second. Until 2026-11-13 the domain took no mail and the document named no
+    address; it may now name only one release_check.HELD_ADDRESSES lists."""
 
     TEXT = (ROOT / "CODE_OF_CONDUCT.md").read_text(encoding="utf-8")
     FLAT = " ".join(TEXT.split())
     EMAIL = re.compile(r"[\w.%+-]+@[\w-]+(?:\.[\w-]+)+")
 
-    def test_no_document_names_a_conduct_mailbox(self) -> None:
-        self.assertEqual(self.EMAIL.findall(self.TEXT), [])
+    def test_every_address_it_names_takes_mail(self) -> None:
+        sys.path.insert(0, str(ROOT))
+        from scripts import release_check  # noqa: PLC0415
+
+        found = self.EMAIL.findall(self.TEXT)
+        self.assertEqual(found, ["opensource@veridor.org"])
+        self.assertTrue(set(found) <= set(release_check.HELD_ADDRESSES), found)
         self.assertNotIn("conduct@", (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
 
     def test_control_the_address_pattern_finds_an_address(self) -> None:
@@ -265,19 +272,23 @@ class ConductReportingTest(unittest.TestCase):
         # The real `identity` over a root holding only the real document: the
         # whole tree costs 0.4 s, near the fast tier's per-test budget, and
         # IdentityTest already covers the whole-tree walk. The form's address
-        # stays in SECURITY.md alone, so a rename has one place to change.
+        # stays in SECURITY.md alone, so a rename has one place to change. The
+        # one name the document carries is the held fallback address, which the
+        # inventory lists and the retired-name check passes.
         sys.path.insert(0, str(ROOT))
         from scripts import release_check  # noqa: PLC0415
 
         root = Path(tempfile.mkdtemp(prefix="veridor-conduct-"))
         self.addCleanup(shutil.rmtree, root, True)
         shutil.copyfile(ROOT / "CODE_OF_CONDUCT.md", root / "CODE_OF_CONDUCT.md")
-        self.assertEqual(release_check.identity(root), [])
-        # Control: the same call sees a name planted in the same file.
-        with (root / "CODE_OF_CONDUCT.md").open("a", encoding="utf-8") as document:
-            document.write("Report to someone@veridor.org.\n")
         self.assertEqual([(path, name) for path, _, name, _ in release_check.identity(root)],
                          [("CODE_OF_CONDUCT.md", "veridor.org")])
+        self.assertEqual(release_check.identity_leftovers(root), [])
+        # Control: an address the domain does not take mail for is a leftover.
+        with (root / "CODE_OF_CONDUCT.md").open("a", encoding="utf-8") as document:
+            document.write("Report to someone@veridor.org.\n")
+        self.assertEqual([(path, name) for path, _, name, _ in release_check.identity_leftovers(root)],
+                         [("CODE_OF_CONDUCT.md", "@veridor.org")])
 
     def test_the_route_is_the_private_form_with_the_same_fallback_as_security(self) -> None:
         """The text only. Whether the form is on is a repository setting."""
@@ -285,7 +296,9 @@ class ConductReportingTest(unittest.TestCase):
         flat = " ".join(enforcement.split())
         self.assertIn("private vulnerability reporting form linked from [SECURITY.md](SECURITY.md)", flat)
         self.assertIn("say it is a conduct report", flat)
-        self.assertIn('If the form is unavailable, open a public issue with the "Question" issue form '
+        self.assertIn("If the form is unavailable, write to opensource@veridor.org and say it is a "
+                      "conduct report.", flat)
+        self.assertIn('If that fails too, open a public issue with the "Question" issue form '
                       "asking for a contact, and leave out every detail of the report.", flat)
         self.assertIn(MAINTAINER, flat)
 

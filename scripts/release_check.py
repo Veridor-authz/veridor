@@ -269,10 +269,15 @@ _IDENTITY = re.compile("|".join(f"(?P<n{index}>{pattern})"
 #: became 0.03 s, measured).
 _IDENTITY_LITERALS = ("veridor", "veridor-authz")
 
+#: The addresses at veridor.org that take mail (MX to Zoho since 2026-11-13;
+#: delivery to both checked by the maintainer that day). SECURITY.md and
+#: CODE_OF_CONDUCT.md name them; any other address at the domain is refused below.
+HELD_ADDRESSES: tuple[str, ...] = ("opensource@veridor.org", "security@veridor.org")
+
 #: Names this project does not hold, so nothing may send a reader to them: the
 #: ``veridor`` owner on the code hosts and registries, any veridor.org host but
-#: the two that serve (veridor.org and docs.veridor.org) and any address at the
-#: domain, and the maintainer's own account as a home for the project
+#: the two that serve (veridor.org and docs.veridor.org), any address at the
+#: domain but opensource@ and security@, and the maintainer's own account as a home for the project
 #: (github.com/<handle> alone is allowed: GOVERNANCE.md links to the person).
 #: identity() lists only the names in use, so one of these would otherwise just
 #: not appear. Matched in any case, and with the escapes a regex source adds.
@@ -295,9 +300,14 @@ IDENTITY_RETIRED: tuple[tuple[str, str], ...] = (
     ("Santoshkumarpuppala/veridor", r"(?<![\w-])santoshkumarpuppala\\*/veridor(?![\w-])"),
     ("ghcr.io/santoshkumarpuppala", r"(?<![\w-])ghcr\\*\.io\\*/santoshkumarpuppala(?![\w-])"),
     ("gitlab.com/santoshkumarpuppala", r"(?<![\w-])gitlab\\*\.com(?:\\*/|:)santoshkumarpuppala(?![\w-])"),
-    # The domain publishes no MX record (dig, 2026-11-12) and the project
-    # announces no mailbox, so an address at it is a report sent nowhere.
-    ("@veridor.org", r"[\w.+-]*@(?:[\w-]+\\*\.)*veridor\\*\.org(?![\w-])"),
+    # The domain takes mail for two announced addresses only (MX to Zoho since
+    # 2026-11-13): opensource@ and security@. Any other address at it, or at a
+    # host under it, is a report sent to a mailbox nobody reads. The lookbehind
+    # keeps a match from starting inside a longer local part, so
+    # xsecurity@veridor.org is still refused.
+    ("@veridor.org", r"(?<![\w.+-])(?!(?:" + "|".join(a.split("@")[0] for a in HELD_ADDRESSES)
+                     + r")@veridor\\*\.org(?![\w-]|\\*\.[\w-]))"
+                     r"[\w.+-]*@(?:[\w-]+\\*\.)*veridor\\*\.org(?![\w-])"),
     # Every host under the domain but docs. The bare domain passes because at
     # least one label must come before it. A match may start after a dot: the
     # search tries the leftmost start first, so a.docs.veridor.org is matched

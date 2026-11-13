@@ -497,14 +497,21 @@ class ConsistencyTest(unittest.TestCase):
                       security)
         flat = " ".join(security.split())
         self.assertIn("private vulnerability reporting form", flat)
-        self.assertIn('If the form is unavailable, open a public issue with the "Question" '
+        self.assertIn("If the form is unavailable, write to **security@veridor.org**.", flat)
+        self.assertIn('If that fails too, open a public issue with the "Question" '
                       "issue form asking for a contact, and leave out every detail of the problem.", flat)
         form = (ROOT / ".github" / "ISSUE_TEMPLATE" / "question.yml").read_text(encoding="utf-8")
         self.assertTrue(form.startswith("name: Question\n"), form[:40])
-        # An invented email address would be a dead letter box on a document
-        # whose whole job is to be actionable.
+        # An invented or unread address would be a dead letter box on a document
+        # whose whole job is to be actionable: the only address it may name is
+        # one the domain takes mail for.
+        sys.path.insert(0, str(ROOT))
+        from scripts import release_check  # noqa: PLC0415
+
         self.assertNotIn("@example.com", security)
-        self.assertNotIn("security@", security)
+        addresses = set(re.findall(r"[\w.%+-]+@[\w-]+(?:\.[\w-]+)+", security))
+        self.assertEqual(addresses, {"security@veridor.org"})
+        self.assertTrue(addresses <= set(release_check.HELD_ADDRESSES), addresses)
 
 
 class DockerBuildContextTest(unittest.TestCase):

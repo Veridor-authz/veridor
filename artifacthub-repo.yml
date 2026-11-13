@@ -1,0 +1,19 @@
+# Artifact Hub repository metadata for the veridor-gate Helm chart.
+# https://artifacthub.io/docs/topics/repositories/#ownership-claim
+#
+# The copy that counts is the one in the registry: Artifact Hub reads it anonymously from
+# oci://ghcr.io/veridor-authz/charts/veridor-gate at the tag `artifacthub.io`, a separate tag beside
+# the chart versions. Editing this file changes nothing until it is pushed again:
+#
+#   oras push ghcr.io/veridor-authz/charts/veridor-gate:artifacthub.io \
+#     --config /dev/null:application/vnd.cncf.artifacthub.config.v1+yaml \
+#     artifacthub-repo.yml:application/vnd.cncf.artifacthub.repository-metadata.layer.v1.yaml
+#
+# repositoryID drives the Verified Publisher label: it must match the ID Artifact Hub shows for the
+# repository registered under the `veridor` organization. owners is used only for an ownership claim
+# and must be the email of a registered Artifact Hub user.
+
+repositoryID: 87f22537-adf4-44f2-9a75-52a0c5d4e7a8
+owners:
+  - name: Veridor
+    email: opensource@veridor.org
