@@ -158,8 +158,8 @@ the fabricated credential or an identity with no credential is refused on
 the same request: a 2xx on a route that serves every caller proves nothing.
 For one with `"reestablish": "check"` a `marker_probe` proves only the first
 login, so use `"reestablish": "run"` or show it served in the same sequence,
-and one whose session cookie the target replaced needs a 2xx sent with the
-new value. Liveness proof is point-in-time: the `marker_probe` runs once,
+and one whose session cookie the target replaced needs a 2xx sent after the
+change. Liveness proof is point-in-time: the `marker_probe` runs once,
 before the first check, so a credential revoked later in the run without
 anything Veridor sees changing (a token the target stops accepting, a
 session revoked server-side while its cookie keeps its value) is not

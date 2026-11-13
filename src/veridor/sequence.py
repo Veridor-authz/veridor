@@ -1267,20 +1267,23 @@ def _cookie_pairs(header: str) -> set[tuple[str, str]]:
     return pairs
 
 
-def _folded_cookie_name(name: str) -> str:
-    """``name`` as the most lenient server reads it, for the same-name refusal.
+def _folded_cookie_names(name: str) -> set[str]:
+    """``name`` as the most lenient servers read it, for the same-name refusal.
 
-    Lowercased, with ``.`` and space as ``_``, and cut at the first ``[``.
-    PHP stores a cookie named ``s.id`` or ``s id`` as ``$_COOKIE['s_id']``,
-    and one named ``sid[x]`` as an array under ``sid``.
+    Lowercased, with ``.`` and space as ``_``. A ``[`` is read both ways PHP
+    reads one: cut there (``sid[x]`` is an array under ``sid``) and as ``_``
+    (PHP 8.5 stores ``s[id``, whose ``[`` is never closed, as ``s_id``).
+    Comparing every reading refuses a few names a stricter server keeps
+    apart; missing one PHP folds let a guest's 404 match a declared denial.
     """
-    return name.partition("[")[0].lower().replace(".", "_").replace(" ", "_")
+    base = name.lower().replace(".", "_").replace(" ", "_")
+    return {base.partition("[")[0], base.replace("[", "_")}
 
 
 def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> bool:
     """Does ``sent`` carry a value under ``name`` that is none of ``wires``?
 
-    Names compare as :func:`_folded_cookie_name` folds them. The jar treats
+    Names compare as :func:`_folded_cookie_names` folds them. The jar treats
     ``SID``, ``sid[x]`` and ``s.id`` as cookies apart from ``sid`` and
     ``s_id``, but a server that folds names reads ``SID=guest; sid=…`` as two
     values of one, and may take the guest. PHP 8.5 read
@@ -1289,9 +1292,9 @@ def _other_values(sent: set[tuple[str, str]], name: str, wires: set[str]) -> boo
     matched a declared denial. Refusing a request a stricter server would
     have read correctly is the cheaper mistake.
     """
-    name = _folded_cookie_name(name)
+    names = _folded_cookie_names(name)
     return any(
-        _folded_cookie_name(sent_name) == name and value not in wires
+        not names.isdisjoint(_folded_cookie_names(sent_name)) and value not in wires
         for sent_name, value in sent
     )
 
@@ -1543,7 +1546,7 @@ class IdentitySession:
     def _dropped_proof_cookie(self, response: Any) -> bool:
         """Did ``response`` set the proof cookie in a form the jar did not keep?
 
-        A ``Set-Cookie`` whose name folds (:func:`_folded_cookie_name`) onto
+        A ``Set-Cookie`` whose name folds (:func:`_folded_cookie_names`) onto
         the proof cookie's, that is not a deletion, and whose name and value
         the jar does not now hold. The same value set again, or the name on
         another path, is in the jar and is not one.
@@ -1553,14 +1556,15 @@ class IdentitySession:
             parsed = http.cookiejar.parse_ns_headers([str(header) for header in headers])
         except Exception:
             return False
-        proof = {_folded_cookie_name(name) for _domain, _path, name in self._proof}
+        proof = {folded for _domain, _path, name in self._proof
+                 for folded in _folded_cookie_names(name)}
         held = {(cookie.name, cookie.value) for cookie in self.jar}
         now = time.time()
         for pairs in parsed:
             if not pairs:
                 continue
             name, value = pairs[0]
-            if _folded_cookie_name(name) not in proof or (name, value) in held:
+            if proof.isdisjoint(_folded_cookie_names(name)) or (name, value) in held:
                 continue
             attributes = dict(pairs[1:])
             max_age = str(attributes.get("max-age") or "").strip()

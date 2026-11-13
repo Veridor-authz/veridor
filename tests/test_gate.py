@@ -1208,7 +1208,7 @@ class LivenessAdviceTest(unittest.TestCase):
         line = self._line(self.COOKIE)
         self.assertNotIn("Give the identity a marker_probe", line)
         self.assertIn("For 'rotated'", line)
-        self.assertIn("a 2xx sent with the new value", line)
+        self.assertIn("a 2xx sent after the change", line)
 
     def test_a_mix_names_each_case(self) -> None:
         line = self._line(self.PLAIN, self.LOGIN, self.COOKIE)
@@ -1254,7 +1254,7 @@ class LivenessAdviceTest(unittest.TestCase):
                     text, r"(?i)give that identity a `?marker_probe`?(\.|\)| \|)")
                 self.assertIn("proves only the first login", text)
                 self.assertIn('"reestablish": "run"', text)
-                self.assertIn("a 2xx sent with the new value", text)
+                self.assertIn("a 2xx sent after the change", text)
                 self.assertIn("only under the same login and session cookie value", text)
         for name in ("docs/report-formats.md", "chart README"):
             with self.subTest(document=name, limit="point-in-time"):

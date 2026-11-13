@@ -833,7 +833,7 @@ def _liveness_message(unproven: Sequence[Mapping[str, Any]]) -> str:
             "in the same sequence where an identity with no credential is refused"
             if scoped("login") else "",
             f"for {scoped('cookie_value')}, whose session cookie the target gave "
-            "a new value after its login or proof of life, a 2xx sent with the new value, "
+            "a new value after its login or proof of life, a 2xx sent after the change, "
             "where an identity with no credential or the fabricated credential is "
             "refused, proves it"
             if scoped("cookie_value") else "",

@@ -701,8 +701,8 @@ Coverage still cannot fail silently, and this is the half that matters:
   other means while the cookie stays as it was is the revocation above. A
   cookie the jar keeps but a browser would reject is not noticed. Cookie
   names are folded for the same-name refusal as described under sessions
-  (case, `.`, space, `[`); a server that folds names some other way, such as
-  percent-decoding them, is not covered.
+  (case, `.`, space, `[`), the folds PHP 8.5 was measured to make; a server
+  that folds names some other way is not covered.
 
   This is **stated, never graded**: an identity asserted only to be
   denied and never served anywhere is the ordinary shape of an authorization
@@ -1480,11 +1480,12 @@ name **is not sent** and is graded `inconclusive`
 (`session_cookie_ambiguous`) — the rule that stops such a login from
 establishing, applied to every request. "The same name" is compared the way
 the most lenient server reads it: without case, with `.` and space read as
-`_`, and up to the first `[`. So `SID=guest` beside `sid=attacker`,
-`sid[x]=guest` beside `sid=attacker`, and `s.id=guest` beside `s_id=attacker`
-are refused, because a server that folds cookie names (PHP stores `s.id` as
-`s_id` and `sid[x]` as an array under `sid`) reads both as one; a server that
-does not gets `inconclusive` too. The same value under the same name on
+`_`, and a `[` read both as the end of the name and as `_`. So `SID=guest`
+beside `sid=attacker`, `sid[x]=guest` beside `sid=attacker`, and `s.id=guest`
+or `s[id=guest` beside `s_id=attacker` are refused, because a server that
+folds cookie names (PHP stores `s.id` and an unclosed `s[id` as `s_id`, and
+`sid[x]` as an array under `sid`) reads both as one; a server that does not
+gets `inconclusive` too. The same value under the same name on
 two paths is not ambiguous and goes out. When the login set the proof cookie
 more than once with one value (on two paths, or host-only and with `Domain=`),
 every copy is the proof, and once a later response gives one copy a different
@@ -2300,7 +2301,7 @@ disagree on a name, a default or a mode.
 | `max-requests` | — | drift | Refuse a matrix plan larger than this |
 | `rate` | — | drift | Requests per second |
 | `read-only` | `false` | run | Refuse a configuration that can send anything but GET, HEAD or OPTIONS |
-| `require-complete` | `true` | both | Exit `3` when any probe went unanswered, or (run mode) a denial is unproven (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent with the new value |
+| `require-complete` | `true` | both | Exit `3` when any probe went unanswered, or (run mode) a denial is unproven (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent after the change |
 | `require-clean-teardown` | `false` | run | Exit `3` when a sequence teardown was unclean |
 
 **Outputs.** The test also fails if an output is missing here or not declared in `action.yml`.
@@ -2461,9 +2462,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,621 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,623 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 1,010 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,631 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,633 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,
@@ -2668,7 +2669,7 @@ it so by default; when it is not, the job stops with exit 2 and says why.
 | `proxy_from_environment` | boolean | `false` | `false` runs Veridor without any `*_proxy` variable (`http_proxy`, `HTTPS_PROXY`, any case), so its requests go straight to the target, and the log names what was removed. A pipeline variable of that name would otherwise pick where every credential goes, whatever `base_url` says. `true` keeps them, for a target reachable only through a proxy |
 | `wait_for_target` | number | `0` | `--wait-for-target`: seconds to wait before the first request for the target's port to accept a TCP connection; `0` does not wait, and anything but a whole number is refused. Never changes a verdict |
 | `fail_on` | string | `new+confirmed` | `--fail-on`: `new+confirmed`, `new`, `confirmed`, `any` or `none`. The default fails on every finding not in the baseline, and on a confirmed one even when the baseline holds it. A suspected or ungraded finding stops failing once its id is in the baseline |
-| `require_complete` | boolean | `true` | `--require-complete`: an unanswered probe exits 3, and so does an unproven denial (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent with the new value |
+| `require_complete` | boolean | `true` | `--require-complete`: an unanswered probe exits 3, and so does an unproven denial (`liveness.unproven`): a denial-only expectation (in a check, or a sequence assert step) whose identity presents a credential, where some identity was served in the same check or sequence, that nothing else in the run proved live (a 2xx it drew on a request where an identity with no credential, or the fabricated credential, was refused; or its `marker_probe`; for a session, either one only under the same login and session cookie value), and that a fabricated credential could not tell apart from a dead token: it drew the same denial, none was sent (with every POST, PUT, PATCH or DELETE, inside a sequence, or when no identity declares a credential header), its request failed, or its answer was neither a refusal nor a success. Give that identity a `marker_probe`; for one with `"reestablish": "check"` a `marker_probe` proves only the first login, so use `"reestablish": "run"` or show it served in the same sequence, and one whose session cookie the target replaced needs a 2xx sent after the change |
 | `allow_unmeasured` | boolean | `false` | Show exit 3 as a warning instead of failing the job |
 | `baseline` | string | (empty) | `--baseline`: a prior run JSON to diff against. It is part of your merge request's diff, so require Code Owner approval for it (GitLab Premium) |
 | `openapi` | string | (empty) | `--openapi`: enables boundary coverage |

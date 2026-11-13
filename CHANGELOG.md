@@ -47,9 +47,10 @@ something you installed.
   `s.id=guest` beside `s_id=attacker`, went out, the target read no session or
   the guest's, and its `404` matched the declared denial (safe 2, vulnerable
   0, `liveness.unproven` empty; with `other=guest`, `VERIDOR-AUTHZ-001`
-  confirmed). Names are now also compared with `.` and space read as `_` and
-  cut at the first `[`, and both requests are refused as
-  `session_cookie_ambiguous`. Behaviour change: a server that keeps those
+  confirmed). Names are now also compared with `.` and space read as `_`, and
+  a `[` read both as the end of the name and as `_` (PHP 8.5 stores an
+  unclosed `s[id` as `s_id`, measured the same way), and these requests are
+  refused as `session_cookie_ambiguous`. Behaviour change: a server that keeps those
   names apart gets `inconclusive` for such a request too.
 - **A session cookie replaced after the marker probe kept the marker's
   liveness proof.** A response that gives the cookie that established the
@@ -1790,7 +1791,7 @@ something you installed.
   and for one whose session cookie the target replaced it proves only the old
   value. The exit line now names those identities, from the entry's
   `proof_scope`, and says what proves each (`"reestablish": "run"` or a 2xx in
-  the same sequence; a 2xx sent with the new value), keeping the
+  the same sequence; a 2xx sent after the change), keeping the
   `marker_probe` advice, word for word, for the rest. The docs, the liveness
   banner, `--no-prove-liveness` help, the config schema's `marker_probe`
   description and `capsule verify`'s gap text say the same, and so do the

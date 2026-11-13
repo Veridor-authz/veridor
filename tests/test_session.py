@@ -4053,6 +4053,16 @@ class ExpiredCaptureCookieReasonTest(unittest.TestCase):
             self.assertEqual(session.prepare({}, b"{}", method="POST")[2],
                              "capture_cookie_expired")
 
+    def test_a_csrf_cookie_the_target_cleared_reports_expiry(self) -> None:
+        # "Expired or cleared": a response setting the cookie to an empty
+        # value is the session's state too, not a misnamed capture.
+        session = self._session(_cookie("csrftoken", CSRF_SENTINEL))
+        self.assertIsNone(session.prepare({}, b"{}", method="POST")[2])
+        session.harvest(_Response("csrftoken=; Path=/"),
+                        Request("http://127.0.0.1:1/m", method="GET"))
+        self.assertEqual(session.prepare({}, b"{}", method="POST")[2],
+                         "capture_cookie_expired")
+
     def test_control_a_cookie_the_target_never_set_is_still_unresolved(self) -> None:
         session = self._session()
         self.assertEqual(session.prepare({}, b"{}", method="POST")[2], "unresolved_reference")
@@ -4396,6 +4406,14 @@ class FoldedCookieNameTest(unittest.TestCase):
                 self.assertEqual(cookie, f"{later}=guest; s_id=attacker")
                 self.assertEqual(reason, "session_cookie_ambiguous")
 
+    def test_an_unclosed_bracket_beside_an_underscore_proof_is_refused(self) -> None:
+        # PHP 8.5 reads an unclosed "[" as "_": Cookie "s[id=guest; s_id=attacker"
+        # gave $_COOKIE {"s_id": "guest"}, and the guest's 404 matched the
+        # declared denial when only the cut-at-"[" reading was compared.
+        reason, cookie = self._attach_named("s_id", _cookie("s[id", "guest", path="/docs"))
+        self.assertEqual(cookie, "s[id=guest; s_id=attacker")
+        self.assertEqual(reason, "session_cookie_ambiguous")
+
     def test_control_names_php_keeps_apart_go_out(self) -> None:
         for proof, later in (("s_id", "s-id"), ("sid", "sidx"), ("sid", "x[sid]")):
             with self.subTest(later=later):
@@ -4697,7 +4715,7 @@ class ProofScopeGateAdviceTest(unittest.TestCase):
         self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
         line = self._line(result)
         self.assertNotIn("Give the identity a marker_probe", line)
-        self.assertIn("a 2xx sent with the new value", line)
+        self.assertIn("a 2xx sent after the change", line)
 
     def test_control_no_marker_probe_is_told_to_add_one(self) -> None:
         result, _logins, unproven = ReloginLivenessProofTest._execute(

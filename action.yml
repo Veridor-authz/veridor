@@ -200,8 +200,8 @@ inputs:
       Give that identity a marker_probe; for one with "reestablish": "check"
       a marker_probe proves only the first login, so use
       "reestablish": "run" or show it served in the same sequence, and one
-      whose session cookie the target replaced needs a 2xx sent with the new
-      value. The step log names the identity.
+      whose session cookie the target replaced needs a 2xx sent after the
+      change. The step log names the identity.
       Those boundaries are unverified rather than verified, and a job reads an
       exit code rather than a summary. A real finding always wins the exit
       code. This default differs from the CLI, where it is opt-in: the CLI is

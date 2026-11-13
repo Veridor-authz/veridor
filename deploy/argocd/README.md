@@ -76,8 +76,8 @@ dependency of your app's chart: set its `hook.mode` to `argocd`.
    "Exit 3" says when you need one. A `marker_probe` proves only the first
    login of a session with `"reestablish": "check"`, so use
    `"reestablish": "run"` or show it served in the same sequence, and one
-   whose session cookie the target replaced needs a 2xx sent with the new
-   value.
+   whose session cookie the target replaced needs a 2xx sent after the
+   change.
 5. A failed hook Job fails the sync operation, and a passing one lets it
    succeed. Each sync is reported from its own Job (next section). A sync
    that runs no hooks runs no gate and succeeds ("Syncs that run no gate").
