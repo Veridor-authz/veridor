@@ -29,6 +29,7 @@ from veridor.core import (
     load_config,
     to_sarif,
 )
+from veridor.core import _interpretation  # noqa: E402
 
 
 class ConfigTest(unittest.TestCase):
@@ -267,6 +268,76 @@ class SarifTest(unittest.TestCase):
         self.assertEqual(sarif["version"], "2.1.0")
         self.assertEqual(sarif["runs"][0]["results"], [])
         self.assertEqual(len(sarif["runs"][0]["tool"]["driver"]["rules"]), 4)
+
+
+class SarifLocationTest(unittest.TestCase):
+    """`--config /abs/path` reached artifactLocation.uri as a local path.
+
+    Reproduced with the demo target: a relative --config wrote
+    "veridor.demo.json", an absolute one wrote the runner's whole filesystem
+    path, which code scanning cannot resolve against the repository and which
+    publishes the checkout layout to anyone who can read the alert.
+    """
+
+    def _sarif(self, config: str) -> dict:
+        finding = {
+            "id": "0ec4c5cbd79deaed6e9f", "rule_id": "VERIDOR-AUTHZ-001",
+            "check_id": "iso", "identity": "outsider", "verdict": "vulnerable",
+            "level": "error", "message": "m", "location": config,
+        }
+        entry = {
+            "check_id": "iso", "identity": "outsider", "statuses": [200, 404],
+            "classification": "permissive", "statement": "accepts both",
+        }
+        return to_sarif({
+            "run_id": "r1", "config": config, "findings": [finding],
+            "non_asserting_expectations": [entry],
+            "interpretation": _interpretation(config),
+        })
+
+    def _locations(self, sarif: dict) -> list[dict]:
+        return [
+            item["locations"][0]["physicalLocation"]["artifactLocation"]
+            for item in sarif["runs"][0]["results"]
+        ]
+
+    def test_an_absolute_config_under_the_working_directory_is_written_relative(self) -> None:
+        absolute = str(Path.cwd() / "ci" / "veridor.json")
+        for location in self._locations(self._sarif(absolute)):
+            self.assertEqual(location, {"uri": "ci/veridor.json", "uriBaseId": "%SRCROOT%"})
+
+    def test_an_absolute_config_elsewhere_never_writes_a_local_path(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            absolute = str(Path(directory) / "nested" / "veridor.json")
+            sarif = self._sarif(absolute)
+        text = json.dumps(sarif)
+        self.assertNotIn(directory, text)
+        self.assertNotIn(str(Path(directory).resolve()), text)
+        for location in self._locations(sarif):
+            self.assertEqual(location["uri"], "veridor.json")
+            self.assertFalse(Path(location["uri"]).is_absolute())
+        self.assertEqual(
+            sarif["runs"][0]["properties"]["interpretation"]["policy_source"],
+            "veridor.json",
+        )
+
+    def test_every_spelling_of_one_file_points_at_one_uri(self) -> None:
+        spellings = ["veridor.json", "./veridor.json", "sub/../veridor.json",
+                     str(Path.cwd() / "veridor.json")]
+        uris = {
+            location["uri"]
+            for spelling in spellings
+            for location in self._locations(self._sarif(spelling))
+        }
+        self.assertEqual(uris, {"veridor.json"})
+
+    def test_the_fingerprints_do_not_move_with_the_path(self) -> None:
+        def prints(config: str) -> list[dict]:
+            return [item["partialFingerprints"]
+                    for item in self._sarif(config)["runs"][0]["results"]]
+
+        self.assertEqual(prints("veridor.json"), prints(str(Path.cwd() / "veridor.json")))
+        self.assertEqual(prints("veridor.json")[0], {"veridorFindingId/v1": "0ec4c5cbd79deaed6e9f"})
 
 
 class EvidenceSafetyTest(unittest.TestCase):

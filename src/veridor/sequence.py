@@ -2660,7 +2660,8 @@ class _SequenceRun:
                     "message": message,
                     **base,
                     "remediation": (
-                        core._DENIAL_REMEDIATION if refused else core._AUTHZ_REMEDIATION
+                        core.denial_remediation(status)
+                        if refused else core._AUTHZ_REMEDIATION
                     ),
                 }
         else:

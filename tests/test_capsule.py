@@ -2207,7 +2207,13 @@ class VerifyFlagTest(unittest.TestCase):
             for item in run["results"]
             for location in item["locations"]
         }
-        self.assertEqual(uris, {result["path"]})
+        # The capsule, not the deleted temporary config -- and by name, not by
+        # absolute path. This asserted the absolute path itself, which is the
+        # local filesystem layout SARIF must not carry: the capsule lives in a
+        # temporary directory outside the working tree, so its file name is
+        # all that may be written.
+        self.assertEqual(uris, {Path(result["path"]).name})
+        self.assertNotIn(result["root"], result["written"]["run.sarif"])
         self.assertNotIn("capsule-config.json", result["written"]["run.json"])
 
     def test_no_prove_liveness_is_honoured(self) -> None:

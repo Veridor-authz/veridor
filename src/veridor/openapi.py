@@ -83,6 +83,11 @@ class Operation:
     deprecated: bool
     base_paths: tuple[str, ...]
     pointer: str
+    #: The specification says this operation needs no authentication: its
+    #: effective ``security`` (its own, else the document's) is ``[]`` or
+    #: offers the empty requirement ``{}``. False when the spec says nothing,
+    #: which is "unknown", never "public".
+    public: bool = False
 
     def absolute_path(self, base_path: str) -> str:
         """Return this operation's template prefixed with ``base_path``."""
@@ -438,6 +443,10 @@ def parse_spec(
             seen_keys[key] = repr(raw_path)
             operation_id = operation.get("operationId")
             summary = operation.get("summary")
+            security = (
+                operation["security"] if "security" in operation
+                else document.get("security")
+            )
             operations.append(
                 Operation(
                     method=method,
@@ -447,6 +456,8 @@ def parse_spec(
                     deprecated=deprecated,
                     base_paths=tuple(merged),
                     pointer=pointer,
+                    public=isinstance(security, list)
+                    and (not security or {} in security),
                 )
             )
             if len(operations) > MAX_OPERATIONS:

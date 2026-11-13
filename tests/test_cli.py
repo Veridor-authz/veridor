@@ -1198,6 +1198,66 @@ class InitTest(unittest.TestCase):
                 )
                 self.assertIn("_comment", check)
 
+    def test_an_operation_the_spec_marks_public_is_not_scaffolded_denied(self) -> None:
+        """`security: []` says anyone may call it; 'other_tenant denied' did not.
+
+        Reproduced: `init` on a spec whose /v1/health declared `security: []`
+        wrote `other_tenant: [403, 404]`, a guaranteed red finding against a
+        target doing exactly what its spec says. The challenger now gets a
+        placeholder that accepts both access and denial, which `run` reports
+        as asserting nothing, and the note says why.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            spec = _write(
+                root / "openapi.json",
+                {
+                    "openapi": "3.0.3",
+                    "info": {"title": "Fixture", "version": "1"},
+                    "security": [{"bearer": []}],
+                    "paths": {
+                        "/health": {"get": {"security": [],
+                                            "responses": {"200": {"description": "ok"}}}},
+                        "/status": {"get": {"security": [{}],
+                                            "responses": {"200": {"description": "ok"}}}},
+                        "/widgets": {"get": {"responses": {"200": {"description": "ok"}}}},
+                    },
+                },
+            )
+            output = root / "generated.json"
+            code, _, stderr = _run(
+                ["init", "--openapi", str(spec), "--output", str(output)]
+            )
+            self.assertEqual(code, 0, stderr)
+            checks = {
+                check["request"]["path"]: check
+                for check in json.loads(output.read_text())["checks"]
+            }
+            for public in ("/health", "/status"):
+                with self.subTest(path=public):
+                    check = checks[public]
+                    statuses = check["expect"]["other_tenant"]["status"]
+                    self.assertIn(200, statuses)
+                    self.assertTrue({403, 404} <= set(statuses))
+                    self.assertIn("public", check["_comment"])
+                    self.assertNotIn("'other_tenant' denied", check["_comment"])
+            # Inherited document-level security is still a boundary.
+            self.assertEqual(
+                checks["/widgets"]["expect"]["other_tenant"]["status"], [403, 404]
+            )
+            environment = {
+                "VERIDOR_OWNER_TOKEN": "owner-token",
+                "VERIDOR_OTHER_TENANT_TOKEN": "other-token",
+            }
+            with patch.dict(os.environ, environment):
+                loaded = load_config(output)
+            # The placeholder is what `run` reports as asserting nothing, and
+            # nothing else in the scaffold is.
+            self.assertEqual(
+                {entry["check_id"] for entry in core._non_asserting_expectations(loaded)},
+                {checks["/health"]["id"], checks["/status"]["id"]},
+            )
+
     def test_missing_token_is_reported_before_any_request(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
