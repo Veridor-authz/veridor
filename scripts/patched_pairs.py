@@ -49,13 +49,19 @@ directory in the working directory).
 **Three assertions, not one.** A verdict that flips is necessary but not
 sufficient, and the second and third are what stop this harness lying:
 
-1. the vulnerable build produces a finding, and the evidence is `confirmed` --
-   graded by the marker, not inferred from a status code -- from exactly the
-   checks the pair names in `vulnerable_failing_checks` (a pair with one check
-   may leave it out). A pair's other checks must pass on the vulnerable build
-   too: the Bugsink pair's second check is the direct route, refused on 2.1.3,
-   and a leak there as well used to pass the pair unchanged (measured with
-   stub documents);
+1. the vulnerable build produces a finding, and each check the pair names in
+   `vulnerable_failing_checks` (a pair with one check may leave it out), and
+   no other, fails with evidence of exactly the grade the pair declares in
+   `expected_evidence`, `confirmed` when it declares none. `confirmed` is
+   graded by the marker, not inferred from a status code. A status-only
+   differential has no marker to plant and can never reach it, so a pair
+   whose control sets `expect_marker` false declares `ungraded` and is held to
+   a status flip: weaker evidence, and the output names the grade each pair
+   was held to (every shipped pair that declares `ungraded` is such a pair).
+   A pair's other checks must pass on the vulnerable build too: the Bugsink
+   pair's second check is the direct route, refused on 2.1.3, and a leak
+   there as well used to pass the pair unchanged (measured with stub
+   documents);
 2. the patched build is green, and every denial on it reached a credential
    the run proved live. The harness decides this itself, for each expectation
    that accepts only a denial (401, 403, 404, 405, 407) from an identity that
@@ -76,7 +82,9 @@ sufficient, and the second and third are what stop this harness lying:
    the route simply 404s, Veridor also exits non-zero, and "a missing feature
    mislabelled vulnerable" is not a fix. A pair whose owner control probe stops
    answering on the patched build proves nothing about authorization, so it
-   fails here.
+   fails here. Where the control expects the marker, the owner must still be
+   served it; where it sets `expect_marker` false, that check is not made, and
+   the result lists it under `not_evaluated`, never among the checks passed.
 
 Requires Docker. Every container is ephemeral (`--tmpfs`), bound to loopback,
 and removed on the way out including on failure.
@@ -2269,8 +2277,10 @@ def _run_build(pair: dict[str, Any], side: str, container: str, workdir: Path) -
             f"{base_url}{path}", token=environment[control["token"]]
         )
     result["endpoint_present"] = control_status == control.get("status", 200)
+    # None, not True, when the pair's control asks for no marker: the check
+    # was not made, and evaluate() reports it as not evaluated.
     result["marker_reachable_by_owner"] = (
-        pair["marker"] in control_body if control.get("expect_marker", True) else True
+        pair["marker"] in control_body if control.get("expect_marker", True) else None
     )
     return result
 
@@ -2521,8 +2531,18 @@ def evaluate(pair: dict[str, Any]) -> dict[str, Any]:
         "patched_denials_reach_a_live_credential": patched_liveness.get("enabled") is True and not patched_unproven,
         # Without this a removed route reads as a fix.
         "endpoint_survives_the_fix": patched["endpoint_present"],
-        "marker_still_reachable_by_owner": patched["marker_reachable_by_owner"],
     }
+    # A pair whose control sets expect_marker false never asks for the marker.
+    # Its result used to carry this check as true, printed `ok` and passed in
+    # --json for the four status-only pairs; a check nobody made is named as
+    # not evaluated instead, and is not one of the checks `passed` rests on.
+    not_evaluated = {}
+    if pair["control"].get("expect_marker", True):
+        checks["marker_still_reachable_by_owner"] = patched["marker_reachable_by_owner"] is True
+    else:
+        not_evaluated["marker_still_reachable_by_owner"] = (
+            "the pair's control sets expect_marker false: the owner's control is held to its status only"
+        )
     return {
         "name": pair["name"],
         "advisory": pair["advisory"],
@@ -2537,6 +2557,7 @@ def evaluate(pair: dict[str, Any]) -> dict[str, Any]:
         "patched_pin": pin_of(pair, "patched"),
         "built_from": pair["build"] if is_built(pair) else None,
         "checks": checks,
+        "not_evaluated": not_evaluated,
         "passed": all(checks.values()),
         "vulnerable": {
             "exit_code": vulnerable["exit_code"],
@@ -3049,6 +3070,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"      pinned: @{result['vulnerable_pin'][:19]}… -> @{result['patched_pin'][:19]}…")
         for label, ok in result["checks"].items():
             print(f"        {'ok  ' if ok else 'FAIL'}  {label}")
+        for label, why in (result.get("not_evaluated") or {}).items():
+            print(f"        n/a   {label} -- not evaluated: {why}")
         vulnerable, patched = result["vulnerable"], result["patched"]
         print(
             f"      vulnerable: exit {vulnerable['exit_code']}, "

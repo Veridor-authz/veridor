@@ -2381,7 +2381,9 @@ python3.12 scripts/pair_sizes.py             # what the pairs download, read fro
 A pair passes only when the verdict **flips** — and four further assertions
 stop the flip being hollow: the endpoint has to survive the fix (or a removed
 route reads as "fixed"), the owner's control probe has to still reach the
-marker, the evidence grade has to be the one the pair declares, and every
+marker (the four status-only pairs, whose control asks for no marker, are
+held to its status alone, and the output names that check not evaluated), the
+evidence grade has to be the one the pair declares, and every
 denial on the patched build has to have reached a credential the run proved
 live (served elsewhere in the run, or answered differently from a credential
 Veridor fabricated). Without that last one a dead attacker session that the
@@ -2389,7 +2391,7 @@ target refuses like any stranger would certify the fix; given a dead Ghost
 contributor session, the pair fails (measured 2026-10-14). Today that is
 thirteen published advisories in ten applications (Gitea three times, Ghost
 twice, LubeLogger, Bugsink, Audiobookshelf, Vikunja, Datasette, InvoiceShelf,
-Eclipse hawkBit, Domoticz; Go, Python, C#, Node, PHP, Java and C++), 91
+Eclipse hawkBit, Domoticz; Go, Python, C#, Node, PHP, Java and C++), 87
 assertions: twelve carry a CVE id and LubeLogger's carries a GHSA id. Each fixture
 cites where its id was published; each Gitea pair links its CVE record, and all
 three cite the one release post that fixed them.

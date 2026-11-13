@@ -2595,7 +2595,9 @@ while index < len(args):
     index += 1
 lock = os.path.join(state, "lock.json")
 if rest[:2] == ["config", "get-contexts"]:
-    print("kind-stub")
+    # STUB_NO_CONTEXT: a kubeconfig that lacks the kind cluster's context.
+    if not os.environ.get("STUB_NO_CONTEXT"):
+        print("kind-stub")
 elif rest == ["create", "-f", "-"]:
     document = json.load(sys.stdin)
     if os.path.exists(lock):
@@ -3086,6 +3088,24 @@ class E2ESyncJobTest(unittest.TestCase):
         self.assertEqual(self.cases(mutated)["left by an earlier sync"], "gate-veridor-gate-0.1.0-e-postsync-1790302471")
 
 
+class E2ELockDocumentedTest(unittest.TestCase):
+    """K8S-2. CONTRIBUTING said two concurrent runs against one cluster delete
+    each other's objects. Since the lock, the second run refuses and touches
+    nothing; the text said the opposite of what the script does."""
+
+    def test_contributing_describes_the_lock_the_script_takes(self) -> None:
+        prose = " ".join((ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8").split())
+        script = E2E_SCRIPT.read_text(encoding="utf-8")
+        self.assertNotIn("delete each other's objects", prose)
+        for words in ("`vg-e2e-lock`", "exits `2`, names the holder and touches nothing",
+                      "`E2E_BREAK_LOCK=1` once it is over an hour old"):
+            self.assertIn(words, prose)
+        # the facts the prose states, read from the script
+        self.assertIn('readonly LOCK_NAMESPACE="vg-e2e-lock"', script)
+        self.assertIn("readonly LOCK_STALE_SECONDS=3600", script)
+        self.assertIn('another run holds the lock namespace', script)
+
+
 @slow("runs the e2e script under bash against a stub kubectl that keeps the lock namespace")
 class E2ELockTest(_StubbedE2E):
     """Two runs against one cluster deleted each other's vg-e2e-* namespaces
@@ -3127,6 +3147,28 @@ class E2ELockTest(_StubbedE2E):
         self.assertEqual(self.deletes(), [], "a refused run deleted something")
         self.assertEqual(json.loads((self.state / "lock.json").read_text(encoding="utf-8")), before)
         self.assertNotIn("stopped before the result table", result.stderr)
+
+    def test_a_missing_context_is_answered_without_touching_the_user_s_kubeconfig(self) -> None:
+        """K8S-1. The refusal for a kind cluster missing from the kubeconfig
+        said `kind export kubeconfig`, which writes the user's kubeconfig and
+        switches its current context -- what the script promises never to
+        do. It now names `kind get kubeconfig`, which only prints, into the
+        file the script reads first. Run as given against the stubs, the
+        suggestion gets the next run past the refusal."""
+        work = self.stubs / "work"
+        refused = self.run_script(STUB_NO_CONTEXT="1")
+        self.assertEqual(refused.returncode, 2, refused.stderr[-1500:])
+        self.assertNotIn("kind export kubeconfig", refused.stderr)
+        expected = f"kind get kubeconfig --name stub > {work}/kubeconfig"
+        self.assertIn(expected, refused.stderr)
+        self.assertIn(f"E2E_WORKDIR={work}", refused.stderr)
+        self.assertFalse((work / "kubeconfig").exists())
+        subprocess.run(["bash", "-c", expected], env={"PATH": f"{self.stubs}:/usr/bin:/bin"}, check=True)
+        followed = self.run_script(STUB_NO_CONTEXT="1")
+        self.assertNotIn("has no context", followed.stderr)
+        # kind load fails in the stub: a setup failure, past the refusal.
+        self.assertEqual(followed.returncode, 3, followed.stderr[-1500:])
+        self.assertIn(f"--kubeconfig {work}/kubeconfig", "\n".join(self.calls()))
 
     def test_a_stale_lock_is_broken_only_with_e2e_break_lock(self) -> None:
         self.seed_lock(age_seconds=7200)

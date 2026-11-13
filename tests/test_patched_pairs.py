@@ -368,6 +368,134 @@ class FailingChecksTest(unittest.TestCase):
         self.assertNotIn("vulnerable_failing_checks", fixture("gitea-private-org-members.json"))
 
 
+class MarkerNotEvaluatedTest(unittest.TestCase):
+    """PAIRS-1. A pair whose control sets expect_marker false never asks the
+    owner's control for the marker, yet its result carried
+    marker_still_reachable_by_owner as true: `ok` in the text output and
+    `true` in --json for the four status-only pairs. A check nobody made is
+    now named as not evaluated, and `passed` does not rest on it."""
+
+    STATUS_ONLY = "gitea-private-org-members.json"
+    WITH_MARKER = "gitea-public-only-team.json"
+
+    def build_stub(self, harness, reachable: object):
+        """_evaluate_build with a vulnerable build failing every declared
+        check at the pair's grade, and a patched build whose owner control
+        answers; `reachable` is what the control found, as
+        _evaluate_build records it (None when the pair asks for no marker)."""
+        def build(pair: dict, side: str, workdir: Path) -> dict:
+            grade = pair.get("expected_evidence", "confirmed")
+            findings = [{"check_id": check, "evidence_grade": grade, "message": check}
+                        for check in harness.failing_checks(pair)] if side == "vulnerable" else []
+            result = {"exit_code": 1 if findings else 0, "endpoint_present": True,
+                      "marker_reachable_by_owner": reachable,
+                      "document": {"findings": findings, "probes": declared_probes(pair),
+                                   "liveness": {"enabled": True, "unproven": []}}}
+            if side == "patched":
+                result["fabricated"] = [
+                    {"check_id": check["id"], "identity": name, "method": "GET", "status": 401}
+                    for check in pair["config"]["checks"] for name, expectation in check["expect"].items()
+                    if harness._denial_only(expectation)]
+            return result
+        return build
+
+    def evaluate(self, name: str, reachable: object) -> dict:
+        harness = load_harness()
+        with mock.patch.object(harness, "_evaluate_build", self.build_stub(harness, reachable)):
+            return harness.evaluate(fixture(name))
+
+    def test_the_shipped_status_only_pairs_are_the_ones_held_to_ungraded(self) -> None:
+        """The module docstring says so; the fixtures are what make it true."""
+        status_only, ungraded = set(), set()
+        for path in sorted((ROOT / "fixtures" / "pairs").glob("*.json")):
+            pair = json.loads(path.read_text(encoding="utf-8"))
+            if pair["control"].get("expect_marker", True) is False:
+                status_only.add(pair["name"])
+            if pair.get("expected_evidence", "confirmed") != "confirmed":
+                ungraded.add(pair["name"])
+        self.assertEqual(len(status_only), 4)
+        self.assertEqual(ungraded, status_only)
+
+    def test_a_status_only_pair_reports_the_marker_check_as_not_evaluated(self) -> None:
+        result = self.evaluate(self.STATUS_ONLY, None)
+        self.assertNotIn("marker_still_reachable_by_owner", result["checks"])
+        self.assertIn("expect_marker false", result["not_evaluated"]["marker_still_reachable_by_owner"])
+        self.assertTrue(result["passed"], result["checks"])
+        self.assertTrue(all(value is True for value in result["checks"].values()), result["checks"])
+
+    def test_control_a_pair_that_expects_the_marker_is_held_to_it(self) -> None:
+        for reachable in (True, False, None):
+            with self.subTest(reachable=reachable):
+                result = self.evaluate(self.WITH_MARKER, reachable)
+                self.assertEqual(result["not_evaluated"], {})
+                self.assertIs(result["checks"]["marker_still_reachable_by_owner"], reachable is True)
+                self.assertIs(result["passed"], reachable is True)
+
+    def test_the_text_and_json_output_say_not_evaluated(self) -> None:
+        harness = load_harness()
+        tmp = Path(tempfile.mkdtemp(prefix="veridor-pairs-na-"))
+        self.addCleanup(shutil.rmtree, tmp, True)
+        harness.PAIRS_DIR = tmp
+        for name in (self.STATUS_ONLY, self.WITH_MARKER):
+            (tmp / name).write_text(json.dumps(fixture(name)), encoding="utf-8")
+        stubs = {
+            "_evaluate_build": lambda pair, side, workdir: self.build_stub(harness, (
+                True if pair["control"].get("expect_marker", True) else None))(pair, side, workdir),
+            "veridor_under_test": lambda: ("/opt/venv/lib/python3.12/site-packages/veridor", None),
+            "docker_on_path": lambda: True,
+            "check_local_tags": lambda pairs: ({"match": 0, "absent": 2 * len(pairs)}, []),
+        }
+        outputs = {}
+        for argv in ((), ("--json",)):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.ExitStack() as stack:
+                for name, stub in stubs.items():
+                    stack.enter_context(mock.patch.object(harness, name, stub))
+                stack.enter_context(contextlib.redirect_stdout(out))
+                stack.enter_context(contextlib.redirect_stderr(err))
+                self.assertEqual(harness.main(list(argv)), 0, err.getvalue())
+            outputs[argv] = out.getvalue()
+        text = outputs[()]
+        status_only = text[text.index(f"PASS  {fixture(self.STATUS_ONLY)['name']}"):]
+        status_only = status_only[:status_only.index("\nPASS  ")] if "\nPASS  " in status_only else status_only
+        self.assertIn("n/a   marker_still_reachable_by_owner -- not evaluated", status_only)
+        self.assertNotIn("ok    marker_still_reachable_by_owner", status_only)
+        # control: the pair that asks for the marker still prints it as checked
+        self.assertEqual(text.count("ok    marker_still_reachable_by_owner"), 1)
+        pairs = {entry["name"]: entry for entry in json.loads(outputs[("--json",)])["pairs"]}
+        shown = pairs[fixture(self.STATUS_ONLY)["name"]]
+        self.assertNotIn("marker_still_reachable_by_owner", shown["checks"])
+        self.assertIn("marker_still_reachable_by_owner", shown["not_evaluated"])
+        self.assertIs(pairs[fixture(self.WITH_MARKER)["name"]]["checks"]["marker_still_reachable_by_owner"], True)
+
+    def test_the_module_docstring_states_the_grade_rule_evaluate_applies(self) -> None:
+        """PAIRS-2. It said the vulnerable evidence must be `confirmed`, while
+        evaluate() holds each pair to its own `expected_evidence` and four
+        shipped pairs pass on `ungraded`."""
+        doc = " ".join(load_harness().__doc__.split())
+        claim = doc[doc.index("1. the vulnerable build produces a finding"):doc.index("2. the patched build is green")]
+        self.assertNotIn("the evidence is `confirmed`", claim)
+        for words in ("exactly the grade the pair declares in `expected_evidence`, `confirmed` when it declares none",
+                      "declares `ungraded` and is held to a status flip"):
+            self.assertIn(words, claim)
+        self.assertIn('pair.get("expected_evidence", "confirmed")', SCRIPT.read_text(encoding="utf-8"))
+        self.assertIn("lists it under `not_evaluated`, never among the checks passed", doc)
+
+    def test_the_readme_counts_the_assertions_the_pairs_make(self) -> None:
+        """The README said every pair holds the owner to the marker and
+        counted 91 assertions: 13 x 7, the four marker checks nobody made
+        among them. Counted here from evaluate() on the shipped fixtures."""
+        made = 0
+        for path in sorted((ROOT / "fixtures" / "pairs").glob("*.json")):
+            pair = json.loads(path.read_text(encoding="utf-8"))
+            result = self.evaluate(path.name, True if pair["control"].get("expect_marker", True) else None)
+            made += len(result["checks"])
+        prose = " ".join((ROOT / "README.md").read_text(encoding="utf-8").split())
+        self.assertIn(f"Java and C++), {made} assertions", prose)
+        self.assertIn("the four status-only pairs, whose control asks for no marker, are held to its status alone, "
+                      "and the output names that check not evaluated", prose)
+
+
 class PatchedLivenessTest(unittest.TestCase):
     """A denial on the patched build certifies the fix only if the attacker's
     credential is live. Veridor records a denial that a credential it
