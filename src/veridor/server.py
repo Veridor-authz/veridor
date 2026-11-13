@@ -85,7 +85,18 @@ def _run_summary(run: dict) -> dict:
         "capsule": _capsule_summary(run.get("capsule")),
         "target": run.get("target"),
         "summary": run.get("summary", {}),
+        # The list printed "1 new" on a run given no --baseline, where every
+        # finding is new only because nothing was compared. True or False
+        # when the document records its baseline fields (a baseline file with
+        # no run_id still records a digest); None when it does not.
+        "compared": _compared(run.get("regression")),
     }
+
+
+def _compared(regression: object) -> bool | None:
+    if not isinstance(regression, dict) or "baseline_run_id" not in regression:
+        return None
+    return bool(regression.get("baseline_run_id") or regression.get("baseline_digest"))
 
 
 def _map_summary(map_id: str, parts: dict[str, dict]) -> dict:

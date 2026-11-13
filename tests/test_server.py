@@ -159,6 +159,23 @@ class RunSummaryGateTest(unittest.TestCase):
         self.assertIsNone(_run_summary({"run_id": "run-1", "status": "passed"})["gate_exit_code"])
 
 
+class RunSummaryBaselineTest(unittest.TestCase):
+    """The list printed "1 new" on a run given no --baseline. The entry says
+    whether the run was compared, from what the document records."""
+
+    def test_the_list_knows_whether_a_baseline_was_given(self) -> None:
+        def compared(regression: object) -> object:
+            return _run_summary({"run_id": "r", "regression": regression})["compared"]
+
+        self.assertIs(compared({"baseline_run_id": None, "baseline_digest": None}), False)
+        self.assertIs(compared({"baseline_run_id": "b", "baseline_digest": "d"}), True)
+        # A baseline file with no run_id still records a digest.
+        self.assertIs(compared({"baseline_run_id": None, "baseline_digest": "d"}), True)
+        # A document that records neither field is not evidence of no baseline.
+        self.assertIsNone(compared({"new": []}))
+        self.assertIsNone(_run_summary({"run_id": "r"})["compared"])
+
+
 @slow("stands up a loopback HTTP server and runs the engine against it")
 class ArtifactFamilyIsolationTest(unittest.TestCase):
     """A matrix is not a run and a candidate is not a finding.

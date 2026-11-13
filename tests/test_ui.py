@@ -1042,7 +1042,8 @@ const lists = { runs: [{ run_id: "R-new" }, { run_id: "R-old" }],
 
 _GATE_HARNESS = _APP_HARNESS_PRELUDE + r"""
 const code = grabConst("STATUS_TONE") + grab("runTone") + grabConst("CAPSULE_EXIT") +
-  grabConst("CAPSULE_TONE") + grab("capsuleStatus") + grab("element") + grab("gateBanner");
+  grabConst("CAPSULE_TONE") + grab("capsuleStatus") + grab("element") +
+  grab("comparedWithBaseline") + grab("gateBanner");
 const context = { document: { createElement: node } };
 vm.createContext(context);
 vm.runInContext(code, context);
@@ -1060,7 +1061,7 @@ console.log(JSON.stringify(out));
 _RUN_LIST_HARNESS = _APP_HARNESS_PRELUDE + r"""
 const code = grabConst("STATUS_TONE") + grab("runTone") + grabConst("CAPSULE_EXIT") +
   grabConst("CAPSULE_TONE") + grab("capsuleStatus") + grab("element") +
-  ["listButton", "matchesFilter", "renderRuns", "formatDate", "targetLabel"].map(grab).join("\n");
+  ["listButton", "matchesFilter", "runSummaryLine", "renderRuns", "formatDate", "targetLabel"].map(grab).join("\n");
 const { entries, filter } = JSON.parse(process.argv[2])[0];
 const runs = node();
 runs.replaceChildren = () => { runs.children = []; };
@@ -1105,6 +1106,17 @@ const out = JSON.parse(process.argv[2]).map((matrix) => {
 console.log(JSON.stringify(out));
 """
 
+
+_BASELINE_LABEL_HARNESS = _APP_HARNESS_PRELUDE + r"""
+const context = {};
+vm.createContext(context);
+vm.runInContext(grab("baselineLabel"), context);
+const out = JSON.parse(process.argv[2]).map((regression) => {
+  context.regression = regression;
+  return vm.runInContext("baselineLabel(regression)", context);
+});
+console.log(JSON.stringify(out));
+"""
 
 _MAP_METRICS_HARNESS = _APP_HARNESS_PRELUDE + r"""
 const code = grab("element") + grab("metric") + grab("mapMetrics");
@@ -1307,6 +1319,55 @@ class CapsuleVerificationViewTest(unittest.TestCase):
         ])
         self.assertTrue(listed["summaries"][0].startswith("check invoice-tenant-isolation"))
         self.assertEqual(listed["summaries"][4], "3 probes · 1 new")
+
+    def test_a_run_without_a_baseline_is_not_listed_as_new(self) -> None:
+        """The list said "3 probes · 1 new" on a run given no --baseline, the
+        comparison the console stopped claiming."""
+        uncompared = {**self._entry("R-none", "failed", 1), "compared": False}
+        clean = {**self._entry("R-clean", "passed", 0), "compared": False,
+                 "summary": {"probes": 3, "new": 0}}
+        compared = {**self._entry("R-base", "failed", 1), "compared": True}
+        unknown = self._entry("R-old", "failed", 1)
+        listed = self._list([uncompared, clean, compared, unknown])
+        self.assertEqual(listed["summaries"], [
+            "3 probes · 1 finding, no baseline",
+            "3 probes · 0 findings, no baseline",
+            "3 probes · 1 new",
+            # A server that predates the field: no evidence either way.
+            "3 probes · 1 new",
+        ])
+
+    def test_a_baseline_without_a_run_id_is_still_a_baseline(self) -> None:
+        """A baseline file with no run_id records a digest; the panel keyed on
+        the id alone said "No baseline" over a diff made against it."""
+        labels = _run_node(_BASELINE_LABEL_HARNESS, [
+            {"baseline_run_id": "20261113T000000Z-aaaaaa", "baseline_digest": "d1"},
+            {"baseline_run_id": None, "baseline_digest": "bf9eb7f4147dddda969c"},
+            {"baseline_run_id": None, "baseline_digest": None},
+            {},
+        ])
+        self.assertEqual(labels, [
+            "vs 20261113T000000Z-aaaaaa",
+            "vs a baseline with no run id (digest bf9eb7f4147dddda969c)",
+            "No baseline",
+            "No baseline",
+        ])
+        detail = APP_JS.split("function renderDetail(", 1)[1].split("\nfunction ", 1)[0]
+        self.assertIn("baselineLabel(run.regression)", detail)
+
+    def test_the_overview_counts_a_digest_only_baseline_as_compared(self) -> None:
+        finding = {"id": "f", "verdict": "vulnerable", "evidence_grade": "confirmed"}
+        base = {"run_id": "r", "status": "failed", "findings": [finding],
+                "summary": {"probes": 2, "safe": 1, "vulnerable": 1, "confirmed": 1,
+                            "new": 1, "resolved": 0},
+                "gate": {"exit_code": 1, "fail_on": "new+confirmed",
+                         "reasons": [{"code": "findings"}]}}
+        digest_only = {**base, "regression": {"baseline_run_id": None,
+                                              "baseline_digest": "bf9eb7f4147dddda969c"}}
+        none = {**base, "regression": {"baseline_run_id": None, "baseline_digest": None}}
+        with_digest, without = _run_node(_GATE_HARNESS, [digest_only, none])
+        self.assertIn("1 new since the baseline", with_digest["text"])
+        self.assertNotIn("since the baseline", without["text"])
 
     def test_the_detail_badge_reads_the_capsule_verdict(self) -> None:
         detail = APP_JS.split("function renderDetail(", 1)[1].split("\nfunction ", 1)[0]

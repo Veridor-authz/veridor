@@ -310,6 +310,19 @@ function matchesFilter(entry) {
   return haystack.includes(needle);
 }
 
+// "1 new" on a run given no baseline is the comparison the console stopped
+// claiming: every finding counts as new because nothing was compared. The
+// server says `compared: false` only when the document records that it had
+// no baseline; an entry without the field keeps the old line.
+function runSummaryLine(entry) {
+  const probes = entry.summary?.probes ?? 0;
+  const count = entry.summary?.new ?? 0;
+  if (entry.compared === false) {
+    return `${probes} probes · ${count} finding${count === 1 ? "" : "s"}, no baseline`;
+  }
+  return `${probes} probes · ${count} new`;
+}
+
 function renderRuns() {
   runsElement.replaceChildren();
   const all =
@@ -389,7 +402,7 @@ function renderRuns() {
           "run-summary",
           capsule
             ? `check ${entry.capsule.check_id ?? "unnamed"} · ${entry.summary?.probes ?? 0} probes`
-            : `${entry.summary?.probes ?? 0} probes · ${entry.summary?.new ?? 0} new`,
+            : runSummaryLine(entry),
         ),
       ]);
       button.addEventListener("click", () => selectRun(entry.run_id));
@@ -506,6 +519,22 @@ function proportionBar(reached, refused, unmeasured, total) {
   return bar;
 }
 
+// Whether a run was diffed against a baseline file at all. `_compare_findings`
+// records the baseline's run id and its digest; a baseline file with no run_id
+// still has a digest, and keying on the id alone called that run uncompared
+// while the console said it was compared.
+function comparedWithBaseline(regression) {
+  return Boolean(regression?.baseline_run_id || regression?.baseline_digest);
+}
+
+function baselineLabel(regression) {
+  if (regression?.baseline_run_id) return `vs ${regression.baseline_run_id}`;
+  if (regression?.baseline_digest) {
+    return `vs a baseline with no run id (digest ${regression.baseline_digest})`;
+  }
+  return "No baseline";
+}
+
 function gateBanner(run) {
   /* The run's outcome in one line, the way CI acts on it: the gate's exit code
      and the counts behind it. Every value is read from the run document and
@@ -556,7 +585,7 @@ function gateBanner(run) {
   }
   // "new" and "resolved" are relative to a baseline. Without one every finding
   // counts as new, so naming a baseline would claim a comparison that never ran.
-  if ((run.regression || {}).baseline_run_id) {
+  if (comparedWithBaseline(run.regression)) {
     if (summary.resolved) facts.push(`${summary.resolved} resolved since the baseline`);
     if (summary.new) facts.push(`${summary.new} new since the baseline`);
   }
@@ -863,9 +892,7 @@ function renderDetail() {
     findingList(run.findings, "No active findings. All probes matched expectations."),
   );
   fragment.querySelector('[data-field="baseline"]').textContent =
-    run.regression.baseline_run_id
-      ? `vs ${run.regression.baseline_run_id}`
-      : "No baseline";
+    baselineLabel(run.regression);
 
   for (const button of fragment.querySelectorAll("[data-tab]")) {
     const tab = button.dataset.tab;

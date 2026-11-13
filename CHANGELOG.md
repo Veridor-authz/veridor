@@ -1588,6 +1588,11 @@ something you installed.
   findings, so nothing was compared" rather than "every finding (0)". A run
   given a baseline prints exactly what it did before, including one whose
   baseline file has no `run_id`, and the run JSON is unchanged.
+- **The viewer's run list said "1 new" on a run with no baseline**, the same
+  comparison the console stopped claiming, and the run page said "No
+  baseline" over a diff made against a baseline file with no `run_id`. The
+  list now says "1 finding, no baseline" when the run records that it had
+  none, and the page names a digest-only baseline as one.
 - **The viewer's footer was cut off behind the sidebar.** The footer spanned
   both grid columns while the sidebar is sticky to the whole page, so on a
   desktop the sidebar stayed pinned over its first 320px and the visible text
