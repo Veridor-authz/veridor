@@ -1460,6 +1460,43 @@ def _relative_to(where: Path, path: Path) -> str:
     return str(where)
 
 
+def _write_failure(what: str, path: Path, error: OSError) -> str:
+    """Say which output could not be written, and why, in the operator's terms.
+
+    ``reports.write_text`` writes a temporary sibling first and renames it over
+    ``path``, so the OSError it raises names that sibling, or a parent directory
+    it tried to create. Printed raw, `report --output ro/j.xml` into a read-only
+    directory said ``[Errno 13] Permission denied: 'ro/.j.xml.42f6df0f81e22ee1.tmp'``:
+    a file the operator never named, and no word about the one they did.
+    """
+    reason = error.strerror or str(error)
+    message = f"could not write {what} to {_shown(path)}: {reason}"
+    failed = error.filename
+    # A failed rename names the temporary file AND the path it was renamed
+    # onto. When that second name is the output itself -- `--output` naming an
+    # existing directory -- the parent was writable and the output was the
+    # obstacle, so "writing into its parent directory" pointed at the wrong one.
+    onto = error.filename2
+    if onto is not None and Path(os.fsdecode(onto)) == path:
+        failed = None
+    if failed is not None:
+        failed = Path(os.fsdecode(failed))
+        temporary = (
+            failed.parent == path.parent
+            and failed.name.startswith(f".{path.name}.")
+            and failed.name.endswith(".tmp")
+        )
+        if temporary:
+            message += f" (writing into {_relative_to(path.parent, path)})"
+        elif failed in path.parents:
+            message += f" (creating {_relative_to(failed, path)})"
+        elif failed != path:
+            message += f" (at {failed})"
+    if isinstance(error, PermissionError):
+        message += f", as uid:gid {_effective_ids()}"
+    return f"{message}. Nothing was written to {path}."
+
+
 def _probe_directory(directory: Path) -> tuple[str, Path, OSError] | None:
     """Create ``directory`` if needed and write, then remove, one file in it.
 
@@ -2162,7 +2199,7 @@ def _write_run_reports(
         except OSError as error:
             failed = True
             print(
-                f"veridor: could not write the {fmt} report to {path}: {error}",
+                f"veridor: {_write_failure(f'the {fmt} report', path, error)}",
                 file=sys.stderr,
             )
             continue
@@ -2482,20 +2519,25 @@ def _map(args: argparse.Namespace) -> int:
     # Every safety gate -- off-target paths, permitted methods, the two mutating
     # acknowledgements, the target acknowledgement and the request budget -- is
     # re-derived inside plan_matrix and raises here, before a socket is opened.
-    # `--dry-run` sends nothing, so a budget it would exceed is information
-    # rather than a refusal: the plan it prints is exactly what an operator
-    # needs to narrow it, and refusing to print it withheld the fix.
+    # `--dry-run` defers the budget refusal until after the plan is printed:
+    # the plan is exactly what an operator needs to narrow it, and refusing
+    # before printing it withheld the fix. It is still refused, below.
     plan = plan_matrix(
         config, inventory, options=_map_options(args), defer_budget=args.dry_run
     )
     print(plan.banner())
     print()
     if args.dry_run:
+        # Printed, and then refused exactly as the run refuses it. An "Over
+        # budget" paragraph followed by exit 0 told a script, and anyone who
+        # skims for the exit code, that the plan was fine: `--dry-run
+        # --max-requests 5` exited 0 on a plan `map --max-requests 5` refuses
+        # with exit 2, the code every other safety gate already gives a dry run.
+        over_budget: MatrixError | None = None
         try:
             plan.refuse_if_over_budget()
         except MatrixError as error:
-            print(f"Over budget, and nothing was sent:\n  {error}")
-            print()
+            over_budget = error
         # The plan already knows which templates have no specimen, so the fix
         # is available before a single request. Printing it only after the run
         # meant the command the documentation tells you to try FIRST was the
@@ -2514,6 +2556,16 @@ def _map(args: argparse.Namespace) -> int:
             print(advice)
             print()
         print("--dry-run: nothing was sent.")
+        if over_budget is not None:
+            sys.stdout.flush()
+            print(
+                "veridor: " + refusal_text(
+                    f"{over_budget} Without --dry-run, `map` refuses this plan "
+                    "the same way."
+                ),
+                file=sys.stderr,
+            )
+            return 2
         return 0
 
     _preflight_writable("map", _map_destinations(args, baseline is not None))
@@ -3770,7 +3822,12 @@ def _report(args: argparse.Namespace) -> int:
         sys.stdout.write(text)
         sys.stdout.flush()
         return 0
-    reports.write_text(destination, text)
+    try:
+        reports.write_text(destination, text)
+    except OSError as error:
+        raise ConfigError(
+            _write_failure(f"the {reports.LABELS[fmt]} report", destination, error)
+        ) from error
     print(f"Wrote {reports.LABELS[fmt]} report to {destination}")
     return 0
 

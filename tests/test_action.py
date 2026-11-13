@@ -771,6 +771,24 @@ class ActionArgvTest(_ActionCase):
         for cause in ("teardown", "unauthenticated identity"):
             self.assertNotIn(cause, drift_text)
 
+    def test_3_in_drift_mode_does_not_say_nothing_changed(self) -> None:
+        """REGRESSION. The annotation opened "no drift was found" while the
+        same step's drift report listed 12 changes: a baseline recorded with
+        the target down, compared with a live one, gains a measurement on every
+        cell, and `map` exits 3 because no cell was measured in both. Exit 3
+        also follows narrowing changes under `opened` with require-complete.
+        What 3 does say is that the gate did not fire."""
+        run, _, _ = self.invoke(exit_code=3, mode="drift", config="c.json", openapi="s.json",
+                                **{"matrix-baseline": self.baseline_file()})
+        (drift_text,) = [a for a in run.annotations() if "exited 3" in a]
+        self.assertNotIn("no drift", drift_text.lower())
+        self.assertIn("the drift gate did not fire", drift_text)
+        self.assertIn("Changes may still be listed", drift_text)
+        # Control: run mode's 3 is a different sentence and keeps its own claim.
+        run, _, _ = self.invoke(exit_code=3, config="c.json")
+        (run_text,) = [a for a in run.annotations() if "exited 3" in a]
+        self.assertIn("the security gate passed", run_text)
+
     def test_the_documents_default_to_a_fresh_scratch_directory(self) -> None:
         run, _, _ = self.invoke(config="c.json", openapi="s.json", documents={
             "--json": {"run_id": "r", "findings": [], "summary": {}}, "--sarif": {"runs": []},

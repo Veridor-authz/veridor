@@ -1577,6 +1577,43 @@ something you installed.
 
 ### Fixed
 
+- **`map --dry-run` exited `0` on a plan the run refuses.** With
+  `--max-requests 5` and a 12-request plan, the dry run printed "Over budget"
+  and exited `0`, while `map --max-requests 5` refuses with exit `2`. The dry
+  run still prints the plan, then gives the same refusal on stderr, says the
+  run refuses it the same way, and exits `2`, as it already did for every
+  other safety gate.
+- **A misspelt check key was refused for something else, or not at all.**
+  `"expectt"` was refused as "must expect results for at least two users",
+  `"reqeust"` as a missing request, and `"descriptionn"` or `"Name"` loaded and
+  was dropped. A check's own keys now get the near-miss refusal every other
+  block has: it names the key and the keys a check takes (`description`,
+  `expect`, `id`, `name`, `request`), exits `2`, and says to start an
+  annotation with `_`. A key that is no slip of a real one still loads as an
+  annotation.
+- **`report --output` into a directory it cannot write named a file nobody
+  typed.** It printed `[Errno 13] Permission denied:
+  'ro/.j.xml.42f6df0f81e22ee1.tmp'`, the temporary sibling the atomic write
+  creates first. It now says it could not write the report to the `--output`
+  path, the reason, whether it failed writing into or creating the parent
+  directory, and the uid:gid for a permission error, and exits `2`. A `run
+  --report` write that fails after the run (a full disk) says the same.
+- **The Action's drift-mode exit-3 annotation said "no drift was found" over
+  a report listing 12 changes.** A baseline recorded with the target down,
+  compared with a live run, gains a measurement on every cell, so the report
+  lists those changes while no cell was measured in both runs and `map` exits
+  `3`. The annotation now says the drift gate did not fire and that changes may
+  still be listed: cells measured in only one run, or changes `fail-on-drift`
+  does not gate on.
+- **`mutate` with its target down printed `Mutation score: 0.00`.** Every
+  generated mutant errored, and an errored mutant sits in the denominator as a
+  miss, so the score was `0 / 13`: a measured failure of checks that were never
+  exercised, where the documentation promised `n/a`. When no generated mutant
+  was evaluated, `score` (and `score_of_evaluable`, per operator and per tier-2
+  hook) is now `null`, the text prints `n/a` and says why, the badge is
+  `unknown` in grey, and `serve` shows no score for it, including for a report
+  written before this change. Errored mutants beside at least one evaluated one
+  still count as misses, and the run still exits `2`.
 - **`report` rendered an INCONCLUSIVE capsule verification as "Gate passed
   (exit 0)", and `serve` listed it as a failed run.** `verify` wrote the run of
   the capsule to `--output-dir` as an ordinary run: no gate, no verdict, and a

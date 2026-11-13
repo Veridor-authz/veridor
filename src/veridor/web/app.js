@@ -36,6 +36,29 @@ function mutationTone(summary) {
     : "warn";
 }
 
+// The score, or null when it is not defined. mutation.score is null when no
+// generated mutant was evaluated, and a report written before it was carries
+// 0.0 for a run whose every mutant errored -- the target was down, and the
+// list read "0.00 · 0/13 killed" as if thirteen checks had failed to
+// discriminate. Recomputed from the counts so both render as no score.
+function mutationScore(summary) {
+  const value = summary.score;
+  if (value === null || value === undefined) return null;
+  const evaluated = (summary.generated ?? 0) - (summary.errored ?? 0);
+  return evaluated > 0 ? value : null;
+}
+
+// The one-line tally under a list entry. Without a score there is no "killed
+// of generated" worth printing: say what happened instead.
+function mutationTally(summary) {
+  if (mutationScore(summary) === null) {
+    return summary.errored
+      ? `none evaluated · ${summary.errored} errored`
+      : "no mutant evaluated";
+  }
+  return `${summary.killed}/${summary.generated} killed · ${summary.survived ?? 0} surviving`;
+}
+
 // `status` is computed from findings alone, so a run the gate failed for a
 // reason that is not a finding -- unproven liveness, an unclean teardown, an
 // expectation that asserts nothing -- stays `passed`. Painted from `status`
@@ -336,19 +359,13 @@ function renderRuns() {
         element(
           "span",
           `dot ${mutationTone(entry)}`,
-          entry.score === null || entry.score === undefined
-            ? "no score"
-            : entry.score.toFixed(2),
+          mutationScore(entry) === null ? "no score" : entry.score.toFixed(2),
         ),
       );
       button = listButton(entry.stem, state.selected?.stem === entry.stem, [
         top,
         element("span", "muted", formatDate(entry.completed_at)),
-        element(
-          "span",
-          "run-summary",
-          `${entry.killed ?? 0}/${entry.generated ?? 0} killed · ${entry.survived ?? 0} surviving`,
-        ),
+        element("span", "run-summary", mutationTally(entry)),
       ]);
       button.addEventListener("click", () => selectMutation(entry.stem));
     } else {
@@ -1345,8 +1362,8 @@ function renderMutateDetail() {
   // attached to it rather than three paragraphs away -- a bare 0.83 invites
   // exactly the reading the report text spends a page preventing.
   const score = fragment.querySelector('[data-field="mutate-score"]');
-  const value = summary.score;
-  const undefinedScore = value === null || value === undefined;
+  const value = mutationScore(summary);
+  const undefinedScore = value === null;
   const allKilled = mutationTone(summary) === "safe";
   score.classList.add(allKilled ? "safe" : "warn");
   score.append(

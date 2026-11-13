@@ -826,7 +826,9 @@ The matrix is a scanning-shaped workload and is treated as one.
   across five identities already exceeds it. `--dry-run` prints the estimate
   beside the stop and says so when the plan cannot finish.
 - **`--dry-run` sends nothing.** It prints the plan, the posture and the
-  estimate. Run it first against anything you did not provision yourself.
+  estimate. Run it first against anything you did not provision yourself. A
+  plan over `--max-requests` is printed and then refused with exit `2`, as the
+  run itself refuses it.
 - **A public target must be typed out.** A target that is neither loopback nor
   a private, non-globally-routable address needs
   `--acknowledge-target "I am authorized to test HOST"` verbatim. Waived without

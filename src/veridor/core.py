@@ -186,6 +186,7 @@ _NEEDLE_ENCODINGS: tuple[str, ...] = ("ascii", "utf-16le", "utf-16be")
 _MARKER_EXPECT_KEYS = frozenset({"status", "contains_marker", "excludes_marker"})
 _IDENTITY_KEYS = frozenset({"headers", "marker", "marker_probe", "session"})
 _REQUEST_KEYS = frozenset({"method", "path", "headers", "json", "body"})
+_CHECK_KEYS = frozenset({"id", "name", "description", "request", "expect"})
 
 #: Identity-level session state. Every key is optional except ``establishes``,
 #: which is what makes "the session is up" a measured fact rather than an
@@ -2575,6 +2576,18 @@ def _validate_check(
 ) -> None:
     if not isinstance(check, dict):
         raise ConfigError("each check must be an object")
+    # Before any key is required: `expectt` was reported as "must expect results
+    # for at least two users" -- true of the check as loaded, and no help to
+    # someone who had declared three -- and `reqeust` as a missing request.
+    suspicious = _suspicious_keys(sorted(set(check) - _CHECK_KEYS), _CHECK_KEYS)
+    if suspicious:
+        named = check.get("id")
+        label = f"check {quoted(named)}" if isinstance(named, str) and named else "a check"
+        raise ConfigError(
+            f"{label} has unsupported keys: {terminal_names(suspicious)} (did you "
+            f"mean one of {', '.join(sorted(_CHECK_KEYS))}?) "
+            + _annotation_way_out(suspicious)
+        )
     check_id = check.get("id")
     if not isinstance(check_id, str) or not check_id:
         raise ConfigError("each check requires a non-empty id")
