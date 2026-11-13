@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import gzip
 import itertools
 import json
@@ -414,8 +415,8 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = build_parser().parse_args(argv)
     try:
         server = create_server(
             args.host, args.port, args.vulnerable, args.leak_marker, args.silent_write
@@ -427,6 +428,22 @@ def main() -> None:
         # report indistinguishable from a genuine clean result. Say what
         # happened, say what it means for the next command, and exit non-zero
         # so a `&&` chain stops here.
+        if exc.errno != errno.EADDRINUSE:
+            # Not every refusal is a port someone holds: an address this
+            # machine does not have, or a name that does not resolve, is
+            # refused too. That used to be reported as "another process
+            # already holds" it, with a relaunch on the same host, refused
+            # again. Nothing is listening there; offer loopback instead.
+            loopback = argparse.Namespace(**{**vars(args), "host": "127.0.0.1"})
+            print(
+                f"demo_server: cannot listen on {args.host}:{args.port}: {exc}\n"
+                "  This demo did NOT start.\n"
+                "  Run it on loopback and point the tool at it:\n"
+                + relaunch_hint(loopback, 8800 if args.port == 8799 else 8799),
+                file=sys.stderr,
+                flush=True,
+            )
+            raise SystemExit(2) from None
         print(
             f"demo_server: cannot listen on {args.host}:{args.port}: {exc}\n"
             f"  Another process already holds {args.host}:{args.port}. This demo "

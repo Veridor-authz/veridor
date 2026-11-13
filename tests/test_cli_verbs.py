@@ -2196,6 +2196,38 @@ class DemoRelaunchHintTest(unittest.TestCase):
         self.assertIn("--base-url http://[::1]:8799", self.hint("--host", "::1"))
         self.assertIn("--base-url http://127.0.0.1:8800", self.hint(port=8800))
 
+    def refused(self, error: int, *argv: str) -> str:
+        """What main() prints when listening fails with `error`."""
+        import errno  # noqa: PLC0415
+        from unittest import mock  # noqa: PLC0415
+
+        from scripts import demo_server  # noqa: PLC0415
+
+        stderr = io.StringIO()
+        with mock.patch.object(demo_server, "create_server",
+                               side_effect=OSError(error, errno.errorcode[error])), \
+                contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as caught:
+            demo_server.main(list(argv))
+        self.assertEqual(caught.exception.code, 2)
+        return stderr.getvalue()
+
+    def test_only_a_port_in_use_is_reported_as_held_by_another_process(self) -> None:
+        """An address this machine does not have was reported as "another
+        process already holds" it, and the hint repeated the host, which is
+        refused again."""
+        import errno  # noqa: PLC0415
+
+        unassignable = self.refused(errno.EADDRNOTAVAIL, "--host", "192.0.2.77", "--no-marker-leak")
+        self.assertIn("did NOT start", unassignable)
+        self.assertNotIn("Another process", unassignable)
+        self.assertNotIn("192.0.2.77:8799", unassignable)
+        self.assertIn("python3 scripts/demo_server.py --no-marker-leak --port 8799 &", unassignable)
+        self.assertIn("--base-url http://127.0.0.1:8799", unassignable)
+        # control: a port in use is still reported as held, on its own host
+        in_use = self.refused(errno.EADDRINUSE, "--host", "::1")
+        self.assertIn("Another process already holds ::1:8765", in_use)
+        self.assertIn("--base-url http://[::1]:8799", in_use)
+
 
 class UnauthenticatedExposureGuardTest(unittest.TestCase):
     """The viewer has no authentication, so the bind address is the whole gate.
