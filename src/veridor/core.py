@@ -3199,6 +3199,11 @@ UNSENT_REASONS: dict[str, str] = {
         "the session for this identity is no longer live, so the request would "
         "have gone out unauthenticated and was not sent"
     ),
+    "session_cookie_not_sent": (
+        "the cookie that established this identity's session would not have "
+        "been sent with this request (its Path or Domain does not cover it), so "
+        "the request would have gone out unauthenticated and was not sent"
+    ),
     "injection_not_applicable": (
         "this identity's session injects a form_field or json_field, and this "
         "request has no form-encoded or JSON object body to carry it, so the "
@@ -3225,9 +3230,13 @@ INJECTION_REMEDIATION: str = (
 )
 
 
-def execution_message(error: str) -> str:
-    """The message of an EXEC-001 finding: "not sent" when it was not."""
-    if error in _UNSENT_ERRORS:
+def execution_message(error: str, reason: str | None = None) -> str:
+    """The message of an EXEC-001 finding: "not sent" when it was not.
+
+    ``reason`` is the unsent code of a step that wrote its own message, which
+    is not one of the shared texts; such a step used to read "Request failed".
+    """
+    if error in _UNSENT_ERRORS or reason in UNSENT_REASONS:
         return f"Request not sent: {error}"
     return f"Request failed: {error}"
 
@@ -3270,14 +3279,52 @@ CONFIGURATION_UNSENT_ERRORS: dict[str, str] = {
 }
 
 
-def unsent_remediation(error: str, reason: str | None = None) -> str | None:
-    """Configuration advice for a request withheld by the configuration.
+#: Advice for a probe not issued because its identity's session never
+#: established. The check path has always given it; a sequence step refused for
+#: the same reason was told to confirm the target is reachable, which is wrong
+#: when the login answered 200 and its cookie was unusable.
+SESSION_NOT_ESTABLISHED_REMEDIATION: str = (
+    "Confirm the identity's session login steps succeed against this target, "
+    "then re-run. Until the session establishes, this identity measures nothing."
+)
 
-    ``reason`` names the code when the error text is not the shared one, as
-    for a sequence step whose own message names the capture it refused.
+#: Advice for the session reasons. Kept apart from the configuration ones on
+#: purpose: the gate reads those as "the fix is in your config", and a session
+#: can fail on the target's side. Nothing was sent, so network advice is wrong
+#: here too.
+SESSION_UNSENT_REMEDIATION: dict[str, str] = {
+    "session_unavailable": SESSION_NOT_ESTABLISHED_REMEDIATION,
+    "session_expired": (
+        "Nothing was sent: the cookie that established this identity's session "
+        "had expired by the time this request was built. If the target issues "
+        'short-lived session cookies, set "reestablish": "check" on the session '
+        "so it logs in again before each check and sequence, then re-run."
+    ),
+    "session_cookie_not_sent": (
+        "Nothing was sent: the cookie that established this identity's session "
+        "is scoped by its Path or Domain away from this request's URL. Check the "
+        "Set-Cookie attributes the login step receives, or name in establishes "
+        "the cookie that authenticates this path."
+    ),
+}
+
+_SESSION_UNSENT_ERRORS: dict[str, str] = {
+    UNSENT_REASONS[reason]: reason for reason in SESSION_UNSENT_REMEDIATION
+}
+
+
+def unsent_remediation(error: str, reason: str | None = None) -> str | None:
+    """Advice for a request withheld before the socket, or None if it was not.
+
+    Configuration advice for a request the configuration withheld, and session
+    advice for one its identity's session could not carry. ``reason`` names
+    the code when the error text is not the shared one, as for a sequence step
+    whose own message names the capture it refused.
     """
-    code = CONFIGURATION_UNSENT_ERRORS.get(error, reason)
-    return CONFIGURATION_UNSENT_REMEDIATION.get(code) if code else None
+    code = CONFIGURATION_UNSENT_ERRORS.get(error) or _SESSION_UNSENT_ERRORS.get(error, reason)
+    if not code:
+        return None
+    return CONFIGURATION_UNSENT_REMEDIATION.get(code) or SESSION_UNSENT_REMEDIATION.get(code)
 
 
 def _issued_mutating(results: Iterable[dict[str, Any]]) -> int:
@@ -3459,7 +3506,12 @@ def _perform_request(
     # http:// request routed through an https:// proxy into type "https", and
     # the jar then attached Secure cookies to a request for an http:// target.
     if session is not None:
-        session.attach_cookies(request)
+        blocked = session.attach_cookies(request)
+        if blocked is not None:
+            # The same refusal prepare() gives an expired session, decided on
+            # the request as built: the jar re-reads the clock, so a cookie can
+            # expire between that check and this one and be left off silently.
+            return _unsent_result(url, method, blocked, needles=bool(marker))
     route = proxy_route(url)
     if route is not None:
         _via_proxy(request, route)
@@ -5231,11 +5283,7 @@ def _grade_check(
                         },
                     },
                     "location": str(config_path),
-                    "remediation": (
-                        "Confirm the identity's session login steps succeed "
-                        "against this target, then re-run. Until the session "
-                        "establishes, this identity measures nothing."
-                    ),
+                    "remediation": SESSION_NOT_ESTABLISHED_REMEDIATION,
                 }
             )
             continue

@@ -3051,5 +3051,345 @@ class EstablishesUnknownKeyTest(unittest.TestCase):
         self.assertIn("inject", message)
 
 
+# --------------------------------------------------------------------------
+# a cookie that expires between prepare() and attach_cookies()
+# --------------------------------------------------------------------------
+
+import http.cookiejar  # noqa: E402
+from urllib.parse import urlsplit  # noqa: E402
+from urllib.request import Request  # noqa: E402
+
+
+class _Clock:
+    """``time`` as http.cookiejar and veridor.sequence see it, plus an offset.
+
+    prepare() asks is_live(), then add_cookie_header() reads the clock again.
+    Moving this clock between the two is the race, made certain: measured on
+    a real clock the window is about 12 us median and 113 us at worst, which
+    no wall-clock test can hit on purpose.
+    """
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def __getattr__(self, name: str):
+        return getattr(time, name)
+
+    def time(self) -> float:
+        return time.time() + self.offset
+
+    def past(self, expires: int) -> None:
+        self.offset = expires + 1 - time.time()
+
+
+@contextlib.contextmanager
+def _clock():
+    clock = _Clock()
+    with patch.object(http.cookiejar, "time", clock), patch.object(sequence, "time", clock):
+        yield clock
+
+
+def _jar_session(
+    *, path: str = "/", establishes: dict | None = None, capture: dict | None = None
+) -> sequence.IdentitySession:
+    declaration: dict = {"establishes": establishes or {"cookie": "sid"}}
+    if capture:
+        declaration["capture"] = capture
+    session = sequence.IdentitySession(
+        "attacker", {"headers": {}, "session": declaration}, "http://127.0.0.1:1", 5, {}
+    )
+    session.jar.set_cookie(http.cookiejar.Cookie(
+        0, "sid", "attacker", None, False, "127.0.0.1", False, False, path, True,
+        False, int(time.time()) + 100, False, None, None, {}))
+    session.state = "established"
+    return session
+
+
+def _expires(session: sequence.IdentitySession) -> int:
+    return next(cookie.expires for cookie in session.jar if cookie.name == "sid")
+
+
+class AttachCookiesRaceTest(unittest.TestCase):
+    """attach_cookies() looks for the session cookie on the request it built."""
+
+    def _race(self, session: sequence.IdentitySession, clock: _Clock):
+        _headers, _body, blocked, _ = session.prepare({}, None, method="GET")
+        self.assertIsNone(blocked, "prepare() saw a live session")
+        clock.past(_expires(session))
+        request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+        return session.attach_cookies(request), request
+
+    def test_a_cookie_that_expires_after_prepare_is_refused_at_attach(self) -> None:
+        with _clock() as clock:
+            reason, request = self._race(_jar_session(), clock)
+        # The jar left it off without a word; that is the race.
+        self.assertIsNone(request.get_header("Cookie"))
+        self.assertEqual(reason, "session_expired")
+
+    def test_control_a_live_cookie_goes_on_and_nothing_is_refused(self) -> None:
+        session = _jar_session()
+        with _clock():
+            request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+            self.assertIsNone(session.prepare({}, None, method="GET")[2])
+            self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_a_cookie_scoped_away_from_the_url_is_refused_by_its_own_reason(self) -> None:
+        session = _jar_session(path="/app")
+        request = Request("http://127.0.0.1:1/notes/n1", method="GET")
+        self.assertTrue(session.is_live())
+        self.assertEqual(session.attach_cookies(request), "session_cookie_not_sent")
+        self.assertIn("session_cookie_not_sent", core.UNSENT_REASONS)
+        inside = Request("http://127.0.0.1:1/app/notes/n1", method="GET")
+        self.assertIsNone(session.attach_cookies(inside))
+
+    def test_a_login_step_is_never_refused(self) -> None:
+        """Login runs before the session exists, with whatever the jar holds."""
+        session = _jar_session(path="/app")
+        session.state = "pending"
+        request = Request("http://127.0.0.1:1/login", method="POST")
+        self.assertIsNone(session.attach_cookies(request))
+
+    def test_a_capture_read_from_the_cookie_is_the_same_proof(self) -> None:
+        session = _jar_session(
+            establishes={"capture": "csrf"},
+            capture={"csrf": {"from": "cookie", "name": "sid"}},
+        )
+        with _clock() as clock:
+            reason, _request = self._race(session, clock)
+        self.assertEqual(reason, "session_expired")
+
+    def test_a_capture_from_the_response_body_has_no_cookie_to_lose(self) -> None:
+        """Its value is in the request already; the jar cannot take it back.
+
+        A login step's capture lands in ``_values``; only a session-level
+        capture (which the loader holds to ``from: cookie``) is read from the jar.
+        """
+        session = _jar_session(establishes={"capture": "token"})
+        session._values["token"] = "tok"
+        with _clock() as clock:
+            reason, request = self._race(session, clock)
+        self.assertIsNone(reason)
+        self.assertIsNone(request.get_header("Cookie"))
+
+    def test_perform_request_sends_nothing_when_attach_refuses(self) -> None:
+        class Opener:
+            def open(self, *_args, **_kwargs):
+                raise AssertionError("a request reached the opener")
+
+        session = _jar_session()
+        real_attach = sequence.IdentitySession.attach_cookies
+
+        def attach(inner, request):
+            clock.past(_expires(inner))
+            return real_attach(inner, request)
+
+        with _clock() as clock, patch.object(core, "_OPENER", Opener()), \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach):
+            result = core._perform_request(
+                "http://127.0.0.1:1", 5, {"method": "GET", "path": "/docs/1"},
+                {"headers": {}}, marker=MARKER_VICTIM, session=session,
+            )
+        self.assertEqual(result["error"], core.UNSENT_REASONS["session_expired"])
+        self.assertIsNone(result["response"]["status"])
+        self.assertEqual(result["response"]["marker_scan"], "unknown")
+
+
+class SessionRemediationTest(unittest.TestCase):
+    """A request a session could not carry gets session advice, not network advice."""
+
+    def test_each_session_reason_gets_session_advice(self) -> None:
+        for reason in ("session_unavailable", "session_expired", "session_cookie_not_sent"):
+            with self.subTest(reason=reason):
+                advice = core.unsent_remediation(core.UNSENT_REASONS[reason])
+                self.assertIsNotNone(advice)
+                self.assertNotIn("reachable", advice)
+        self.assertIn("reestablish", core.unsent_remediation(
+            core.UNSENT_REASONS["session_expired"]))
+
+    def test_a_step_message_of_its_own_is_matched_by_its_reason(self) -> None:
+        advice = core.unsent_remediation(
+            "the session for 'a' was not established (x); this step was not issued",
+            "session_unavailable",
+        )
+        self.assertEqual(advice, core.SESSION_NOT_ESTABLISHED_REMEDIATION)
+
+    def test_the_gate_still_does_not_call_a_session_failure_configuration(self) -> None:
+        """Exit codes read CONFIGURATION_UNSENT_ERRORS; a session can fail on the target."""
+        for reason in ("session_unavailable", "session_expired", "session_cookie_not_sent"):
+            self.assertNotIn(reason, core.CONFIGURATION_UNSENT_ERRORS.values())
+
+    def test_control_a_transport_failure_still_gets_no_unsent_advice(self) -> None:
+        self.assertIsNone(core.unsent_remediation("connection refused"))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class CookieExpiresBetweenPrepareAndAttachTest(unittest.TestCase):
+    """The attacker's cookie expires after is_live() said yes and before the jar runs.
+
+    The target answers an anonymous request with 404, a status the denial
+    declaration lists and not one the 401 rule catches. Before the fix the
+    graded probe went out with an empty Cookie header, drew that 404, and a
+    live IDOR was graded safe (check) or matched (sequence).
+    """
+
+    PROBE = {"seq": "/notes/n1", "check": "/docs/1"}
+
+    @staticmethod
+    def _target(*, cookie_path: str = "/"):
+        notes: dict[str, bytes] = {}
+
+        def responder(entry: dict):
+            who = _who(entry)
+            if entry["path"] == "/login":
+                attributes = f"sid={who}; Path={cookie_path}"
+                if who == "attacker":
+                    attributes += "; Max-Age=100"
+                return 200, [("Set-Cookie", attributes)], b"ok"
+            if "sid=" not in entry["cookie"]:
+                return 404, [("Content-Type", "application/json")], b'{"e":"anon"}'
+            if entry["method"] == "POST":
+                notes["n1"] = json.dumps({"provenance": MARKER_VICTIM}).encode()
+                return 201, [("Content-Type", "application/json")], b'{"id":"n1"}'
+            if entry["path"] == "/m":
+                owner = MARKER_ATTACKER if who == "attacker" else MARKER_VICTIM
+                return 200, [("Content-Type", "application/json")], json.dumps(
+                    {"m": owner}).encode()
+            # IDOR: any logged-in caller reads the victim's record.
+            body = notes.get("n1") or json.dumps({"provenance": MARKER_VICTIM}).encode()
+            return 200, [("Content-Type", "application/json")], body
+
+        return responder
+
+    @staticmethod
+    def _config(kind: str) -> dict:
+        identities = _identities(sessions=True)
+        if kind == "seq":
+            sequences = _idor_sequence()
+            sequences[0]["steps"][2]["expect"]["status"] = [403, 404]
+            return {"version": 2,
+                    "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                    "identities": identities, "checks": [], "sequences": sequences}
+        for identity in identities.values():
+            identity["marker_probe"] = {"method": "GET", "path": "/m"}
+        check = _doc_check()
+        check["expect"]["attacker"]["status"] = [403, 404]
+        return {"version": 1,
+                "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+                "identities": identities, "checks": [check]}
+
+    def _execute(self, kind: str, *, race: bool, cookie_path: str = "/"):
+        real_attach = sequence.IdentitySession.attach_cookies
+        fired: list[str] = []
+
+        def attach(session, request):
+            # The attacker's own graded probe, not the sham liveness control
+            # that replaces its Authorization header.
+            if (race and not fired and session.name == "attacker"
+                    and session.state == "established"
+                    and request.get_header("Authorization") == ATTACKER_TOKEN
+                    and urlsplit(request.full_url).path == self.PROBE[kind]):
+                fired.append(request.full_url)
+                clock.past(_expires(session))
+            return real_attach(session, request)
+
+        with _clock() as clock, \
+                patch.object(sequence.IdentitySession, "attach_cookies", attach), \
+                _server(self._target(cookie_path=cookie_path)) as (url, log):
+            result, _sessions, _ = _run(self._config(kind), url)
+        if race:
+            self.assertEqual(len(fired), 1, "the race was never forced")
+        probes = [entry for entry in log.entries
+                  if entry["auth"] == ATTACKER_TOKEN and entry["path"] == self.PROBE[kind]]
+        return result, probes
+
+    def test_control_without_the_race_the_idor_is_confirmed(self) -> None:
+        for kind in ("seq", "check"):
+            with self.subTest(kind=kind):
+                result, probes = self._execute(kind, race=False)
+                self.assertEqual(len(probes), 1)
+                self.assertIn("sid=attacker", probes[0]["cookie"])
+                rules = [(f["rule_id"], f["verdict"], f["evidence_grade"])
+                         for f in result["findings"]]
+                self.assertEqual(rules, [("VERIDOR-AUTHZ-001", "vulnerable", "confirmed")])
+
+    def test_the_sequence_assert_step_is_never_sent_anonymous(self) -> None:
+        result, probes = self._execute("seq", race=True)
+        self.assertEqual(probes, [], "an anonymous graded probe reached the target")
+        steps = result["sequences"][0]["steps"]
+        self.assertNotEqual(steps[2]["state"], "matched")
+        self.assertEqual(result["summary"]["sequence_steps_matched"], 2)
+        self.assertEqual(result["summary"]["safe"], 0)
+        self.assertEqual([(f["rule_id"], f["verdict"]) for f in result["findings"]],
+                         [("VERIDOR-EXEC-001", "inconclusive")])
+        finding = result["findings"][0]
+        self.assertIn("no longer live", finding["message"])
+        self.assertIn("reestablish", finding["remediation"])
+
+    def test_the_check_probe_is_never_sent_anonymous(self) -> None:
+        result, probes = self._execute("check", race=True)
+        self.assertEqual(probes, [], "an anonymous graded probe reached the target")
+        attacker = _finding_map(result)[("cross-tenant-doc-read", "attacker")]
+        self.assertEqual((attacker["rule_id"], attacker["verdict"]),
+                         ("VERIDOR-EXEC-001", "inconclusive"))
+        self.assertIn("no longer live", attacker["message"])
+        self.assertIn("reestablish", attacker["remediation"])
+        self.assertEqual(result["summary"]["vulnerable"], 0)
+        # The victim's probe is the only one graded safe.
+        self.assertEqual(result["summary"]["safe"], 1)
+
+    def test_a_cookie_scoped_away_from_the_probe_is_not_sent_anonymous(self) -> None:
+        result, probes = self._execute("check", race=False, cookie_path="/app")
+        self.assertEqual(probes, [])
+        attacker = _finding_map(result)[("cross-tenant-doc-read", "attacker")]
+        self.assertEqual(attacker["verdict"], "inconclusive")
+        self.assertIn("Path or Domain", attacker["message"])
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
+class SequenceSessionRemediationTest(unittest.TestCase):
+    """A sequence step whose session never established was told to check the network.
+
+    The login answered 200; its cookie was the problem. The check path has
+    always said so.
+    """
+
+    def test_the_sequence_step_gets_the_advice_the_check_probe_gets(self) -> None:
+        def responder(entry: dict):
+            # Logs in fine, and sets a cookie under a name nobody declared.
+            if entry["path"] == "/login":
+                return 200, [("Set-Cookie", "other=1; Path=/")], b"ok"
+            return 404, [], b""
+
+        config = {
+            "version": 2,
+            "target": {"base_url": "http://127.0.0.1:1", "timeout_seconds": 5},
+            "identities": _identities(sessions=True),
+            "checks": [_doc_check()],
+            "sequences": _idor_sequence(),
+        }
+        with _server(responder) as (url, log):
+            result, _sessions, _ = _run(config, url)
+        # Nothing but the logins went out as either identity (the liveness
+        # control's fabricated credential is neither).
+        self.assertEqual(
+            {entry["path"] for entry in log.entries
+             if entry["auth"] in (VICTIM_TOKEN, ATTACKER_TOKEN)},
+            {"/login"},
+        )
+        execution = [f for f in result["findings"] if f["rule_id"] == "VERIDOR-EXEC-001"]
+        steps = [f for f in execution if f["check_id"] == "sess-idor"]
+        checks = [f for f in execution if f["check_id"] == "cross-tenant-doc-read"]
+        self.assertEqual((len(steps), len(checks)), (1, 2))
+        for finding in steps + checks:
+            with self.subTest(finding=finding["id"]):
+                self.assertEqual(finding["verdict"], "inconclusive")
+                self.assertEqual(finding["remediation"],
+                                 core.SESSION_NOT_ESTABLISHED_REMEDIATION)
+                self.assertNotIn("reachable", finding["remediation"])
+        # Nothing was sent, so it does not say the request failed.
+        self.assertTrue(steps[0]["message"].startswith("Request not sent: "))
+
+
 if __name__ == "__main__":
     unittest.main()

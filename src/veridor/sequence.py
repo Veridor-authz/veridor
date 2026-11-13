@@ -1243,6 +1243,11 @@ def _content_type(headers: Mapping[str, str]) -> str:
     return ""
 
 
+def _cookie_names(header: str) -> set[str]:
+    """The cookie names in a ``Cookie`` request header, as the jar wrote it."""
+    return {part.split("=", 1)[0].strip() for part in header.split(";") if part.strip()}
+
+
 class IdentitySession:
     """One identity's live session. Credentials live here and nowhere else.
 
@@ -1291,7 +1296,18 @@ class IdentitySession:
 
     # -- jar -------------------------------------------------------------
 
-    def attach_cookies(self, request: Request) -> None:
+    def attach_cookies(self, request: Request) -> str | None:
+        """Put the jar's cookies on ``request``; a reason not to send it, or None.
+
+        The reason is a key of :data:`core.UNSENT_REASONS`, and the caller must
+        then send nothing. :meth:`prepare` already asked :meth:`is_live`, but
+        ``add_cookie_header`` reads the clock again: a cookie that expired in
+        between was silently left off and the probe went out anonymous. Against
+        a target that answers an anonymous request with a 403 or 404 a denial
+        declaration lists, that graded a live IDOR as safe. So the cookie that
+        established the session is looked for on the request itself, after the
+        jar has had its say, rather than trusted from the earlier check.
+        """
         if request.has_header("Cookie"):
             # Guaranteed unreachable by the load-time refusal of a static Cookie
             # header alongside a session. Asserted anyway, because the failure
@@ -1301,6 +1317,32 @@ class IdentitySession:
                 f"identity {quoted(self.name)} request already carries a Cookie header"
             )
         self.jar.add_cookie_header(request)
+        if self.state != "established":
+            # Login steps run before the session exists and carry whatever the
+            # jar holds so far, as they always have.
+            return None
+        name = self._establishing_cookie()
+        if name is None or name in _cookie_names(request.get_header("Cookie") or ""):
+            return None
+        if not self.is_live():
+            return "session_expired"
+        # Still live, yet the jar would not send it here: the cookie's Path or
+        # Domain does not cover this URL. The request would go out just as
+        # anonymous as an expired one.
+        return "session_cookie_not_sent"
+
+    def _establishing_cookie(self) -> str | None:
+        """The jar cookie whose presence proves this session, if one does.
+
+        ``establishes: {"cookie": NAME}`` names it outright. A capture read
+        from a cookie is the same proof by another name. Any other capture is
+        a value already written into the request by :meth:`prepare`, which the
+        jar cannot take back off.
+        """
+        establishes = self.declaration["establishes"]
+        if "cookie" in establishes:
+            return str(establishes["cookie"])
+        return self._live_cookies.get(establishes["capture"])
 
     def harvest(self, response: Any, request: Request) -> None:
         try:
@@ -2292,7 +2334,8 @@ class _SequenceRun:
                 f"the session for {quoted(step['as'])} was not established "
                 f"({session.reason}); this step was not issued"
             )
-            self.findings.append(self._exec_finding(index, step, record, name))
+            self.findings.append(self._exec_finding(
+                index, step, record, name, reason="session_unavailable"))
             self._abort(index, "execution_error", record["error"], emitted=True)
             return
 
@@ -2893,7 +2936,7 @@ class _SequenceRun:
             "verdict": "inconclusive",
             "evidence_grade": "n/a",
             "title": f"Could not verify {name} as {step['as']}",
-            "message": core.execution_message(record["error"]),
+            "message": core.execution_message(record["error"], reason),
             **self._base_finding(step, index, record),
             "evidence": self._evidence(step, index, record),
             # A step withheld by its own configuration gets configuration

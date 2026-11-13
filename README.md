@@ -1398,6 +1398,13 @@ If a session does not establish, every probe naming that identity reports
 entries are skipped and reported. Degraded state is never allowed to look like a
 result.
 
+An established session is checked again on every request, on the request
+itself: once the jar has attached its cookies, the cookie named in
+`establishes` must be on it. If that cookie has expired since login, or its
+`Path` or `Domain` does not cover the URL, the request **is not sent** and is
+graded `inconclusive`, because without the cookie it would go out anonymous and
+its `403` or `404` could match a declared denial.
+
 | Capture `from` | Reads |
 | --- | --- |
 | `cookie` | that identity's own jar, live at send time — so a rotating CSRF cookie works with no logic at all |
@@ -2342,9 +2349,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,529 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
-| `slow` | 969 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,498 | 364.0s | The whole suite, in one process, with no guard |
+| `fast` | 2,540 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `slow` | 974 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
+| both | 3,514 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

@@ -16,6 +16,24 @@ something you installed.
 
 ### Security
 
+- **A session cookie that expired between the liveness check and the send
+  went out missing, and a live IDOR was graded safe.** Each request asked
+  whether the session was still live, then the cookie jar read the clock
+  again when it attached cookies and silently left off one that had expired
+  in between. The probe went out anonymous; against a target that answers an
+  anonymous request with a `403` or `404` the declaration lists, a check
+  probe was graded `safe` and a sequence assert step `matched` over a
+  confirmed IDOR (reproduced by forcing the expiry into that gap; measured on
+  a real clock, the gap is about 0.012 ms median and 0.113 ms at worst, so
+  rare but silent). Only a `401` was caught, by the session-401 rule. The cookie
+  named in `establishes` (or behind an `establishes` capture read from a
+  cookie) is now looked for on the request after the jar has attached its
+  cookies; if it is missing nothing is sent and the request is graded
+  `inconclusive` as an expired session. The same check refuses an
+  establishing cookie whose `Path` or `Domain` does not cover the request's
+  URL, which also went out anonymous, with its own reason
+  (`session_cookie_not_sent`). A session established by a capture from a
+  login response is unaffected: its value is already in the request.
 - **A drift document's counts were pasted into the Markdown summary as
   markup.** `report --from-drift` checked the drift document's kind, schema
   version and containers but not its counts, and the summary interpolated
@@ -1577,6 +1595,15 @@ something you installed.
 
 ### Fixed
 
+- **A sequence step whose session never established was told to check the
+  network.** Its finding said "Request failed" and "Confirm the target is
+  reachable from the runner and retry", while a check probe for the same
+  identity got session-login advice. That was wrong when the login answered
+  `200` and its cookie was the problem (already expired, `Secure` over
+  `http`, a different name). The step now says "Request not sent" and gets
+  the check path's advice, and a request withheld because the session
+  expired or its cookie would not be sent says how to fix that instead of
+  naming the network. Verdicts and exit codes are unchanged.
 - **A run with no `--baseline` reported a regression diff it never made.**
   The summary printed "Regression diff: 1 new, 0 resolved, 0 unchanged" and
   "Evidence: ... 0 escalated since the baseline" whether or not a baseline
