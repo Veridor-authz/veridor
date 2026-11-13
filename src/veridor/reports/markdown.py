@@ -224,7 +224,10 @@ def _counts(document: Mapping[str, Any]) -> list[str]:
             and not regression.get("baseline_digest")):
         lines += [
             f"No baseline was given, so every finding ({row[5]}) counts as new "
-            "and nothing was compared.",
+            "and nothing was compared."
+            if row[5] else
+            "No baseline was given and there are no findings, so nothing was "
+            "compared.",
             "",
         ]
     lines.append(

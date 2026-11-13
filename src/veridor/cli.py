@@ -1108,11 +1108,15 @@ def _print_summary(result: dict) -> None:
             f"Regression diff: {summary['new']} new, "
             f"{summary['resolved']} resolved, {summary['unchanged']} unchanged"
         )
-    else:
+    elif summary["new"]:
         print(
             f"Regression diff: no baseline given, so every finding "
             f"({summary['new']}) counts as new"
         )
+    else:
+        # "every finding (0) counts as new" names findings a clean run does
+        # not have.
+        print("Regression diff: no baseline given and no findings, so nothing was compared")
     # Said on STDOUT and said here, above the findings. With the target down
     # the run correctly exits 3 and says so on stderr -- and then prints
     # "Regression diff: 7 new", which is what catches the eye in a scrolled CI

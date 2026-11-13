@@ -1332,6 +1332,13 @@ class MarkdownTest(unittest.TestCase):
         # A document that does not record the regression block's baseline at
         # all is not evidence that there was none.
         self.assertNotIn("No baseline was given", reports.render("markdown", _run()))
+        # A clean run with no baseline has no findings to call new.
+        clean = _run([])
+        clean["regression"].update(baseline_run_id=None, baseline_digest=None)
+        text = reports.render("markdown", clean)
+        self.assertIn("No baseline was given and there are no findings, so nothing "
+                      "was compared.", text)
+        self.assertNotIn("every finding (0)", text)
 
     def test_report_only_over_a_run_that_measured_nothing_is_not_a_pass(self) -> None:
         text = reports.render("markdown", _unreachable("none"))

@@ -1082,6 +1082,76 @@ class SummaryTest(unittest.TestCase):
             )
             self.assertNotIn("no baseline given", again)
 
+    def test_a_baseline_file_without_a_run_id_is_still_a_comparison(self) -> None:
+        """`--baseline` accepts a run document with no run_id; the run records
+        its digest and None for the id. The summary keyed only on the id would
+        call that run uncompared while its diff came from the baseline."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _config(root)
+            first = root / "first.json"
+            _run(["run", "--config", str(config), "--output-dir", str(root / "h"),
+                  "--fail-on", "none", "--json", str(first)])
+            document = json.loads(first.read_text(encoding="utf-8"))
+            new = document["summary"]["new"]
+            self.assertGreater(new, 0)
+            del document["run_id"]
+            baseline = _write(root / "no-id.json", document)
+            second = root / "second.json"
+            _, stdout, _ = _run(
+                ["run", "--config", str(config), "--output-dir", str(root / "h"),
+                 "--fail-on", "none", "--baseline", str(baseline), "--json", str(second)]
+            )
+            regression = json.loads(second.read_text(encoding="utf-8"))["regression"]
+            self.assertIsNone(regression["baseline_run_id"])
+            self.assertTrue(regression["baseline_digest"])
+            self.assertIn(f"Regression diff: 0 new, 0 resolved, {new} unchanged\n", stdout)
+            self.assertIn(" escalated since the baseline\n", stdout)
+            self.assertNotIn("no baseline given", stdout)
+
+    @slow("stands up a loopback HTTP target")
+    def test_a_clean_run_without_a_baseline_does_not_name_findings_it_lacks(self) -> None:
+        """"every finding (0) counts as new" on a run with no findings."""
+        import http.server
+
+        import loopback
+
+        class Ok(http.server.BaseHTTPRequestHandler):
+            def do_GET(self) -> None:  # noqa: N802
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            def log_message(self, *args: object) -> None:
+                pass
+
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Ok)
+        loopback.start(server)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = _write(root / "veridor.json", {
+                "version": 1,
+                "target": {"base_url": f"http://127.0.0.1:{server.server_port}",
+                           "timeout_seconds": 2},
+                "identities": {"owner": {"headers": {}}, "other": {"headers": {}}},
+                "checks": [{"id": "read", "request": {"method": "GET", "path": "/w"},
+                            "expect": {"owner": {"status": [200]},
+                                       "other": {"status": [200]}}}],
+            })
+            run_json = root / "run.json"
+            code, stdout, stderr = _run(["run", "--config", str(config), "--output-dir",
+                                 str(root / "h"), "--fail-on", "none",
+                                 "--json", str(run_json)])
+            self.assertEqual(code, 0, stderr)
+            self.assertEqual(json.loads(run_json.read_text(encoding="utf-8"))["findings"], [])
+            self.assertIn("Regression diff: no baseline given and no findings, so "
+                          "nothing was compared\n", stdout)
+            self.assertNotIn("every finding", stdout)
+            self.assertNotIn("since the baseline", stdout)
+
     def test_evidence_counts_are_always_followed_by_their_scope(self) -> None:
         """The grades read as verdicts on the target; the contract says why not.
 
