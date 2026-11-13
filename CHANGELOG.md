@@ -1736,6 +1736,18 @@ something you installed.
 
 ### Fixed
 
+- **The unproven-denial advice told an identity to add the `marker_probe` it
+  already had.** The gate's exit line, the `require_complete` rows in the
+  README and the Action's `require-complete` input all said "Give that
+  identity a `marker_probe`". For a `"reestablish": "check"` identity a
+  `marker_probe` proves only the first login, which no graded request uses,
+  and for one whose session cookie the target replaced it proves only the old
+  value. The exit line now names those identities, from the entry's
+  `proof_scope`, and says what proves each (`"reestablish": "run"` or a 2xx in
+  the same sequence; a 2xx sent with the new value), keeping the
+  `marker_probe` advice, word for word, for the rest. The docs, the liveness
+  banner, `--no-prove-liveness` help, the config schema's `marker_probe`
+  description and `capsule verify`'s gap text say the same.
 - **A session against an IPv6 literal never established.** With
   `target.base_url` such as `http://[::1]:8080`, the cookie policy held the
   host as `::1` and compared it with the request's host as the standard

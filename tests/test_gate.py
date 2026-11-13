@@ -1168,5 +1168,67 @@ class LiveRecordedGateTest(unittest.TestCase):
                     self.assertIn(f"exit {code}", reports["markdown"].read_text("utf-8"))
 
 
+class LivenessAdviceTest(unittest.TestCase):
+    """The unproven-denial line tells each identity what would actually prove it.
+
+    It said "Give the identity a marker_probe" for every unproven entry. An
+    identity with ``"reestablish": "check"`` has its marker_probe counted for
+    nothing (it runs under the first login, and every check logs in again),
+    and one whose session cookie the target replaced was proven before the
+    change: both already have the marker_probe the line told them to add.
+    """
+
+    PLAIN = {"check_id": "c1", "identity": "other", "statement": "s", "remediation": "r"}
+    LOGIN = {**PLAIN, "identity": "relogger", "proof_scope": "login"}
+    COOKIE = {**PLAIN, "identity": "rotated", "proof_scope": "cookie_value"}
+
+    def _line(self, *entries) -> str:
+        built = document([ANSWERED], [])
+        built["liveness"]["unproven"] = [dict(entry) for entry in entries]
+        messages = gate.evaluate(built, require_complete=True).messages
+        lines = [line for line in messages if "satisfied by a denial" in line]
+        self.assertEqual(len(lines), 1, messages)
+        return lines[0]
+
+    def test_control_a_plain_entry_keeps_the_marker_probe_advice(self) -> None:
+        line = self._line(self.PLAIN)
+        self.assertIn("Give the identity a marker_probe naming something it should "
+                      "be served, or accept", line)
+        self.assertNotIn("reestablish", line)
+
+    def test_a_relogin_entry_is_not_told_to_add_a_marker_probe(self) -> None:
+        line = self._line(self.LOGIN)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn("For 'relogger'", line)
+        self.assertIn('"reestablish": "run"', line)
+        self.assertIn("proves only the first login", line)
+
+    def test_a_replaced_cookie_entry_is_told_to_prove_the_new_value(self) -> None:
+        line = self._line(self.COOKIE)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn("For 'rotated'", line)
+        self.assertIn("a 2xx sent with the new value", line)
+
+    def test_a_mix_names_each_case(self) -> None:
+        line = self._line(self.PLAIN, self.LOGIN, self.COOKIE)
+        self.assertIn("Give the identity a marker_probe naming something it should "
+                      "be served (for 'relogger'", line)
+        self.assertIn("; for 'rotated'", line)
+
+    def test_the_require_complete_docs_say_the_same(self) -> None:
+        """README's two require_complete rows and action.yml's input."""
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        rows = [line for line in readme.splitlines()
+                if line.startswith(("| `require_complete` |", "| `require-complete` |"))]
+        action = " ".join((ROOT / "action.yml").read_text(encoding="utf-8").split())
+        self.assertEqual(len(rows), 2)
+        for text in (*rows, action):
+            with self.subTest(text=text[:40]):
+                self.assertNotRegex(text, r"Give that identity a `?marker_probe`?(\.| \|)")
+                self.assertIn("proves only the first login", text)
+                self.assertIn("a 2xx sent with the new value", text)
+                self.assertIn("only under the same login and session cookie value", text)
+
+
 if __name__ == "__main__":
     unittest.main()

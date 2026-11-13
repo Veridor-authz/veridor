@@ -191,12 +191,17 @@ inputs:
       identity presents a credential, where some identity was served in the
       same check or sequence, that nothing else in the run proved live (a 2xx
       it drew on a request where an identity with no credential, or the
-      fabricated credential, was refused; or its marker_probe), and that a
-      fabricated credential could not tell apart from a dead token: it drew
+      fabricated credential, was refused; or its marker_probe; for a session,
+      either one only under the same login and session cookie value), and
+      that a fabricated credential could not tell apart from a dead token: it drew
       the same denial, none was sent (with every POST, PUT, PATCH or DELETE,
       inside a sequence, or when no identity declares a credential header),
       its request failed, or its answer was neither a refusal nor a success.
-      Give that identity a marker_probe. The step log names the identity.
+      Give that identity a marker_probe; for one with "reestablish": "check"
+      a marker_probe proves only the first login, so use
+      "reestablish": "run" or show it served in the same sequence, and one
+      whose session cookie the target replaced needs a 2xx sent with the new
+      value. The step log names the identity.
       Those boundaries are unverified rather than verified, and a job reads an
       exit code rather than a summary. A real finding always wins the exit
       code. This default differs from the CLI, where it is opt-in: the CLI is

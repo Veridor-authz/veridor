@@ -67,8 +67,8 @@ INCONCLUSIVE = "inconclusive"
 #: the same denial, or none was sent to compare with (a write, or no header to
 #: shape one on) and the identity was not proven live elsewhere (a 2xx on a
 #: request where something without its credential was refused, or its
-#: marker_probe). Exit 3 with
-#: ``--require-complete``.
+#: marker_probe; for a session, either one only under the same login and
+#: session cookie value). Exit 3 with ``--require-complete``.
 LIVENESS_UNPROVEN = "liveness_unproven"
 
 #: Every reason code, in precedence order. The first ENFORCED reason in this
@@ -815,6 +815,38 @@ def _liveness_message(unproven: Sequence[Mapping[str, Any]]) -> str:
     # re-run can change.
     errored = any(entry.get("control") in ("control_errored", "control_uninformative")
                   for entry in unproven)
+    # A marker_probe is the remedy only for an identity that does not already
+    # have one counting against it. One that logs in again per check, or whose
+    # session cookie the target replaced after it was proven, has the
+    # marker_probe and needs something else; telling it to add one sent the
+    # reader after a fix already in place.
+    def scoped(scope: str) -> str:
+        return ", ".join(sorted({quoted(entry["identity"]) for entry in unproven
+                                 if entry.get("proof_scope") == scope}))
+
+    special = [
+        text
+        for text in (
+            f"for {scoped('login')}, whose session logs in again before every "
+            'check and sequence ("reestablish": "check"), a marker_probe proves '
+            'only the first login: set "reestablish": "run", or show it served '
+            "in the same sequence where an identity with no credential is refused"
+            if scoped("login") else "",
+            f"for {scoped('cookie_value')}, whose session cookie the target gave "
+            "a new value after it was proven live, a 2xx sent with the new value, "
+            "where an identity with no credential or the fabricated credential is "
+            "refused, proves it"
+            if scoped("cookie_value") else "",
+        )
+        if text
+    ]
+    if any(not entry.get("proof_scope") for entry in unproven):
+        advice = "Give the identity a marker_probe naming something it should be served"
+        if special:
+            advice += " (" + "; ".join(special) + ")"
+    else:
+        advice = "; ".join(special)
+        advice = advice[0].upper() + advice[1:]
     return (
         f"veridor: {len(unproven)} expectation(s) were satisfied by a denial that "
         f"{cause} ({names}). Those boundaries "
@@ -825,8 +857,8 @@ def _liveness_message(unproven: Sequence[Mapping[str, Any]]) -> str:
             if errored
             else ", and this is deterministic -- a re-run reports identically. "
         )
-        + "Give the identity a marker_probe naming "
-        "something it should be served, or accept that a target which hides "
+        + advice
+        + ", or accept that a target which hides "
         "existence uniformly cannot be measured from outside."
     )
 

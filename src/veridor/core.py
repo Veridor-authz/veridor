@@ -3914,7 +3914,8 @@ def _rescan_retained(sink: Mapping[str, Any], marker: str) -> str:
 #: such a route silently cancelled every unproven denial for that identity.
 _PROOF_OF_LIFE = (
     "a 2xx it drew on a request where an identity with no credential, or the "
-    "fabricated credential, was refused; or its marker_probe"
+    "fabricated credential, was refused; or its marker_probe; for a session, "
+    "either one counts only under the same login and session cookie value"
 )
 
 #: A refusal from the authorization layer: what makes a 2xx on the same

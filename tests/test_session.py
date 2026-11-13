@@ -4550,6 +4550,43 @@ class StaleCookieLivenessProofTest(unittest.TestCase):
 
 
 @slow("stands up a loopback HTTP server and runs the engine against it")
+class ProofScopeGateAdviceTest(unittest.TestCase):
+    """Through the engine and the gate: the exit line says what proves each one.
+
+    The run-level advice said "Give the identity a marker_probe" for an
+    identity whose marker_probe already ran and could not count.
+    """
+
+    @staticmethod
+    def _line(result: dict) -> str:
+        from veridor import gate
+
+        messages = gate.evaluate(result, require_complete=True).messages
+        return next(line for line in messages if "satisfied by a denial" in line)
+
+    def test_a_relogin_identity(self) -> None:
+        result, _logins, unproven = ReloginLivenessProofTest._execute(["attacker", "guest"])
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["login"])
+        line = self._line(result)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn('"reestablish": "run"', line)
+
+    def test_a_replaced_cookie(self) -> None:
+        result, _sent, unproven = StaleCookieLivenessProofTest._execute("sid=guest; Path=/")
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], ["cookie_value"])
+        line = self._line(result)
+        self.assertNotIn("Give the identity a marker_probe", line)
+        self.assertIn("a 2xx sent with the new value", line)
+
+    def test_control_no_marker_probe_is_told_to_add_one(self) -> None:
+        result, _logins, unproven = ReloginLivenessProofTest._execute(
+            ["attacker"], marker=False, reestablish="run", idor=False)
+        self.assertEqual([entry.get("proof_scope") for entry in unproven], [None])
+        self.assertIn("Give the identity a marker_probe naming something it should be "
+                      "served, or accept", self._line(result))
+
+
+@slow("stands up a loopback HTTP server and runs the engine against it")
 class StaleCookieSequenceLivenessTest(unittest.TestCase):
     """Inside a sequence: a 2xx before the cookie changed does not prove a step after.
 

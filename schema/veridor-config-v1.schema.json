@@ -225,7 +225,7 @@
         },
         "marker_probe": {
           "$ref": "#/$defs/request",
-          "description": "A request this identity SHOULD be served, used to prove its marker is live and its credential real. Requires `marker`. Declaring one removes the 'unproven denial' disclosure."
+          "description": "A request this identity SHOULD be served, used to prove its marker is live and its credential real. Requires `marker`. Declaring one removes the 'unproven denial' disclosure, for a session only for denials sent under the login and session cookie value it ran with."
         },
         "session": { "$ref": "#/$defs/session" }
       },
