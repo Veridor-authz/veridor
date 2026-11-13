@@ -201,11 +201,25 @@ class PyPIDescriptionTest(unittest.TestCase):
                 problems.append(f"{target}: not this repository's README or files, nor a held host")
         return problems
 
-    @staticmethod
-    def opening(markdown: str) -> str:
-        """The first paragraph after the title, with link targets dropped."""
-        paragraph = markdown.split("\n\n")[1]
-        return " ".join(re.sub(r"\]\([^)]*\)", "]", paragraph).split())
+    #: README.md opens with a centred header: logo, title, tagline, badges and
+    #: links inside one <div> that runs to a line holding only </div>.
+    _HEADER_BLOCK = re.compile(r"\A\s*<div\b.*?^</div>[ \t]*$", re.DOTALL | re.MULTILINE)
+    _BADGE_LINE = re.compile(r"(?:\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)\s*)+")
+    _TAGS_ONLY = re.compile(r"(?:<[^>]*>\s*)+")
+
+    @classmethod
+    def opening(cls, markdown: str) -> str:
+        """The first prose paragraph, with link targets dropped: what follows
+        a leading HTML header block, headings, badge lines and tag-only
+        paragraphs. README.pypi.md has none of those but its title; README.md
+        has all of them, and its tagline sits inside the header block."""
+        for paragraph in cls._HEADER_BLOCK.sub("", markdown).split("\n\n"):
+            paragraph = paragraph.strip()
+            if not paragraph or paragraph.startswith("#") \
+                    or cls._BADGE_LINE.fullmatch(paragraph) or cls._TAGS_ONLY.fullmatch(paragraph):
+                continue
+            return " ".join(re.sub(r"\]\([^)]*\)", "]", paragraph).split())
+        return ""
 
     def test_pyproject_names_the_pypi_readme_not_the_github_one(self) -> None:
         self.assertEqual(self.NAME, "README.pypi.md")
@@ -239,6 +253,23 @@ class PyPIDescriptionTest(unittest.TestCase):
         self.assertIn("authorization regression runner", self.opening(self.TEXT))
         self.assertEqual(self.opening(self.TEXT), self.opening(FRONT_PAGE))
         self.assertNotEqual(self.opening(self.TEXT.replace("no payloads", "no traffic")), self.opening(FRONT_PAGE))
+
+    def test_control_a_readme_whose_first_prose_paragraph_differs_fails(self) -> None:
+        """The header is skipped, not the paragraph: a README.md that edits
+        the opening, or puts other prose before it, no longer matches, and one
+        that only changes the header still does."""
+        pypi = self.opening(self.TEXT)
+        self.assertIn("<div", FRONT_PAGE.split("\n\n")[0], "README.md no longer opens with the header block")
+        edited = FRONT_PAGE.replace("no payloads", "no traffic")
+        self.assertNotEqual(edited, FRONT_PAGE)
+        self.assertNotEqual(self.opening(edited), pypi)
+        header_end = FRONT_PAGE.index("</div>") + len("</div>")
+        before = FRONT_PAGE[:header_end] + "\n\nSomething else first.\n" + FRONT_PAGE[header_end:]
+        self.assertEqual(self.opening(before), "Something else first.")
+        retitled = FRONT_PAGE.replace("# Veridor\n", "# Veridor, renamed\n", 1)
+        self.assertNotEqual(retitled, FRONT_PAGE)
+        self.assertEqual(self.opening(retitled), pypi)
+        self.assertNotEqual(self.opening("<div>\n\nTagline\n\n</div>\n\nOther prose.\n"), pypi)
 
 
 class PythonSupportTest(unittest.TestCase):
