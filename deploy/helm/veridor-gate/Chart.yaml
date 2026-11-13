@@ -25,7 +25,5 @@ annotations:
   # pyproject.toml's; tests/test_helm_chart.py fails when the two differ.
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
-    - name: Source
-      url: https://github.com/Veridor-authz/veridor
     - name: Documentation
       url: https://docs.veridor.org/

@@ -972,6 +972,27 @@ def tree_repository(root: Path) -> str:
     return match.group(1)
 
 
+def _before_first_heading(markdown: str) -> str:
+    """``markdown`` up to its first ATX heading, by the rule heading_anchor()
+    uses: a ``#`` line inside fenced code is not a heading. Cutting at any line
+    that looks like one dropped the rest of an upgrade note whose shell snippet
+    holds a ``# comment``, and left its fence open on the release page."""
+    kept: list[str] = []
+    fence = ""
+    for text in markdown.splitlines():
+        opened = _FENCE.match(text)
+        if fence:
+            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence) \
+                    and not text.strip()[len(opened.group(1)):].strip():
+                fence = ""
+        elif opened:
+            fence = opened.group(1)
+        elif _ATX_HEADING.match(text):
+            break
+        kept.append(text)
+    return "\n".join(kept)
+
+
 def release_notes_summary(changelog: str, tag: str, repository: str) -> str:
     """What a GitHub release says for the tag: all the text of its CHANGELOG
     section before the section's first heading, every paragraph of it, if
@@ -990,7 +1011,7 @@ def release_notes_summary(changelog: str, tag: str, repository: str) -> str:
     start, _ = _section(lines, {semver, semver_to_pep440(semver)})
     heading = start - 1
     label = re.match(r"^## \[([^\]]+)\]", lines[heading]).group(1)
-    opening = re.split(r"^ {0,3}#{1,6}(?:[ \t]|$)", body, maxsplit=1, flags=re.M)[0].strip()
+    opening = _before_first_heading(body).strip()
     url = f"https://github.com/{repository}/blob/{tag}/CHANGELOG.md#{heading_anchor(changelog, heading)}"
     link = f"The full release notes are the [{label}] section of CHANGELOG.md:\n{url}\n"
     return f"{opening}\n\n{link}" if opening else link

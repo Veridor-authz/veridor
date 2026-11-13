@@ -1069,6 +1069,20 @@ class ReleaseBodyTest(unittest.TestCase):
                          "https://github.com/Veridor-authz/veridor/blob/v0.1.0/CHANGELOG.md#"
                          f"{FIRST_RELEASE_ANCHOR}\n")
 
+    def test_a_hash_line_in_fenced_code_does_not_end_the_notes(self) -> None:
+        """An upgrade note with a shell snippet holding a ``# comment`` reached the
+        release page cut at the snippet, with its fence left open."""
+        changelog = ("# Changelog\n\n## [Unreleased]\n\n## [9.9.9] - 2099-01-01\n\n"
+                     "Upgrading: back up the state first:\n\n```sh\n# keep a copy\n"
+                     "cp state.json state.bak\n```\n\nThen re-run `veridor map`.\n\n"
+                     "### Fixed\n\n- **A fix.** Body.\n")
+        notes = release_check.release_notes_summary(changelog, "v9.9.9", "Owner/repo")
+        self.assertIn("cp state.json state.bak\n```", notes)
+        self.assertIn("Then re-run `veridor map`.", notes)
+        self.assertNotIn("A fix.", notes)
+        # Control: a real heading still ends the notes.
+        self.assertIn("The full release notes are", notes)
+
     def test_every_paragraph_before_the_first_subheading_is_in_the_notes(self) -> None:
         """The notes kept only the first paragraph of that text, so an upgrade
         note written as the second paragraph never reached the release page."""

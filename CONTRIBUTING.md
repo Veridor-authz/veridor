@@ -378,8 +378,8 @@ maintainers.
    any, and a link to the section in `CHANGELOG.md` at the tag, and the
    release stops in its first job if it cannot. It refuses a missing or empty
    section, a section that still says it is not released, and an
-   `## [Unreleased]` with anything under it. The notes are not the whole section because GitHub
-   refuses a release body over 125,000 characters: the first release's
+   `## [Unreleased]` with anything under it. The notes are not the whole
+   section because GitHub refuses a release body over 125,000 characters: the first release's
    section was about 223,000, and its release job failed after everything
    else had published.
    So the first job also runs `release_check.py release-body vX.Y.Z`, which

@@ -142,8 +142,9 @@ class ChartMetadataTest(unittest.TestCase):
         annotations = load_yaml(CHART / "Chart.yaml")["annotations"]
         self.assertEqual(annotations["artifacthub.io/license"], license_)
         links = load_yaml_documents(annotations["artifacthub.io/links"])[0]
-        self.assertEqual([link["url"] for link in links],
-                         ["https://github.com/Veridor-authz/veridor", "https://docs.veridor.org/"])
+        # The source repository is not listed here: Artifact Hub already links it
+        # from Chart.yaml's sources:, and listing it again shows it twice.
+        self.assertEqual([link["url"] for link in links], ["https://docs.veridor.org/"])
 
     def test_app_version_is_the_package_version(self) -> None:
         """The image tag defaults to appVersion, so a drift here deploys a
