@@ -2358,9 +2358,17 @@ class SessionLivenessTest(unittest.TestCase):
         self.assertEqual(result["findings"][0]["evidence_grade"], "confirmed")
 
     def test_an_expired_cookie_never_becomes_an_anonymous_probe(self) -> None:
-        config = self._config(attacker_max_age=1, victim_delay=3)
+        # The jar and `_usable` both work in whole seconds: a cookie harvested
+        # at t expires at int(t) + Max-Age, checked against int(now). Max-Age=1
+        # therefore lives anywhere in (0, 1] s, and one harvested at x.999 was
+        # already gone at establish's own proof two milliseconds later -- the
+        # run reported not_established and never reached the probe. Max-Age=2
+        # lives (1, 2] s, so it outlives establish at every sub-second phase,
+        # and the attacker probe runs after the victim's 3 s step, which
+        # starts after the attacker has logged in, so it is always expired.
+        config = self._config(attacker_max_age=2, victim_delay=3)
         result, log = self._execute(
-            config, self._target(attacker_max_age=1, victim_delay=3)
+            config, self._target(attacker_max_age=2, victim_delay=3)
         )
         # The request is not sent at all, so it cannot be graded as a denial.
         probes = [
