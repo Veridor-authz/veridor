@@ -1,4 +1,4 @@
-# Veridor
+# Veridor guide
 
 Veridor is a CI-first **authorization regression runner**. You declare what each
 identity is allowed to do; Veridor issues the same request as every declared
@@ -1589,7 +1589,7 @@ statuses, producing:
 #### Why novelty alone is not a gate
 
 `new` is a set difference over finding ids against `baseline.json` — a file this
-README asks you to **commit to the repository**. Finding ids are deterministic
+guide asks you to **commit to the repository**. Finding ids are deterministic
 and stable across runs, which is what makes the diff useful and is also the
 whole problem: a pull request that adds twenty characters to that file moves a
 live `confirmed` cross-tenant leak from `new` to `unchanged`, and the build goes
@@ -1621,7 +1621,7 @@ Regression diff: 0 new, 0 resolved, 1 unchanged
 ```
 
 `--fail-on new` is available and means what it says. It is not the default,
-and this README does not recommend it for CI: use the default,
+and this guide does not recommend it for CI: use the default,
 `new+confirmed`, as the pull-request gate.
 
 `confirmed` is the narrowest gate: it fires only on measured cross-identity
@@ -2464,9 +2464,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,647 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,649 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 1,014 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,661 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,663 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

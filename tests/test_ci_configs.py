@@ -938,7 +938,7 @@ PROXY_GUIDANCE = {
                                                       "Limit variables that can be set at queue time"),
     "ci/buildspec.yml WHO CHOOSES THE TARGET": ("HTTP_PROXY", "PIP_INDEX_URL",
                                                 "codebuild:environment.environmentVariables.name"),
-    "README.md Other CI platforms": ("proxy_from_environment", "http_proxy"),
+    "docs/guide.md Other CI platforms": ("proxy_from_environment", "http_proxy"),
 }
 
 
@@ -968,7 +968,7 @@ def proxy_guidance_texts(ci_readme: str, component: str, gitlab_example: str, je
     texts["ci/azure-pipelines.yml WHO CHOOSES THE TARGET"] = _who_chooses(azure)
     texts["ci/buildspec.yml WHO CHOOSES THE TARGET"] = _who_chooses(buildspec)
     section = readme.split("### Other CI platforms", 1)
-    texts["README.md Other CI platforms"] = section[1].split("\n### ", 1)[0] if len(section) == 2 else ""
+    texts["docs/guide.md Other CI platforms"] = section[1].split("\n### ", 1)[0] if len(section) == 2 else ""
     return texts
 
 

@@ -4,7 +4,7 @@
 WHAT THIS IS NOT
 ----------------
 It is not a user study. The honest version of this question is one person, the
-README, a clock, and no help -- and nothing mechanical substitutes for that,
+guide, a clock, and no help -- and nothing mechanical substitutes for that,
 because the thing a real subject measures is whether the document makes SENSE,
 and no script can fail that test. Treat every number here as a lower bound on
 the problems a real subject would hit.
@@ -12,14 +12,14 @@ the problems a real subject would hit.
 What it does measure is three failure modes that do not need a naive subject,
 because they are properties of the artifacts rather than of the reader:
 
-1. DOES THE DOCUMENTATION WORK.  Every complete configuration in the README is
+1. DOES THE DOCUMENTATION WORK.  Every complete configuration in the guide is
    extracted and validated. A documented example that does not load is the
    worst possible first five minutes, and it is invisible to the person who
    wrote it because they already know what it meant to say.
 
 2. IS EVERY KEY DISCOVERABLE.  The configurations this repository ships are the
    ground truth for "keys that matter". Any key a working config needs and the
-   README never shows is a key a reader cannot know about, however carefully
+   guide never shows is a key a reader cannot know about, however carefully
    they read.
 
 3. CAN YOU RECOVER FROM A MISTAKE.  A first config is wrong. What decides
@@ -375,7 +375,7 @@ def main(argv: list[str] | None = None) -> int:
     print("A mechanical proxy for a user study, not a substitute for one.")
     print("Every number here is a LOWER bound on what a real subject would hit.\n")
 
-    print("1. DO THE README'S OWN CONFIGURATIONS LOAD?")
+    print("1. DO THE GUIDE'S OWN CONFIGURATIONS LOAD?")
     examples = documented_examples()
     complete = [e for e in examples if e["verdict"] in {"loads", "refused", "crashed"}]
     loads = [e for e in complete if e["verdict"] == "loads"]
@@ -390,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
     for entry in broken:
         print(f"   BROKEN block {entry['index']}: {entry['note']}")
 
-    print("\n2. IS EVERY KEY A WORKING CONFIG NEEDS SHOWN IN THE README?")
+    print("\n2. IS EVERY KEY A WORKING CONFIG NEEDS SHOWN IN THE GUIDE?")
     coverage = key_coverage()
     print(f"   {coverage['documented']}/{coverage['total']} schema keys appear")
     for key in coverage["undocumented"]:

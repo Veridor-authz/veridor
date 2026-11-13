@@ -63,7 +63,7 @@ inputs:
       run mode only. Gate policy; empty means new+confirmed. new+confirmed
       fails on anything absent from the baseline PLUS anything a marker
       proved, regardless of age. new fails only on a finding absent from the
-      baseline -- which is a set difference against a file this README asks
+      baseline -- which is a set difference against a file the guide asks
       you to commit, so a pull request that adds a finding id to baseline.json
       turns a live confirmed leak into a green build. any fails on any
       finding, confirmed fails only when a response actually carried another

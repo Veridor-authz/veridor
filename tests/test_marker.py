@@ -2653,7 +2653,9 @@ class DeclarationScopeTest(unittest.TestCase):
         page, _, anchor = core._interpretation()["reference"].partition("#")
         self.assertEqual(page, repository.group(1) + "/blob/main/docs/guide.md")
         # The front page GitHub renders for the bare repository URL does not
-        # carry the heading any more, so the bare URL would be a dead anchor.
+        # carry the heading any more. It keeps an <a id> for 0.1.0 reports
+        # (test_governance_docs.ReleasedFrontPageAnchorsTest), which only
+        # points onward, so new reports name the guide itself.
         self.assertNotIn(anchor, anchors((ROOT / "README.md").read_text(encoding="utf-8")))
         self.assertIn(anchor, anchors(readme))
         # Control: the slug rule can miss, so a heading that is not there is not found.

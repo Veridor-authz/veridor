@@ -73,7 +73,7 @@ def presents_credential(entry: Any) -> bool:
     GitLab `PRIVATE-TOKEN` was classified as no credential at all: a stale one
     was never suppressed, never warned about, and was inferred to be the
     unauthenticated identity. An identity declared with nothing but
-    ``{"headers": {"Accept": ..., "Origin": ...}}`` presents no credential; the README asks an
+    ``{"headers": {"Accept": ..., "Origin": ...}}`` presents no credential; the guide asks an
     anonymous identity to declare ``"headers": {}``, and that is the shape this
     reads.
 

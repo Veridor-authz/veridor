@@ -495,5 +495,59 @@ class MajorTagPolicyTest(unittest.TestCase):
                 self.assertNotRegex(text, r"@v[01]\b(?! ?tag)")
 
 
+class ReleasedFrontPageAnchorsTest(unittest.TestCase):
+    """Links that already shipped point at README.md headings that are gone.
+
+    The 0.1.0 PyPI description links to these anchors on the repository's
+    front page, and the 0.1.0 wheel writes the last one into every run's
+    interpretation block. Neither can be changed after release. The manual
+    moved to docs/guide.md, so README.md keeps an ``<a id>`` for each, on the
+    line that links to the same section of the guide: the jump lands next to
+    the way on instead of at the top of the page.
+    """
+
+    #: v0.1.0:README.pypi.md and v0.1.0:src/veridor/core.py. Frozen: add, never remove.
+    RELEASED = (
+        "what-a-veridor-finding-does-and-does-not-mean",
+        "against-your-own-api",
+        "map-what-would-a-compromise-reach",
+        "run-does-the-boundary-hold-and-did-it-change",
+        "mutate-would-my-suite-catch-a-regression",
+        "exit-codes",
+        "cicd-integrations",
+        "non-goals",
+        "confirmed-proves-data-flow-never-policy",
+    )
+
+    @staticmethod
+    def problems(front_page: str) -> list[str]:
+        found = []
+        have = anchors(front_page)
+        for anchor in ReleasedFrontPageAnchorsTest.RELEASED:
+            if anchor not in have:
+                found.append(f"README.md has no #{anchor}")
+                continue
+            if anchor not in anchors(README):
+                found.append(f"docs/guide.md has no #{anchor}")
+        for line in front_page.splitlines():
+            for anchor in re.findall(r'<a id="([^"]+)"></a>', line):
+                if anchor in ReleasedFrontPageAnchorsTest.RELEASED \
+                        and f"guide.md#{anchor}" not in line:
+                    found.append(f"README.md #{anchor} is not on a line linking to the guide's #{anchor}")
+        return found
+
+    def test_every_released_anchor_lands_beside_its_guide_section(self) -> None:
+        self.assertEqual(self.problems((ROOT / "README.md").read_text(encoding="utf-8")), [])
+
+    def test_control_a_dropped_or_stray_anchor_is_named(self) -> None:
+        front = (ROOT / "README.md").read_text(encoding="utf-8")
+        dropped = front.replace('<a id="exit-codes"></a>', "")
+        self.assertNotEqual(dropped, front)
+        self.assertEqual(self.problems(dropped), ["README.md has no #exit-codes"])
+        stray = front + '\n<a id="non-goals"></a>Nothing here.\n'
+        self.assertEqual(self.problems(stray),
+                         ["README.md #non-goals is not on a line linking to the guide's #non-goals"])
+
+
 if __name__ == "__main__":
     unittest.main()

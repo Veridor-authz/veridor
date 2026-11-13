@@ -296,7 +296,7 @@ def _policy_findings(policy: str, result: Mapping[str, Any]) -> list[Any]:
     the baseline.
 
     ``new+confirmed`` is the union, and the default. ``new`` alone is a set
-    difference over finding ids against a file the README asks you to COMMIT,
+    difference over finding ids against a file the guide asks you to COMMIT,
     and nothing about that file is verifiable: ids are deterministic and stable
     across runs, so adding twenty characters to `baseline.json` in a pull
     request moves a live `confirmed` cross-tenant leak from `new` to

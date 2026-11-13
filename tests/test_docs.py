@@ -53,6 +53,10 @@ README = (ROOT / "docs" / "guide.md").read_text(encoding="utf-8")
 #: README.md: the short front page. Every command it shows is copied from the
 #: guide, where the tests below run or parse it.
 FRONT_PAGE = (ROOT / "README.md").read_text(encoding="utf-8")
+#: Both pages a reader lands on. A ban on what the docs say holds for both: the
+#: front page is the one GitHub shows, so a phrase banned only from the guide
+#: could come back there and pass every test.
+DOCUMENTS = (("docs/guide.md", README), ("README.md", FRONT_PAGE))
 
 def _prose(text: str) -> str:
     """Read a passage the way a reader does: no emphasis, no code fences.
@@ -69,7 +73,12 @@ def _prose(text: str) -> str:
 
 
 #: The whole README, unwrapped, with emphasis removed but code spans intact.
-PROSE = re.sub(r"\s+", " ", README.replace("**", "").replace("*", ""))
+def _flat(text: str) -> str:
+    """Unwrapped, emphasis removed, code spans intact (see :data:`PROSE`)."""
+    return re.sub(r"\s+", " ", text.replace("**", "").replace("*", ""))
+
+
+PROSE = _flat(README)
 SCOPE_ANCHOR = "#what-a-veridor-finding-does-and-does-not-mean"
 
 
@@ -100,7 +109,9 @@ class MarkerProbeDocumentationTest(unittest.TestCase):
     def test_the_readme_no_longer_promises_a_same_check_control_is_the_only_one(
         self,
     ) -> None:
-        self.assertNotIn("requires the matching control in the same check", PROSE)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn("requires the matching control in the same check", _flat(text))
         # The requirement that SOME control exists is unchanged and must stay.
         self.assertIn("requires a control behind every exclusion", PROSE)
 
@@ -112,7 +123,9 @@ class MarkerProbeDocumentationTest(unittest.TestCase):
 class VerdictVocabularyTest(unittest.TestCase):
     def test_the_readme_does_not_define_a_verdict_with_a_policy_word(self) -> None:
         """'disclosed' asserts the flow was improper; the tests already ban it."""
-        self.assertNotIn("disclosed", README)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn("disclosed", text)
 
     def test_the_verdicts_section_links_back_to_the_scoping_section(self) -> None:
         """It is the section a reader jumps to while triaging a report."""
@@ -407,7 +420,7 @@ class ReadmeShapeTest(unittest.TestCase):
     """
 
     ORDER = (
-        "# Veridor",
+        "# Veridor guide",
         "## The three verbs",
         "## Install",
         "## Quickstart",
@@ -1021,8 +1034,10 @@ class TestTierDocumentationTest(unittest.TestCase):
             "python3.12 scripts/e2e_validation.py",
         ):
             self.assertIn(command, README, command)
-        self.assertNotIn("python3 scripts/run_tests.py", README)
-        self.assertNotIn("python3 scripts/e2e_validation.py", README)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn("python3 scripts/run_tests.py", text)
+                self.assertNotIn("python3 scripts/e2e_validation.py", text)
 
     def test_the_tier_boundary_is_documented_as_enforced(self) -> None:
         prose = _prose(README)
@@ -1094,7 +1109,9 @@ class BadgeDocumentationTest(unittest.TestCase):
         self.assertIn(f"`{BADGE_LABEL}`", README)
 
     def test_the_readme_no_longer_quotes_the_old_enforcement_wording(self) -> None:
-        self.assertNotIn("authz boundary tested", README)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn("authz boundary tested", text)
 
 
 class WorkedExampleTest(unittest.TestCase):
@@ -1144,7 +1161,9 @@ class WorkedExampleTest(unittest.TestCase):
         # copying both pointed `run` at a file that does not exist.
         section = _section("Quickstart: your first 60 seconds")
         self.assertIn("veridor init --openapi openapi.json --output veridor.json", section)
-        self.assertNotIn("starter.json", README)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn("starter.json", text)
 
     def test_the_mutate_example_names_the_target_it_needs(self) -> None:
         # REGRESSION. fixtures/veridor.mutation-demo.json points at port 8766,
@@ -1417,7 +1436,7 @@ class TargetAcknowledgementDocumentationTest(unittest.TestCase):
         return _prose(text.split(start, 1)[1].split("\n- **", 1)[0])
 
     def test_no_doc_says_every_non_loopback_target_needs_it(self) -> None:
-        for name, text in (("docs/guide.md", README), ("SECURITY.md", self.SECURITY)):
+        for name, text in (*DOCUMENTS, ("SECURITY.md", self.SECURITY)):
             with self.subTest(document=name):
                 self.assertNotRegex(_prose(text), r"non-loopback (target|host)")
 
@@ -2115,9 +2134,9 @@ class CapsuleCarriesWhatRunArtifactsDoNotTest(unittest.TestCase):
     SECURITY = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
 
     def test_neither_document_claims_every_artifact(self) -> None:
-        for name, text in (("docs/guide.md", _prose(README)), ("SECURITY.md", _prose(self.SECURITY))):
+        for name, text in (*DOCUMENTS, ("SECURITY.md", self.SECURITY)):
             with self.subTest(document=name):
-                self.assertNotIn("never written to any artifact", text)
+                self.assertNotIn("never written to any artifact", _prose(text))
 
     def test_both_name_the_capsule_as_the_exception(self) -> None:
         readme = _prose(README)
@@ -2249,7 +2268,9 @@ class DocsOnlyTrialDocumentationTest(unittest.TestCase):
     def test_the_committed_baseline_lives_outside_the_ignored_directory(self) -> None:
         """We told people to commit a file inside `.veridor/`, which every team
         gitignores because it is the tool's own run history."""
-        self.assertNotIn(".veridor/baseline-matrix.json", README)
+        for name, text in DOCUMENTS:
+            with self.subTest(document=name):
+                self.assertNotIn(".veridor/baseline-matrix.json", text)
 
     def test_the_mode_guard_admits_what_it_cannot_catch(self) -> None:
         """"Refused, never ignored" was false three ways: the check compares

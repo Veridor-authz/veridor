@@ -19,9 +19,9 @@ Veridor is an independent personal project. It is not affiliated with or endorse
 
 | Command | The question it answers |
 | --- | --- |
-| `map` | What don't I cover, and what would a compromise reach? |
-| `run` | Does the boundary hold, and did it change? This is the one that sets the CI exit code. |
-| `mutate` | Would my suite actually catch a regression? |
+| <a id="map-what-would-a-compromise-reach"></a>[`map`](docs/guide.md#map-what-would-a-compromise-reach) | What don't I cover, and what would a compromise reach? |
+| <a id="run-does-the-boundary-hold-and-did-it-change"></a>[`run`](docs/guide.md#run-does-the-boundary-hold-and-did-it-change) | Does the boundary hold, and did it change? This is the one meant to gate CI. |
+| <a id="mutate-would-my-suite-catch-a-regression"></a>[`mutate`](docs/guide.md#mutate-would-my-suite-catch-a-regression) | Would my suite actually catch a regression? |
 
 ## Install
 
@@ -49,9 +49,11 @@ veridor run --config fixtures/veridor.demo.json --sarif veridor.sarif
 The run finds the demo's cross-tenant bug and exits `1`. Restart the demo
 without `--vulnerable` and the same command exits `0`.
 To point it at your own API, see
-[Against your own API](docs/guide.md#against-your-own-api).
+<a id="against-your-own-api"></a>[Against your own API](docs/guide.md#against-your-own-api).
 
 ## CI/CD
+
+<a id="cicd-integrations"></a>What has been run for each integration, and where: [CI/CD integrations](docs/guide.md#cicd-integrations).
 
 - GitHub Action: [action.yml](action.yml), set up as in [GitHub Action](docs/guide.md#github-action).
 - GitLab CI: a CI/CD component, see [GitLab CI](docs/guide.md#gitlab-ci).
@@ -59,19 +61,21 @@ To point it at your own API, see
 - Argo Rollouts: an analysis step, see [deploy/argo-rollouts](deploy/argo-rollouts/README.md).
 - Jenkins, Azure Pipelines, AWS CodeBuild and others: [ci/README.md](ci/README.md).
 
-What each exit code means is in [Exit codes](docs/guide.md#exit-codes).
+<a id="exit-codes"></a>What each exit code means is in [Exit codes](docs/guide.md#exit-codes).
 
 ## Documentation
 
 - <https://docs.veridor.org/>
 - [docs/guide.md](docs/guide.md), the full manual in this repository
-- [What a finding does and does not mean](docs/guide.md#what-a-veridor-finding-does-and-does-not-mean):
+- <a id="what-a-veridor-finding-does-and-does-not-mean"></a>[What a finding does and does not mean](docs/guide.md#what-a-veridor-finding-does-and-does-not-mean):
   read this before you read a report.
+- <a id="non-goals"></a>[Non-goals](docs/guide.md#non-goals): what Veridor does not try to do.
+- <a id="confirmed-proves-data-flow-never-policy"></a>[What a `confirmed` finding proves](docs/guide.md#confirmed-proves-data-flow-never-policy).
 
 ## Contributing, security, license
 
-- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). Commits are signed off
-  under the DCO, and [authorship and provenance](CONTRIBUTING.md#ai-assisted-commits-and-provenance)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md). New commits are signed
+  off under the DCO, and [authorship and provenance](CONTRIBUTING.md#ai-assisted-commits-and-provenance)
   are covered there too.
 - Security issues: report them privately as described in [SECURITY.md](SECURITY.md).
 - License: Apache-2.0, see [LICENSE](LICENSE).

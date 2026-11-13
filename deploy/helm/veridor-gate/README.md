@@ -757,7 +757,8 @@ from a second pod after the Job completed).
 
 When `job.activeDeadlineSeconds` expires, Kubernetes stops the pod and marks
 the Job `Failed` with reason `DeadlineExceeded` (measured). What Veridor does
-when it is stopped mid-run is in the main README's exit-code section.
+when it is stopped mid-run is in the guide's
+[Exit codes](../../../docs/guide.md#exit-codes) section.
 
 ## Values
 

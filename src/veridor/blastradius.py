@@ -680,7 +680,7 @@ def uniformly_unauthenticated_identities(
     a stale token.
 
     ``credentialed`` is the whole guard. An identity that presents NOTHING --
-    the ``{"headers": {}}`` the README asks for, the identity
+    the ``{"headers": {}}`` the guide asks for, the identity
     ``matrix.unauthenticated`` names -- draws a 401 on every operation when the
     boundary is doing its job, and reading that as a rejected credential
     inverted the plainest row the matrix can carry. Suppressing it also deleted
