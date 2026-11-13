@@ -4346,6 +4346,54 @@ class CaseVariantCookieNameTest(unittest.TestCase):
         self.assertIsNone(reason)
 
 
+class IPv6LiteralTargetTest(unittest.TestCase):
+    """A base_url naming an IPv6 literal gets a working jar, and only for that host.
+
+    The policy's host came from urlsplit().hostname ('::1') and the request's
+    from http.cookiejar.request_host() ('[::1]'), so set_ok refused every
+    cookie and a session against http://[::1]:port never established
+    (not_established, nothing graded). It failed closed; it also never worked.
+    """
+
+    def test_a_session_against_an_ipv6_literal_establishes_and_sends(self) -> None:
+        session = _harvested_session("http://[::1]:8080", "sid=attacker; Path=/")
+        self.assertEqual(session.state, "established", session.reason)
+        request = Request("http://[::1]:8080/docs/1", method="GET")
+        self.assertIsNone(session.attach_cookies(request))
+        self.assertEqual(request.get_header("Cookie"), "sid=attacker")
+
+    def test_the_policy_recognises_its_own_ipv6_host(self) -> None:
+        v6 = sequence._SameOriginCookiePolicy("::1")
+        self.assertTrue(v6._is_target(Request("http://[::1]:8080/", method="GET")))
+
+    def test_control_another_host_is_still_refused_both_ways(self) -> None:
+        session = sequence.IdentitySession(
+            "attacker", {"headers": {}, "session": {"login": _login(),
+                                                    "establishes": {"cookie": "sid"}}},
+            "http://[::1]:8080", 5, {})
+        for url in ("http://[::2]:8080/m", "http://127.0.0.1:8080/m",
+                    "http://[::1:0]:8080/m"):
+            # A response from another host sets nothing ...
+            session.harvest(_Response("planted=1; Path=/"), Request(url, method="GET"))
+        self.assertEqual(list(session.jar), [])
+        # ... and a cookie the jar holds goes to no other host.
+        session.jar.set_cookie(http.cookiejar.Cookie(
+            0, "sid", "attacker", None, False, "::1", False, False, "/", True,
+            False, int(time.time()) + 100, False, None, None, {}))
+        for url in ("http://[::2]:8080/docs/1", "http://127.0.0.1:8080/docs/1"):
+            other = Request(url, method="GET")
+            session.jar.add_cookie_header(other)
+            self.assertIsNone(other.get_header("Cookie"), url)
+
+    def test_control_the_bracket_rule_does_not_widen_other_targets(self) -> None:
+        policy = sequence._SameOriginCookiePolicy("127.0.0.1")
+        self.assertFalse(policy._is_target(Request("http://[::1]:8080/", method="GET")))
+        self.assertTrue(policy._is_target(Request("http://127.0.0.1:8080/", method="GET")))
+        v6 = sequence._SameOriginCookiePolicy("::1")
+        self.assertFalse(v6._is_target(Request("http://[::1:0]:8080/", method="GET")))
+        self.assertFalse(v6._is_target(Request("http://127.0.0.1:8080/", method="GET")))
+
+
 @slow("stands up a loopback HTTP server and runs the engine against it")
 class ProofCookiesDisagreeEndToEndTest(unittest.TestCase):
     """The same through the engine: a server that authenticates the first ``sid``.

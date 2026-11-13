@@ -1388,7 +1388,8 @@ target has not set yet.
 
 **Cookies never cross identities.** Each identity gets its own jar, built on
 `http.cookiejar` with a policy that accepts and returns cookies for exactly one
-host. The jar reaches a request as an argument, so isolation is a property of
+host, the one in `target.base_url` (an IPv6 literal such as `http://[::1]:8080`
+included). The jar reaches a request as an argument, so isolation is a property of
 the call, not of a registry someone could key wrongly — and there is no API
 anywhere that copies, unions, or seeds one jar from another. This is the single
 most important property in the feature: a leaked jar turns the attacker's probe
@@ -2410,9 +2411,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,591 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,595 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 989 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,580 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,584 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

@@ -1120,9 +1120,16 @@ class _SameOriginCookiePolicy(http.cookiejar.DefaultCookiePolicy):
 
     def _is_target(self, request: Any) -> bool:
         try:
-            return http.cookiejar.request_host(request).lower() == self.target_host
+            host = http.cookiejar.request_host(request).lower()
         except Exception:  # pragma: no cover - defensive; request shape is ours
             return False
+        # ``target_host`` comes from urlsplit().hostname, which strips the
+        # brackets off an IPv6 literal; request_host() keeps them. Compared
+        # as is, '[::1]' never equalled '::1', every cookie was refused, and
+        # a session against http://[::1]:port never established.
+        if host.startswith("[") and host.endswith("]"):
+            host = host[1:-1]
+        return host == self.target_host
 
     def set_ok(self, cookie: Any, request: Any) -> bool:
         return self._is_target(request) and super().set_ok(cookie, request)

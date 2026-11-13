@@ -1709,6 +1709,16 @@ something you installed.
 
 ### Fixed
 
+- **A session against an IPv6 literal never established.** With
+  `target.base_url` such as `http://[::1]:8080`, the cookie policy held the
+  host as `::1` and compared it with the request's host as the standard
+  library writes it, `[::1]`. Every cookie was refused, the login's cookie
+  never reached the jar, and each identity with a session reported
+  `not_established` with nothing graded (measured: every probe
+  `inconclusive`; the same target as `http://localhost:port`,
+  `VERIDOR-AUTHZ-001` confirmed). It failed closed. The brackets are now
+  dropped before comparing; any other host is still refused in both
+  directions.
 - **A sequence step whose session never established was told to check the
   network.** Its finding said "Request failed" and "Confirm the target is
   reachable from the runner and retry", while a check probe for the same
