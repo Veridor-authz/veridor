@@ -90,6 +90,15 @@ jobs:
         run: python scripts/release_check.py versions --tag "$GITHUB_REF_NAME" | tee -a "$GITHUB_OUTPUT"
       - name: The CHANGELOG section for this version is release notes
         run: python scripts/release_check.py notes "$GITHUB_REF_NAME"
+      # The first release's notes were its whole CHANGELOG section, about 223,000
+      # characters, and GitHub refused the release (HTTP 422, 125,000 at most)
+      # in the last job, after PyPI, the image and the chart had published.
+      # This runs github-release's "Create the release" step itself, with gh
+      # stubbed to keep the --notes-file and post nothing, and placeholder
+      # digests of the only length that step accepts, then counts what it
+      # would post.
+      - name: The release body this tag would post is one GitHub accepts
+        run: python scripts/release_check.py release-body "$GITHUB_REF_NAME"
 
   test:
     name: Tests on the tagged commit (Python ${{ matrix.python-version }})
@@ -497,7 +506,7 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
 
   github-release:
-    name: GitHub release with the CHANGELOG section as notes
+    name: GitHub release, its notes linking the CHANGELOG section
     needs: [verify, build, provenance, pypi, image, chart]
     runs-on: ubuntu-latest
     timeout-minutes: 10

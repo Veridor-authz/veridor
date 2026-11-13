@@ -7,6 +7,22 @@ caveat that the interface may still move.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The release workflow's last step failed for 0.1.0.** `release.yml` posted
+  the whole CHANGELOG section as the GitHub release's notes, and 0.1.0's
+  section is about 223,000 characters. GitHub refuses a release body over
+  125,000 (HTTP 422, "body is too long"), so the `github-release` job failed
+  after PyPI, the image and the chart had published, and the v0.1.0 release
+  was created by hand from that run's files. Nothing counted the notes before
+  then. The notes are now the section's opening paragraph and a link to the
+  section in `CHANGELOG.md` at the tag, with the anchor GitHub gives its
+  heading. The first job runs `release_check.py release-body`, which runs
+  the release job's own "Create the release" step with `gh` stubbed and
+  placeholder digests, and fails if the body it would post is empty or over
+  125,000 characters. Against the tree v0.1.0 was tagged from it fails, at
+  223,758.
+
 ## [0.1.0] - 2026-11-13
 
 First public release. It contains `map`, `run` and `mutate`; the marker oracle

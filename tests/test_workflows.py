@@ -2429,6 +2429,21 @@ class EnvironmentCheckStepTest(unittest.TestCase):
 
 COMMIT_CHECK = "bash .github/scripts/check-release-commit.sh"
 
+RELEASE_BODY_RUN = 'python scripts/release_check.py release-body "$GITHUB_REF_NAME"'
+RELEASE_BODY_STEP = {"name": "The release body this tag would post is one GitHub accepts", "run": RELEASE_BODY_RUN}
+
+
+def release_body_check_problems(workflow: dict) -> list[str]:
+    """The verify job, which every publishing job needs, must run release-body,
+    with the environment it reads: IMAGE and CHART_REPOSITORY at the top level."""
+    verify = workflow["jobs"]["verify"]
+    if RELEASE_BODY_RUN not in [step.get("run") for step in verify["steps"]]:
+        return [f"the verify job does not run `{RELEASE_BODY_RUN.removeprefix('python scripts/')}`, so a "
+                "release body GitHub refuses is found only in the github-release job, after everything "
+                "else published"]
+    missing = [name for name in ("IMAGE", "CHART_REPOSITORY") if name not in workflow.get("env", {})]
+    return [f"release-body reads ${name}, which the workflow's env does not set" for name in missing]
+
 
 @slow("runs release.yml's commit check under bash against a stub gh")
 class CommitCheckStepTest(unittest.TestCase):
@@ -2905,6 +2920,26 @@ class ReleaseWorkflowTest(unittest.TestCase):
         # tee's status would be the step's without pipefail; VerifyStepTest runs it.
         self.assertEqual(effective_shell(self.release, self.jobs["verify"], check), "bash")
         self.assertIn('python scripts/release_check.py notes "$GITHUB_REF_NAME"', [step.get("run") for step in steps])
+
+    def test_verify_counts_the_release_body_before_anything_publishes(self) -> None:
+        """v0.1.0's release was refused in the last job ("body is too long
+        (maximum is 125000 characters)"), after PyPI, the image and the chart
+        had published. `release-body` runs that job's step with gh stubbed."""
+        self.assertEqual(release_body_check_problems(self.release), [])
+
+    def test_control_a_release_without_the_body_check_is_named(self) -> None:
+        verify = self.jobs["verify"]
+        steps = [step for step in verify["steps"] if "release-body" not in step.get("run", "")]
+        self.assertEqual(len(steps), len(verify["steps"]) - 1)
+        workflow = dict(self.release, jobs=dict(self.jobs, verify=dict(verify, steps=steps)))
+        self.assertEqual(release_body_check_problems(workflow), [
+            "the verify job does not run `release_check.py release-body \"$GITHUB_REF_NAME\"`, so a release "
+            "body GitHub refuses is found only in the github-release job, after everything else published"])
+        # Moved to the release job, it runs too late.
+        moved = dict(self.jobs, verify=dict(verify, steps=steps),
+                     **{"github-release": dict(self.jobs["github-release"],
+                                               steps=[*self.jobs["github-release"]["steps"], RELEASE_BODY_STEP])})
+        self.assertEqual(len(release_body_check_problems(dict(self.release, jobs=moved))), 1)
 
     def test_no_major_tag_moves(self) -> None:
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")

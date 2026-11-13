@@ -917,10 +917,19 @@ class NotesTest(unittest.TestCase):
     PREAMBLE = ("Nothing here has been released: there is no tag, and no package, image or\n"
                 "chart (see [0.1.0]).\n\n### Security\n\n- a fix\n")
 
+    #: The repository `notes` links to when pyproject.toml names it.
+    PYPROJECT = '[project]\nname = "x"\n\n[project.urls]\nRepository = "https://github.com/Example-org/example"\n'
+
+    @staticmethod
+    def link(version: str, anchor: str) -> str:
+        return (f"The full release notes are the [{version}] section of CHANGELOG.md:\n"
+                f"https://github.com/Example-org/example/blob/v{version}/CHANGELOG.md#{anchor}\n")
+
     def notes_cli(self, changelog: str, tag: str) -> tuple[int, str, str]:
         root = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, root, True)
         (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+        (root / "pyproject.toml").write_text(self.PYPROJECT, encoding="utf-8")
         out, err = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = release_check.main(["--root", str(root), "notes", tag])
@@ -951,6 +960,7 @@ class NotesTest(unittest.TestCase):
                 root = Path(tempfile.mkdtemp())
                 self.addCleanup(shutil.rmtree, root, True)
                 (root / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+                (root / "pyproject.toml").write_text(self.PYPROJECT, encoding="utf-8")
                 (root / name).write_text(text, encoding="utf-8")
                 out, err = io.StringIO(), io.StringIO()
                 with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -962,7 +972,8 @@ class NotesTest(unittest.TestCase):
                 out = io.StringIO()
                 with contextlib.redirect_stdout(out):
                     code = release_check.main(["--root", str(root), "notes", "v0.2.0"])
-                self.assertEqual((code, out.getvalue()), (0, "- a thing\n"))
+                self.assertEqual((code, out.getvalue()),
+                                 (0, "- a thing\n\n" + self.link("0.2.0", "020---2026-10-01")))
 
     def test_the_real_preamble_is_one_the_fold_check_reads(self) -> None:
         """A fold that kept the paragraph would post it as release notes, and
@@ -978,7 +989,8 @@ class NotesTest(unittest.TestCase):
                 "- Not released builds no longer print a version.\n")
         changelog = f"## [Unreleased]\n\n## [0.2.0] - 2026-10-01\n\n{body}\n## [0.1.0]\n\nFirst.\n"
         self.assertEqual(release_check.publishable_notes(changelog, "v0.2.0"), body)
-        self.assertEqual(self.notes_cli(changelog, "v0.2.0"), (0, body, ""))
+        # The section opens with a heading, so the notes are the link alone.
+        self.assertEqual(self.notes_cli(changelog, "v0.2.0"), (0, self.link("0.2.0", "020---2026-10-01"), ""))
 
     def test_unreleased_entries_left_behind_are_refused(self) -> None:
         """Every entry under [Unreleased] describes a change in the tagged tree;
@@ -992,7 +1004,7 @@ class NotesTest(unittest.TestCase):
         self.assertIn("[Unreleased]", err)
         # Control: the same file with [Unreleased] emptied, as CONTRIBUTING says.
         self.assertEqual(self.notes_cli(changelog.replace("- pending\n\n", ""), "v0.2.0"),
-                         (0, "- a thing\n", ""))
+                         (0, "- a thing\n\n" + self.link("0.2.0", "020---2026-10-01"), ""))
 
     def test_the_unreleased_section_is_never_release_notes(self) -> None:
         """Tagging without renaming [Unreleased] must fail, not publish it."""
@@ -1000,6 +1012,166 @@ class NotesTest(unittest.TestCase):
         self.assertIn("## [Unreleased]", changelog)
         with self.assertRaises(release_check.CheckFailed):
             release_check.release_notes(changelog, "v99.0.0")
+
+
+def first_release_changelog() -> str:
+    """CHANGELOG.md as it stood at v0.1.0: an empty [Unreleased] and the
+    0.1.0 section, which no later change rewrites."""
+    section = release_check.release_notes((ROOT / "CHANGELOG.md").read_text(encoding="utf-8"), "v0.1.0")
+    return f"# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-11-13\n\n{section}"
+
+
+#: Read from github.com/Veridor-authz/veridor/blob/v0.1.0/CHANGELOG.md on
+#: 2026-11-13: the rendered heading carries id="user-content-010---2026-11-13".
+FIRST_RELEASE_ANCHOR = "010---2026-11-13"
+
+
+class ReleaseBodyTest(unittest.TestCase):
+    """GitHub refused v0.1.0's release (HTTP 422, "body is too long (maximum
+    is 125000 characters)") because its notes were the whole 0.1.0 section,
+    about 223,000 characters, and nothing before the last job counted them."""
+
+    def test_the_anchor_is_the_id_github_gave_the_first_release_heading(self) -> None:
+        changelog = first_release_changelog()
+        line = changelog.splitlines().index("## [0.1.0] - 2026-11-13")
+        self.assertEqual(release_check.heading_anchor(changelog, line), FIRST_RELEASE_ANCHOR)
+        self.assertEqual(release_check.heading_anchor(changelog, 0), "changelog")
+        self.assertEqual(release_check.github_slug("[0.2.0-rc.1] - 2026-12-01"), "020-rc1---2026-12-01")
+        self.assertEqual(release_check.github_slug("Uses [a link](https://x.test/y) and `code`"),
+                         "uses-a-link-and-code")
+
+    def test_a_repeated_heading_takes_a_suffix_and_fenced_lines_are_not_headings(self) -> None:
+        text = "## Added\n\n```\n## Added\n```\n\n## Added\n\n~~~~\n# x\n~~~\n~~~~\n## Added\n"
+        lines = text.splitlines()
+        self.assertEqual([release_check.heading_anchor(text, i) for i in (0, 6, 12)],
+                         ["added", "added-1", "added-2"])
+        self.assertEqual([lines[i] for i in (0, 3, 6, 12)], ["## Added"] * 4)
+        # Control: a line inside a fence is refused as a heading, not counted.
+        with self.assertRaises(release_check.CheckFailed):
+            release_check.heading_anchor(text, 3)
+
+    def test_the_first_release_section_passed_whole_is_refused(self) -> None:
+        section = release_check.release_notes(first_release_changelog(), "v0.1.0")
+        self.assertGreater(len(section), 200_000)  # 222,989 measured
+        (problem,) = release_check.release_body_problems(section)
+        self.assertIn(f"{len(section):,} characters", problem)
+        self.assertIn("125,000", problem)
+
+    def test_the_short_notes_for_the_first_release_pass_and_link_the_section(self) -> None:
+        changelog = first_release_changelog()
+        notes = release_check.release_notes_summary(changelog, "v0.1.0", "Veridor-authz/veridor")
+        self.assertEqual(release_check.release_body_problems(notes), [])
+        self.assertLess(len(notes), 2_000)
+        opening, link = notes.split("\n\n")
+        self.assertTrue(opening.startswith("First public release. It contains `map`, `run` and `mutate`"))
+        self.assertNotIn("### ", notes)
+        self.assertEqual(link, "The full release notes are the [0.1.0] section of CHANGELOG.md:\n"
+                         "https://github.com/Veridor-authz/veridor/blob/v0.1.0/CHANGELOG.md#"
+                         f"{FIRST_RELEASE_ANCHOR}\n")
+
+    def test_the_limit_counts_characters_not_bytes(self) -> None:
+        self.assertEqual(release_check.release_body_problems("é" * release_check.RELEASE_BODY_LIMIT), [])
+        self.assertTrue(release_check.release_body_problems("e" * (release_check.RELEASE_BODY_LIMIT + 1)))
+        self.assertTrue(release_check.release_body_problems(" \n"))
+
+    def test_notes_over_the_limit_are_refused_by_notes_itself(self) -> None:
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root, True)
+        (root / "pyproject.toml").write_text(NotesTest.PYPROJECT, encoding="utf-8")
+        long = "word " * 30_000
+        for label, opening, code in (("over", long, 1), ("control, under", "Short.", 0)):
+            with self.subTest(label):
+                (root / "CHANGELOG.md").write_text(
+                    f"## [Unreleased]\n\n## [0.2.0] - 2026-10-01\n\n{opening}\n\n### Added\n\n- x\n",
+                    encoding="utf-8")
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    self.assertEqual(release_check.main(["--root", str(root), "notes", "v0.2.0"]), code)
+                self.assertEqual("too long" in err.getvalue(), code == 1, err.getvalue())
+
+    def test_the_release_step_is_read_from_release_yml(self) -> None:
+        workflow = (ROOT / release_check.RELEASE_WORKFLOW).read_text(encoding="utf-8")
+        script = release_check.release_step_script(workflow)
+        self.assertIn('python3 scripts/release_check.py notes "$GITHUB_REF_NAME" > "$RUNNER_TEMP/notes.md"', script)
+        self.assertIn('gh release create "$GITHUB_REF_NAME" dist/* "${flags[@]}"', script)
+        self.assertFalse(script.startswith(" "))
+        self.assertNotIn("- name:", script)
+        # Controls: a second step of that name, or none, is refused rather than guessed at.
+        step = "      - name: Create the release\n"
+        twice = workflow.replace(step, step + "        run: |\n          true\n" + step)
+        for label, text in (("twice", twice), ("missing", workflow.replace(step, "      - name: Other\n"))):
+            with self.subTest(label), self.assertRaisesRegex(release_check.CheckFailed, "steps, expected 1"):
+                release_check.release_step_script(text)
+
+
+@slow("runs release.yml's release step under bash, with gh stubbed")
+class ReleaseBodyStepTest(unittest.TestCase):
+    """`release-body` against a copy of the files the step reads."""
+
+    ARGS = ["--repository", "Veridor-authz/veridor", "--image", "ghcr.io/veridor-authz/veridor",
+            "--chart-repository", "oci://ghcr.io/veridor-authz/charts"]
+
+    def tree(self) -> Path:
+        root = Path(tempfile.mkdtemp(prefix="veridor-release-body-"))
+        self.addCleanup(shutil.rmtree, root, True)
+        for name in ("pyproject.toml", release_check.RELEASE_WORKFLOW, "scripts/release_check.py"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / name, root / name)
+        (root / "CHANGELOG.md").write_text(first_release_changelog(), encoding="utf-8")
+        return root
+
+    def body(self, root: Path) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = release_check.main(["--root", str(root), "release-body", "v0.1.0", *self.ARGS])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_the_body_the_step_would_post_for_the_first_release_fits(self) -> None:
+        root = self.tree()
+        code, body, err = self.body(root)
+        self.assertEqual(code, 0, err)
+        notes = release_check.release_notes_summary(first_release_changelog(), "v0.1.0", "Veridor-authz/veridor")
+        self.assertTrue(body.startswith(notes), body[:300])
+        self.assertIn(f"#{FIRST_RELEASE_ANCHOR}\n", body)
+        self.assertIn(f"ghcr.io/veridor-authz/veridor@{release_check.PLACEHOLDER_DIGEST}", body)
+        self.assertIn("release.yml@refs/tags/v0.1.0`.", body)
+        self.assertIn("The SBOM and SHA256SUMS carry no provenance.", body)
+        self.assertLessEqual(len(body), release_check.RELEASE_BODY_LIMIT)
+        self.assertIn(f"{len(body):,} of 125,000 characters", err)
+
+    def test_control_the_notes_as_they_were_are_refused(self) -> None:
+        """The step as it stood when v0.1.0 was tagged: `notes` printed the
+        whole section. Stood in for by a script that prints it."""
+        root = self.tree()
+        section = release_check.release_notes(first_release_changelog(), "v0.1.0")
+        (root / "section.md").write_text(section, encoding="utf-8")
+        (root / "scripts" / "release_check.py").write_text(
+            "import sys\nsys.stdout.write(open('section.md', encoding='utf-8').read())\n", encoding="utf-8")
+        code, out, err = self.body(root)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("characters, and GitHub refuses more than 125,000", err)
+        posted = int(re.search(r"release body is ([\d,]+) characters", err).group(1).replace(",", ""))
+        self.assertGreater(posted, len(section))  # the verification lines were appended to it
+
+    def test_control_a_step_that_posts_no_notes_file_is_named(self) -> None:
+        root = self.tree()
+        workflow = root / release_check.RELEASE_WORKFLOW
+        text = workflow.read_text(encoding="utf-8")
+        self.assertEqual(text.count('--notes-file "$RUNNER_TEMP/notes.md"'), 1)
+        workflow.write_text(text.replace('--notes-file "$RUNNER_TEMP/notes.md"', "--generate-notes"),
+                            encoding="utf-8")
+        code, out, err = self.body(root)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("with no --notes-file", err)
+
+    def test_control_a_failing_notes_command_stops_it(self) -> None:
+        root = self.tree()
+        (root / "CHANGELOG.md").write_text("## [Unreleased]\n\n- pending\n\n" +
+                                           first_release_changelog().split("## [Unreleased]\n\n", 1)[1],
+                                           encoding="utf-8")
+        code, out, err = self.body(root)
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("'## [Unreleased]' is not empty", err)
 
 
 #: What the wheel installs in these fakes, and so what the sdist must carry under src/.

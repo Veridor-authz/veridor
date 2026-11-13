@@ -3,7 +3,8 @@
 
     python3 scripts/release_check.py versions [--tag vX.Y.Z] [--list]
     python3 scripts/release_check.py bump X.Y.Z [--write]
-    python3 scripts/release_check.py notes vX.Y.Z > notes.md
+    python3 scripts/release_check.py notes vX.Y.Z [--repository OWNER/REPO] > notes.md
+    python3 scripts/release_check.py release-body vX.Y.Z [--repository R --image I --chart-repository C]
     python3 scripts/release_check.py dist dist/ [--tag vX.Y.Z] [--require-zipapp]
     python3 scripts/release_check.py identity
     python3 scripts/release_check.py owner --repository OWNER/REPO --image IMAGE --chart-repository oci://...
@@ -39,8 +40,15 @@
     re-runs the ``versions`` check on the result before writing anything.
 
 ``notes``
-    Print the CHANGELOG section for the tag's version -- everything under its
-    ``## [VERSION]`` heading up to the next ``## [``. A missing or empty
+    Print the release notes for the tag: the opening paragraph of the
+    CHANGELOG section for its version (the text under its ``## [VERSION]``
+    heading before its first subheading, when there is any) and a link to
+    that section in CHANGELOG.md at the tag, on the repository pyproject.toml
+    names. The link's anchor is the id GitHub gives the heading. The notes
+    were the whole section, and the first release's, about 223,000
+    characters, was more than the 125,000 GitHub accepts in a release body.
+    Notes over that limit are refused here too. The section is the
+    text under its heading up to the next ``## [``. A missing or empty
     section is an error: release notes that say nothing are not written. So
     is a section that says it is not released (the placeholder an untagged
     version carries, or the [Unreleased] preamble carried along by the
@@ -53,6 +61,17 @@
     the first thing a tag runs. It reads phrases, not meaning: a sentence worded
     some other way passes, so CONTRIBUTING.md's step 3 still names the sections
     to read. tests/, CHANGELOG.md, CONTRIBUTING.md and this script are not read.
+
+``release-body``
+    Run release.yml's github-release "Create the release" step under bash,
+    with ``gh`` replaced by a stub that keeps the ``--notes-file`` it is given
+    and posts nothing, and fail if that body is empty or longer than GitHub's
+    limit of 125,000 characters. The image and chart digests do not exist yet
+    in the first job, so a placeholder stands in; the step refuses any digest
+    that is not ``sha256:`` and 64 hex digits, so the length is the same.
+    It runs the step rather than rebuilding its text, so the body checked is
+    the body posted. Repository, image and chart repository come from
+    ``$GITHUB_REPOSITORY``, ``$IMAGE`` and ``$CHART_REPOSITORY`` unless given.
 
 ``dist``
     Check the built artifacts: exactly one wheel and one sdist for the
@@ -879,6 +898,211 @@ def publishable_notes(changelog: str, tag: str) -> str:
     return body
 
 
+#: GitHub refuses a longer release body with HTTP 422, "body is too long
+#: (maximum is 125000 characters)". The first release's job got that answer
+#: for notes that were its whole CHANGELOG section, about 223,000 characters.
+#: Characters, not bytes: Python's len().
+RELEASE_BODY_LIMIT = 125_000
+
+_ATX_HEADING = re.compile(r"^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_INLINE_LINK = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+
+
+def github_slug(heading: str) -> str:
+    """The id GitHub gives a heading's text when it renders a Markdown file:
+    lowercased, every character that is not a letter, a digit, a space, `-`
+    or `_` dropped, then each space made a `-`. The first release's heading
+    gives '010---2026-11-13', the id its rendered CHANGELOG.md carries at the
+    tag (read from github.com, 2026-11-13). An inline link counts as its text.
+    The suffix heading_anchor() adds to a repeated slug is GitHub's documented
+    rule, not one read from a rendered page here."""
+    text = _INLINE_LINK.sub(r"\1", heading).strip().lower()
+    return "".join("-" if char == " " else char for char in text
+                   if char.isalnum() or char in " -_")
+
+
+def heading_anchor(markdown: str, line: int) -> str:
+    """The anchor of the heading on ``line`` (0-based), with the ``-1``,
+    ``-2`` GitHub appends to a slug an earlier heading already took. Lines in
+    fenced code are not headings."""
+    seen: dict[str, int] = {}
+    fence = ""
+    for index, text in enumerate(markdown.splitlines()):
+        opened = _FENCE.match(text)
+        if fence:
+            if opened and opened.group(1)[0] == fence[0] and len(opened.group(1)) >= len(fence) \
+                    and not text.strip()[len(opened.group(1)):].strip():
+                fence = ""
+            if index == line:
+                break
+            continue
+        if opened:
+            fence = opened.group(1)
+            if index == line:
+                break
+            continue
+        heading = _ATX_HEADING.match(text)
+        if heading is None:
+            if index == line:
+                break
+            continue
+        slug = github_slug(heading.group(1) or "")
+        count = seen.get(slug, 0)
+        seen[slug] = count + 1
+        if index == line:
+            return slug if count == 0 else f"{slug}-{count}"
+    raise CheckFailed(f"line {line + 1} of the changelog is not a heading GitHub gives an id to")
+
+
+def tree_repository(root: Path) -> str:
+    """OWNER/REPO from pyproject.toml's Repository URL. release.yml's verify
+    job (`owner`) fails unless that is the repository the release runs in."""
+    try:
+        url = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["urls"].get(
+            "Repository", "")
+    except (OSError, KeyError, tomllib.TOMLDecodeError) as error:
+        raise CheckFailed(f"pyproject.toml gives no Repository URL to link the CHANGELOG at ({error!r}); "
+                          "pass --repository OWNER/REPO") from None
+    match = re.fullmatch(r"https://github\.com/([^/\s]+/[^/\s]+?)/?", url)
+    if match is None:
+        raise CheckFailed(f"pyproject.toml's Repository is {url!r}, not https://github.com/OWNER/REPO; "
+                          "the release notes link the CHANGELOG there")
+    return match.group(1)
+
+
+def release_notes_summary(changelog: str, tag: str, repository: str) -> str:
+    """What a GitHub release says for the tag: the opening paragraph of its
+    CHANGELOG section, if the section has one before its first heading, and a
+    link to the section at the tag. publishable_notes() checks the section first.
+
+    The notes were the whole section, and the first release's was about 223,000
+    characters, so GitHub refused the release (RELEASE_BODY_LIMIT) after
+    everything else had published."""
+    body = publishable_notes(changelog, tag)
+    semver = tag.removeprefix("v")
+    lines = changelog.splitlines()
+    start, _ = _section(lines, {semver, semver_to_pep440(semver)})
+    heading = start - 1
+    label = re.match(r"^## \[([^\]]+)\]", lines[heading]).group(1)
+    preamble = re.split(r"^ {0,3}#", body, maxsplit=1, flags=re.M)[0].strip()
+    opening = re.split(r"\n[ \t]*\n", preamble, maxsplit=1)[0].strip() if preamble else ""
+    url = f"https://github.com/{repository}/blob/{tag}/CHANGELOG.md#{heading_anchor(changelog, heading)}"
+    link = f"The full release notes are the [{label}] section of CHANGELOG.md:\n{url}\n"
+    return f"{opening}\n\n{link}" if opening else link
+
+
+def release_body_problems(body: str) -> list[str]:
+    """Why GitHub would refuse ``body`` as a release body, if it would."""
+    if not body.strip():
+        return ["the release body is empty"]
+    if len(body) > RELEASE_BODY_LIMIT:
+        return [f"the release body is {len(body):,} characters, and GitHub refuses more than "
+                f"{RELEASE_BODY_LIMIT:,} (HTTP 422, 'body is too long'): the first release's job "
+                "failed that way after everything else had published"]
+    return []
+
+
+#: Where release.yml writes and posts the release body.
+RELEASE_WORKFLOW = ".github/workflows/release.yml"
+RELEASE_JOB, RELEASE_STEP = "github-release", "Create the release"
+#: Stands in for the image and chart digests, which exist only after those
+#: jobs ran. The step refuses any digest that is not sha256: and 64 hex
+#: digits, so every digest it accepts is exactly this long.
+PLACEHOLDER_DIGEST = "sha256:" + "0" * 64
+
+
+def release_step_script(workflow: str) -> str:
+    """The `run:` block of the github-release job's "Create the release"
+    step, read from release.yml as text (no YAML parser ships with the
+    runner's Python). Fails unless each is found exactly once."""
+    lines = workflow.splitlines()
+
+    def block(start: int, indent: int) -> int:
+        """The end of the lines after ``start`` indented deeper than ``indent``."""
+        end = start + 1
+        while end < len(lines) and (not lines[end].strip() or
+                                    len(lines[end]) - len(lines[end].lstrip()) > indent):
+            end += 1
+        return end
+
+    jobs = [i for i, line in enumerate(lines) if line == f"  {RELEASE_JOB}:"]
+    if len(jobs) != 1:
+        raise CheckFailed(f"{RELEASE_WORKFLOW} has {len(jobs)} '{RELEASE_JOB}' jobs, expected 1")
+    job_end = block(jobs[0], 2)
+    steps = [i for i in range(jobs[0], job_end)
+             if re.fullmatch(rf"\s*- name: {re.escape(RELEASE_STEP)}\s*", lines[i])]
+    if len(steps) != 1:
+        raise CheckFailed(f"{RELEASE_WORKFLOW}'s {RELEASE_JOB} job has {len(steps)} "
+                          f"'{RELEASE_STEP}' steps, expected 1")
+    dash = lines[steps[0]].index("-")
+    step_end = block(steps[0], dash)
+    runs = [i for i in range(steps[0], step_end) if re.fullmatch(r"\s*run: \|\s*", lines[i])]
+    if len(runs) != 1:
+        raise CheckFailed(f"{RELEASE_WORKFLOW}'s '{RELEASE_STEP}' step has {len(runs)} `run: |` "
+                          "blocks, expected 1")
+    indent = len(lines[runs[0]]) - len(lines[runs[0]].lstrip())
+    body = lines[runs[0] + 1:block(runs[0], indent)]
+    margin = min(len(line) - len(line.lstrip()) for line in body if line.strip())
+    return "\n".join(line[margin:] for line in body).rstrip() + "\n"
+
+
+_GH_STUB = """#!/usr/bin/env bash
+# release_check.py release-body: records the notes file and posts nothing.
+set -eo pipefail
+if [[ "${1:-} ${2:-}" != "release create" ]]; then
+  echo "release-body: the step ran 'gh $*'; only 'gh release create' is stubbed" >&2
+  exit 97
+fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --notes-file|-F) cp -- "$2" "$RELEASE_BODY_OUT"; shift ;;
+  esac
+  shift
+done
+"""
+
+
+def render_release_body(root: Path, tag: str, repository: str, image: str, chart_repository: str) -> str:
+    """The body release.yml would post for ``tag``: the github-release job's
+    "Create the release" step, run under bash as that job runs it, with gh
+    replaced by a stub that keeps the file passed as --notes-file and posts
+    nothing, and the digests not yet known replaced by PLACEHOLDER_DIGEST.
+    Running the step, not a copy of its text, is what makes the body checked
+    the body posted. The step runs `python3`; it is this interpreter."""
+    import subprocess  # noqa: PLC0415
+    import tempfile  # noqa: PLC0415
+
+    script = release_step_script((root / RELEASE_WORKFLOW).read_text(encoding="utf-8"))
+    with tempfile.TemporaryDirectory(prefix="veridor-release-body-") as tmp:
+        stubs, runner, out = Path(tmp) / "bin", Path(tmp) / "runner", Path(tmp) / "body.md"
+        stubs.mkdir()
+        runner.mkdir()
+        (stubs / "gh").write_text(_GH_STUB, encoding="utf-8")
+        (stubs / "python3").write_text(f'#!/usr/bin/env bash\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+        for stub in stubs.iterdir():
+            stub.chmod(0o755)
+        env = {
+            "PATH": f"{stubs}{os.pathsep}{os.environ.get('PATH', os.defpath)}",
+            "HOME": os.environ.get("HOME", tmp), "LANG": "C.UTF-8", "RUNNER_TEMP": str(runner),
+            "RELEASE_BODY_OUT": str(out), "GH_TOKEN": "",
+            "GITHUB_REPOSITORY": repository, "GITHUB_REF": f"refs/tags/{tag}", "GITHUB_REF_NAME": tag,
+            "IMAGE": image, "CHART_REPOSITORY": chart_repository,
+            "DIGEST": PLACEHOLDER_DIGEST, "CHART_DIGEST": PLACEHOLDER_DIGEST,
+            "PRERELEASE": "true" if "-" in tag else "false",
+        }
+        result = subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", script],
+                                cwd=root, env=env, capture_output=True, text=True, timeout=120, check=False)
+        if result.returncode != 0:
+            raise CheckFailed(f"{RELEASE_WORKFLOW}'s '{RELEASE_STEP}' step exited {result.returncode} "
+                              "before posting anything:\n"
+                              + result.stderr.strip().replace("::error title=release check::", ""))
+        if not out.is_file():
+            raise CheckFailed(f"{RELEASE_WORKFLOW}'s '{RELEASE_STEP}' step ran `gh release create` "
+                              "with no --notes-file, or did not run it")
+        return out.read_text(encoding="utf-8")
+
+
 def check_dist(directory: Path, version: str, *, require_zipapp: bool = False,
                tagged: bool = False) -> list[str]:
     """Every problem with the built artifacts, or [].
@@ -1139,8 +1363,18 @@ def main(argv: list[str] | None = None) -> int:
     bumper.add_argument("version", help="the new version, X.Y.Z, X.Y.ZrcN or X.Y.Z-rc.N")
     bumper.add_argument("--write", action="store_true",
                         help="apply the change (default: print the diff and change nothing)")
-    notes = commands.add_parser("notes", help="print the CHANGELOG section for a tag")
+    notes = commands.add_parser("notes", help="print the release notes for a tag: the CHANGELOG "
+                                "section's opening paragraph and a link to the section")
     notes.add_argument("tag")
+    notes.add_argument("--repository", help="OWNER/REPO for the link; defaults to pyproject.toml's Repository")
+    body = commands.add_parser("release-body", help="run release.yml's release step with gh stubbed and "
+                               "check the body it would post")
+    body.add_argument("tag")
+    body.add_argument("--repository", default=os.environ.get("GITHUB_REPOSITORY"),
+                      help="OWNER/REPO; defaults to $GITHUB_REPOSITORY")
+    body.add_argument("--image", default=os.environ.get("IMAGE"), help="release.yml's IMAGE; defaults to $IMAGE")
+    body.add_argument("--chart-repository", default=os.environ.get("CHART_REPOSITORY"),
+                      help="release.yml's CHART_REPOSITORY; defaults to $CHART_REPOSITORY")
     dist = commands.add_parser("dist", help="check the built artifacts")
     dist.add_argument("directory", type=Path)
     dist.add_argument("--tag", help="the git tag; defaults to the tree's version")
@@ -1177,11 +1411,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"dry run: {len(changes)} file(s) would change; pass --write to apply",
                       file=sys.stderr)
         elif args.command == "notes":
-            body = publishable_notes((args.root / "CHANGELOG.md").read_text(encoding="utf-8"), args.tag)
-            stale = tree_release_statements(args.root)
-            if stale:
-                raise CheckFailed("\n".join(stale))
+            repository = args.repository or tree_repository(args.root)
+            body = release_notes_summary((args.root / "CHANGELOG.md").read_text(encoding="utf-8"),
+                                         args.tag, repository)
+            problems = tree_release_statements(args.root) + release_body_problems(body)
+            if problems:
+                raise CheckFailed("\n".join(problems))
             sys.stdout.write(body)
+        elif args.command == "release-body":
+            missing = [flag for flag, value in (("--repository", args.repository), ("--image", args.image),
+                                                ("--chart-repository", args.chart_repository)) if not value]
+            if missing:
+                raise CheckFailed(f"release-body needs {', '.join(missing)}, or the environment "
+                                  "variables release.yml sets")
+            body = render_release_body(args.root, args.tag, args.repository, args.image, args.chart_repository)
+            problems = release_body_problems(body)
+            if problems:
+                raise CheckFailed("\n".join(problems))
+            sys.stdout.write(body)
+            print(f"release body for {args.tag}: {len(body):,} of {RELEASE_BODY_LIMIT:,} characters, "
+                  "with the digests not yet known standing in as sha256:000...", file=sys.stderr)
         elif args.command == "owner":
             problems = owner_problems(args.root, args.repository, args.image, args.chart_repository)
             if problems:

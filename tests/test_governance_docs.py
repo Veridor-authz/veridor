@@ -429,22 +429,47 @@ class ChangelogTest(unittest.TestCase):
         # section holds it. After a release renames [Unreleased] and opens an
         # empty one above it (CONTRIBUTING, "Releasing"), that is the release's
         # section; naming [Unreleased] here failed on every release tree.
+        # The planted heading is a second '### Fixed', which that section
+        # holds by construction: a planted '### Added' was a duplicate only
+        # while the section also had one, and an [Unreleased] holding only
+        # Fixed entries made the control pass with nothing doubled.
         at = self.TEXT.index("### Fixed\n")
         title = re.findall(r"^## (.+)$", self.TEXT[:at], re.M)[-1]
-        doubled = self.TEXT[:at] + "### Added\n\n- x\n\n" + self.TEXT[at:]
+        doubled = self.TEXT[:at] + "### Fixed\n\n- x\n\n" + self.TEXT[at:]
         self.assertEqual(self.problems(doubled), [f"{title}: a '###' heading appears twice"])
 
     def test_the_released_version_is_dated_and_says_so(self) -> None:
         """0.1.0 was once called "First tagged release" while no tag existed,
         and until the tag this asserted its section said "Not released". The
         release commit dates the heading and replaces that paragraph, and
-        leaves [Unreleased] empty above it (CONTRIBUTING, "Releasing")."""
+        opens [Unreleased] above it (CONTRIBUTING, "Releasing").
+
+        This asserted [Unreleased] was empty, which held only until the first
+        change after the release recorded itself there, as CONTRIBUTING says
+        changes do. That it is empty when a tag is pushed is release_check's
+        `notes` rule (NotesTest in tests/test_release_check.py). What is held
+        here is that the fold left nothing of the pre-release preamble in it."""
         section = re.search(r"^## \[0\.1\.0\] - \d{4}-\d{2}-\d{2}$(.*?)(?=^## |\Z)", self.TEXT, re.M | re.S)
         self.assertIsNotNone(section, "0.1.0 has no dated heading")
         self.assertNotRegex(section.group(1), r"(?m)^(?:Not (?:yet )?released\.|Nothing here has been released)")
         self.assertIn("First public release.", section.group(1))
-        unreleased = re.search(r"^## \[Unreleased\]$(.*?)(?=^## |\Z)", self.TEXT, re.M | re.S)
-        self.assertEqual(unreleased.group(1).strip(), "")
+        self.assertEqual(self.unreleased_problems(self.TEXT), [])
+
+    @staticmethod
+    def unreleased_problems(text: str) -> list[str]:
+        unreleased = re.search(r"^## \[Unreleased\]$(.*?)(?=^## |\Z)", text, re.M | re.S)
+        if unreleased is None or text.index("## [Unreleased]") > text.index("## [0.1.0]"):
+            return ["no [Unreleased] section above 0.1.0"]
+        if re.search(r"(?m)^(?:Not (?:yet )?released\.|Nothing here has been released)", unreleased.group(1)):
+            return ["[Unreleased] still carries the pre-release preamble"]
+        return []
+
+    def test_control_the_pre_release_preamble_in_unreleased_is_named(self) -> None:
+        planted = self.TEXT.replace("## [Unreleased]\n", "## [Unreleased]\n\nNothing here has been released: "
+                                    "there is no tag, and no package, image or\nchart (see [0.1.0]).\n", 1)
+        self.assertEqual(self.unreleased_problems(planted), ["[Unreleased] still carries the pre-release preamble"])
+        moved = self.TEXT.replace("## [Unreleased]\n", "", 1) + "\n## [Unreleased]\n"
+        self.assertEqual(self.unreleased_problems(moved), ["no [Unreleased] section above 0.1.0"])
 
 
 class MajorTagPolicyTest(unittest.TestCase):
