@@ -1,6 +1,10 @@
 # Pinned SHAs and digests only stay safe if something proposes the updates.
 # Every `uses:` here is pinned to a commit SHA with a `# vX.Y.Z` comment, which
 # Dependabot keeps in step; both Dockerfiles pin their base image by digest.
+# Updates come monthly, at most two open pull requests per entry. The docker
+# entries ignore minor and major python bumps: the images stay on the Python
+# line they name (3.12) and take new digests of it; moving to a newer Python
+# is a deliberate change, not a dependency bump.
 # Not covered by any entry below, and bumped by hand:
 # - images passed as action inputs (the image jobs' binfmt, BuildKit builder
 #   and SBOM scanner);
@@ -27,22 +31,32 @@ updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       actions:
         patterns: ["*"]
   - package-ecosystem: docker
     directory: /
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: docker
     directory: /deploy/kind
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
   - package-ecosystem: pip
     directory: /.github/requirements
     schedule:
-      interval: weekly
+      interval: monthly
+    open-pull-requests-limit: 2
     groups:
       build-and-schema-tools:
         patterns: ["*"]

@@ -1129,6 +1129,57 @@ class DependabotDockerTest(unittest.TestCase):
             "deploy/kind/Dockerfile: pinned by digest but listed under 'Not pinned at all'"])
 
 
+#: What dependabot.yml's header promises: monthly, at most this many open
+#: pull requests per entry, and docker entries that never move the Python line.
+DEPENDABOT_LIMIT = 2
+PYTHON_LINE_IGNORE = {"version-update:semver-major", "version-update:semver-minor"}
+
+
+def dependabot_cadence_problems(dependabot: str) -> list[str]:
+    """Each update entry runs monthly with at most DEPENDABOT_LIMIT open pull
+    requests, and each docker entry ignores minor and major python bumps. The
+    weekly schedule opened #3, python 3.12-slim to 3.15-slim on the kind image:
+    a Python upgrade arriving as a dependency bump."""
+    problems = []
+    for entry in load_yaml(dependabot)["updates"]:
+        name = f"{entry['package-ecosystem']} {entry['directory']}"
+        if entry.get("schedule", {}).get("interval") != "monthly":
+            problems.append(f"{name}: not monthly")
+        limit = entry.get("open-pull-requests-limit")
+        if limit is None or not 0 < int(limit) <= DEPENDABOT_LIMIT:
+            problems.append(f"{name}: open-pull-requests-limit is {limit!r}, want 1..{DEPENDABOT_LIMIT}")
+        if entry["package-ecosystem"] == "docker":
+            ignored = {t for rule in entry.get("ignore", []) if rule.get("dependency-name") == "python"
+                       for t in rule.get("update-types", [])}
+            if not PYTHON_LINE_IGNORE <= ignored:
+                problems.append(f"{name}: does not ignore {sorted(PYTHON_LINE_IGNORE - ignored)} for python")
+    return problems
+
+
+class DependabotCadenceTest(unittest.TestCase):
+    TEXT = (ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+
+    def test_every_entry_is_monthly_capped_and_keeps_the_python_line(self) -> None:
+        self.assertEqual(dependabot_cadence_problems(self.TEXT), [])
+
+    def test_control_weekly_uncapped_and_a_python_minor_bump_are_named(self) -> None:
+        kind = "  - package-ecosystem: docker\n    directory: /deploy/kind\n"
+        self.assertEqual(self.TEXT.count(kind), 1)
+        start = self.TEXT.index(kind)
+        end = self.TEXT.index("  - package-ecosystem:", start + len(kind))
+        loose = self.TEXT[:start] + kind + "    schedule:\n      interval: weekly\n" + self.TEXT[end:]
+        self.assertEqual(dependabot_cadence_problems(loose), [
+            "docker /deploy/kind: not monthly",
+            "docker /deploy/kind: open-pull-requests-limit is None, want 1..2",
+            "docker /deploy/kind: does not ignore ['version-update:semver-major', "
+            "'version-update:semver-minor'] for python"])
+        minor_only = self.TEXT.replace('["version-update:semver-major", "version-update:semver-minor"]',
+                                       '["version-update:semver-major"]', 1)
+        self.assertNotEqual(minor_only, self.TEXT)
+        self.assertEqual(dependabot_cadence_problems(minor_only), [
+            "docker /: does not ignore ['version-update:semver-minor'] for python"])
+
+
 #: scripts/image_bytecode_check.py, as the image job runs it.
 BYTECODE_CHECK = "python3 scripts/image_bytecode_check.py"
 #: The warm step each control puts in place of the Dockerfile's: nothing, and
