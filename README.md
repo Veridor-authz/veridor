@@ -14,6 +14,7 @@ Authorization regression runner for multi-user APIs, built for CI
 [![PyPI](https://img.shields.io/pypi/v/veridor)](https://pypi.org/project/veridor/)
 [![Python](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://pypi.org/project/veridor/)
 [![Docs](https://img.shields.io/badge/docs-docs.veridor.org-blue.svg)](https://docs.veridor.org/)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16674/badge)](https://www.bestpractices.dev/projects/16674)
 
 [Documentation](https://docs.veridor.org/) · [Website](https://veridor.org/) · [Quick start](https://docs.veridor.org/quickstart/)
 
