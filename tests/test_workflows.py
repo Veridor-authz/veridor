@@ -271,7 +271,7 @@ ACTION_IMAGES = {
 #: for scorecard.yml; PyPI's trusted publisher names release.yml, so its
 #: token uploads nothing. Keyed by the pinned ref, so a bump fails
 #: ActionImageTest until the tag is read again and dependabot.yml agrees.
-SCORECARD = {"ossf/scorecard-action@2d1146689b8cda280b9bc96326124645441f03bc": "ghcr.io/ossf/scorecard-action:v2.4.4"}
+SCORECARD = {"ossf/scorecard-action@fa7117db83c52d787ae5a89f350999701505d78e": "ghcr.io/ossf/scorecard-action:v2.5.0"}
 _ACTION_REF = re.compile(r"^\s*(?:-\s+)?uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]{40})\b", re.M)
 
 
@@ -296,8 +296,8 @@ PIN_STEP, VERIFY_STEP = ("bash .github/scripts/pin-action-image.sh pin",
 #: compare local names to each other, so a bump that moves the SHA but carries
 #: the old digest ran the old container under the new tag and passed. Keyed by
 #: the SHA, that bump fails until someone resolves the new tag and records it.
-PUBLISH_DIGEST = {"dc37677b2e1c63e2034f94d8a5b11f265b73ba33":
-                  "sha256:a68d05519f6d7e47372aeaddab80b851b69afa89be179ec41775c72c4e3ab2d5"}
+PUBLISH_DIGEST = {"7245906fb61fa33a13554f9d5fb856fe61758086":
+                  "sha256:411241df99067c98b6d08fd8e26d14e86740a22460599c2af571e6dc26e27ffc"}
 
 
 def publish_pin_problems(job: dict) -> list[str]:
@@ -971,8 +971,8 @@ class ActionImageTest(unittest.TestCase):
 
     pypa/gh-action-pypi-publish ran ghcr.io/pypa/gh-action-pypi-publish by a
     tag in the job that mints the PyPI token, and ossf/scorecard-action runs
-    ghcr.io/ossf/scorecard-action:v2.4.4 with id-token: write, while the
-    image test passed and dependabot.yml listed neither."""
+    ghcr.io/ossf/scorecard-action by its version tag with id-token: write,
+    while the image test passed and dependabot.yml listed neither."""
 
     TEXTS = {path.name: path.read_text(encoding="utf-8") for path in PINNED_FILES}
 
@@ -1066,6 +1066,125 @@ class ActionImageTest(unittest.TestCase):
             self.assertEqual(problems(), [])
         finally:
             del PUBLISH_DIGEST[new]
+
+
+#: The documents whose examples show a reader `uses:` lines to copy.
+PIN_DOCS = ("README.md", "docs/guide.md", "ci/README.md")
+_DOC_USES = re.compile(r"uses:\s*(?P<name>[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@(?P<ref>\S+)(?:\s+#\s*(?P<version>v\S+))?")
+
+
+def workflow_pins(texts: dict[str, str]) -> dict[str, set[tuple[str, str]]]:
+    """Each action the workflows and action.yml pin, with every (SHA, # vX) they pin it at."""
+    pins: dict[str, set[tuple[str, str]]] = {}
+    for text in texts.values():
+        for line in text.splitlines():
+            match = _DOC_USES.search(line)
+            if match and re.fullmatch(r"[0-9a-f]{40}", match["ref"]):
+                pins.setdefault(match["name"], set()).add((match["ref"], match["version"] or ""))
+    return pins
+
+
+def doc_pin_problems(docs: dict[str, str], pins: dict[str, set[tuple[str, str]]]) -> tuple[list[str], int]:
+    """Every `uses:` in the documents that names an action the workflows pin,
+    at a SHA or `# vX` comment the workflows do not use; and how many such
+    lines were checked. Dependabot moves the workflows' pins and never reads
+    markdown: docs/guide.md's GitHub Action example kept setup-python v7.0.0
+    and upload-sarif v4.38.1 after the workflows moved, and nothing failed."""
+    problems, checked = [], 0
+    for source, text in docs.items():
+        for number, line in enumerate(text.splitlines(), 1):
+            match = _DOC_USES.search(line)
+            if not match or match["name"] not in pins:
+                continue
+            checked += 1
+            if (match["ref"], match["version"] or "") not in pins[match["name"]]:
+                expected = ", ".join(f"{sha} # {version}" for sha, version in sorted(pins[match["name"]]))
+                problems.append(f"{source}:{number}: {match['name']}@{match['ref']} # {match['version']} is not "
+                                f"what the workflows pin ({expected})")
+    return problems, checked
+
+
+class DocumentedPinTest(unittest.TestCase):
+    """The examples a reader copies name the SHAs the workflows run."""
+
+    DOCS = {name: (ROOT / name).read_text(encoding="utf-8") for name in PIN_DOCS}
+    PINS = workflow_pins({path.name: path.read_text(encoding="utf-8") for path in PINNED_FILES})
+
+    def test_documented_actions_are_pinned_where_the_workflows_pin_them(self) -> None:
+        problems, checked = doc_pin_problems(self.DOCS, self.PINS)
+        self.assertEqual(problems, [])
+        # The guide's GitHub Action example: checkout, setup-python, upload-sarif.
+        self.assertGreaterEqual(checked, 3, "the documents' pins were not found; the check read nothing")
+
+    def test_every_workflow_action_is_pinned_at_one_sha(self) -> None:
+        """Two SHAs for one action would let a document match the stale one."""
+        self.assertEqual({name: pins for name, pins in self.PINS.items() if len(pins) != 1}, {})
+
+    def test_control_a_stale_sha_or_version_in_a_document_is_named(self) -> None:
+        guide = self.DOCS["docs/guide.md"]
+        (sha, version), = self.PINS["actions/setup-python"]
+        current = f"actions/setup-python@{sha} # {version}"
+        self.assertIn(current, guide)
+        line = guide[:guide.index(current)].count("\n") + 1
+        for planted in (f"actions/setup-python@{'5' * 40} # {version}",
+                        f"actions/setup-python@{sha} # v0.0.1",
+                        "actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0"):
+            with self.subTest(planted=planted):
+                docs = dict(self.DOCS, **{"docs/guide.md": guide.replace(current, planted)})
+                problems, _ = doc_pin_problems(docs, self.PINS)
+                self.assertEqual(len(problems), 1, problems)
+                self.assertTrue(problems[0].startswith(f"docs/guide.md:{line}: actions/setup-python@"), problems)
+        # An action no workflow uses is the reader's own choice, not drift.
+        other = {"x.md": f"  - uses: someone/else@{'a' * 40} # v1\n"}
+        self.assertEqual(doc_pin_problems(other, self.PINS), ([], 0))
+
+
+def setuptools_pin_problems(dockerfile: str, build: str) -> list[str]:
+    """The Dockerfile's setuptools pin, unless .github/requirements/build.txt
+    pins the same version with the same wheel hash among its hashes. The
+    Dockerfile writes its pin with printf, which Dependabot does not read, so
+    a build.txt bump left the image building with the old setuptools."""
+    docker = re.findall(r"'setuptools==(\S+) --hash=sha256:([0-9a-f]{64})'", dockerfile)
+    pinned = re.findall(r"^setuptools==(\S+)((?:[ \t]*\\\n[ \t]*--hash=sha256:[0-9a-f]{64})+)", build, re.M)
+    if len(docker) != 1:
+        return [f"expected one setuptools==X --hash=sha256:H pin in the Dockerfile, found {len(docker)}"]
+    if len(pinned) != 1:
+        return [f"expected one setuptools pin in build.txt, found {len(pinned)}"]
+    (version, digest), (build_version, hashes) = docker[0], pinned[0]
+    problems = []
+    if version != build_version:
+        problems.append(f"Dockerfile installs setuptools {version}; build.txt pins {build_version}")
+    if digest not in re.findall(r"[0-9a-f]{64}", hashes):
+        problems.append(f"Dockerfile's setuptools hash {digest} is not among build.txt's for {build_version}")
+    return problems
+
+
+class BuildBackendPinTest(unittest.TestCase):
+    """The image and the release build use one setuptools."""
+
+    DOCKERFILE = (ROOT / "Dockerfile").read_text(encoding="utf-8")
+    BUILD = (ROOT / ".github" / "requirements" / "build.txt").read_text(encoding="utf-8")
+
+    def test_the_dockerfile_installs_the_setuptools_build_txt_pins(self) -> None:
+        self.assertEqual(setuptools_pin_problems(self.DOCKERFILE, self.BUILD), [])
+
+    def test_control_a_mismatched_version_or_hash_is_named(self) -> None:
+        (version, digest), = re.findall(r"'setuptools==(\S+) --hash=sha256:([0-9a-f]{64})'", self.DOCKERFILE)
+        pin = f"setuptools=={version} --hash=sha256:{digest}"
+        self.assertIn(pin, self.DOCKERFILE)
+        old = self.DOCKERFILE.replace(pin, "setuptools==84.1.0 --hash=sha256:"
+                                           "5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9")
+        self.assertEqual(setuptools_pin_problems(old, self.BUILD), [
+            f"Dockerfile installs setuptools 84.1.0; build.txt pins {version}",
+            "Dockerfile's setuptools hash 5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9 "
+            f"is not among build.txt's for {version}"])
+        rehashed = self.DOCKERFILE.replace(pin, f"setuptools=={version} --hash=sha256:{'e' * 64}")
+        self.assertEqual(setuptools_pin_problems(rehashed, self.BUILD),
+                         [f"Dockerfile's setuptools hash {'e' * 64} is not among build.txt's for {version}"])
+        self.assertEqual(setuptools_pin_problems(self.DOCKERFILE.replace(pin, "setuptools"), self.BUILD),
+                         ["expected one setuptools==X --hash=sha256:H pin in the Dockerfile, found 0"])
+        self.assertEqual(setuptools_pin_problems(self.DOCKERFILE, self.BUILD.replace("setuptools==", "wheel==")),
+                         ["expected one setuptools pin in build.txt, found 0"])
 
 
 def dependabot_docker_problems(dependabot: str, read=lambda path: (ROOT / path).read_text(encoding="utf-8")) -> list[str]:

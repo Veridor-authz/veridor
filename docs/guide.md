@@ -2175,7 +2175,7 @@ steps:
   - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     with:
       persist-credentials: false
-  - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+  - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
     with:
       python-version: "3.12"
   - uses: Veridor-authz/veridor@<full-commit-sha> # vX.Y.Z
@@ -2195,7 +2195,7 @@ steps:
       require-complete: true
       openapi: openapi.json
   - if: ${{ always() && steps.veridor.outputs.sarif != '' }}
-    uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4.38.1
+    uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066 # v4.39.3
     with:
       sarif_file: ${{ steps.veridor.outputs.sarif }}
       category: veridor
@@ -2464,9 +2464,9 @@ added until the next measurement:
 
 | Tier | Tests | Wall time | Contains |
 | --- | --- | --- | --- |
-| `fast` | 2,652 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
+| `fast` | 2,657 | **13.9s** | Pure unit tests: config validation, fingerprints, parsing, scoring arithmetic, report rendering, documentation contracts |
 | `slow` | 1,014 | 349.7s; 91.2s with `--jobs 4` | Anything that stands up a loopback HTTP server, drives a live target, or spawns a subprocess |
-| both | 3,666 | 364.0s | The whole suite, in one process, with no guard |
+| both | 3,671 | 364.0s | The whole suite, in one process, with no guard |
 
 `--jobs N` runs the slow tier in N worker processes that take whole test
 classes from one queue. The run fails unless every worker finished and,

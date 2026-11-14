@@ -22,7 +22,7 @@ COPY pyproject.toml README.pypi.md LICENSE NOTICE ./
 COPY src/ ./src/
 # The build backend is pinned by version and hash, and the wheel is built
 # without build isolation or an index, so this stage fetches exactly one file.
-RUN printf '%s\n' 'setuptools==84.1.0 --hash=sha256:5231689c6ac8156cd155cfb98c3fd6fb252c3e7e9bd3d78b64d3c55f132624c9' \
+RUN printf '%s\n' 'setuptools==84.2.1 --hash=sha256:ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2' \
       > /tmp/build-requirements.txt \
  && python -m pip install --no-cache-dir --require-hashes --only-binary=:all: \
       -r /tmp/build-requirements.txt \

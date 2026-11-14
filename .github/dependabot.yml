@@ -16,6 +16,10 @@
 #   for the new SHA in its PUBLISH_DIGEST. It cannot ask the registry: the
 #   digest is only as right as the read that resolved it;
 # - the tool and schema digests in .github/scripts and the lint job;
+# - the setuptools pin the Dockerfile's build stage writes with printf, which
+#   no entry reads. It must name a version and wheel hash that
+#   .github/requirements/build.txt pins, and tests/test_workflows.py
+#   (BuildBackendPinTest) fails a build.txt bump until it does;
 # - the GitLab component's python_image default (templates/veridor.yml), the
 #   Dockerfile's digest-pinned python:3.12-alpine base. Dependabot's docker
 #   entry bumps the Dockerfile only, and tests/test_ci_configs.py fails that
@@ -23,7 +27,7 @@
 # - the Debian python:3.12-slim digest scripts/e2e_gitlab_job.sh runs its
 #   dash and bash rows in (E2E_DEBIAN_PYTHON_IMAGE's default).
 # Not pinned at all:
-# - ghcr.io/ossf/scorecard-action:v2.4.4, which ossf/scorecard-action runs by
+# - ghcr.io/ossf/scorecard-action:v2.5.0, which ossf/scorecard-action runs by
 #   that tag and the runner pulls before any step of the job runs
 #   (tests/test_workflows.py, SCORECARD).
 version: 2

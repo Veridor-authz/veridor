@@ -19,11 +19,24 @@ caveat that the interface may still move.
   `interpretation` block now points at the guide's section on what a
   `confirmed` finding proves; the old link named a README heading that no
   longer exists.
-- The image build and the release build install setuptools 84.1.0, not
+- The image build and the release build install setuptools 84.2.1, not
   84.0.0, which carries GHSA-xmj3-9gf7-h52w (a Windows path escape during
   legacy wheel installation). The kind demo image's `python:3.12-slim` base
   is pinned by digest like the root `Dockerfile`'s, so Dependabot proposes
   its updates instead of the tag moving underneath it.
+- The release workflow uploads to PyPI with pypa/gh-action-pypi-publish
+  1.14.3. GHSA-5xjx-3w67-w9x9 lists every version up to 1.14.2 as affected:
+  the certifi trust store its Sigstore signing relies on still held the
+  emSign root CA. The action runs a container by a tag named after its SHA,
+  so the pypi job pulls the new tag by digest
+  (`sha256:411241df99067c98b6d08fd8e26d14e86740a22460599c2af571e6dc26e27ffc`,
+  resolved 2026-11-13) and fails if anything else ran.
+  ossf/scorecard-action moves to 2.5.0. The GitHub Action example in
+  `docs/guide.md` names the setup-python and upload-sarif commits the
+  workflows run; it still named the previous ones. Dependabot proposes
+  updates monthly, with at most two open pull requests per entry, and keeps
+  both images on Python 3.12: a newer Python is a deliberate change, not a
+  bump.
 
 ### Fixed
 
